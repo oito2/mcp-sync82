@@ -1,0 +1,31 @@
+/sync82
+/dist/
+*.db
+*.db-wal
+*.db-shm
+
+# Build, test and profiling artifacts
+/sync82.exe
+/cmd/sync82/sync82
+/cmd/sync82/sync82.exe
+*.test
+*.prof
+*.trace
+coverage.out
+coverage.html
+
+# IDEs and OS files
+.vscode/
+.idea/
+.zed/
+.DS_Store
+
+# Local, personal and agent files (not part of the published project)
+/.dev/
+/.claude/settings.local.json
+/.luminavault.json
+/.aiexclude
+/.claudeignore
+/AGENTS.md
+/CLAUDE.md
+/.instructions/

@@ -1,0 +1,15 @@
+version: 2
+updates:
+  # Bumps the SHA-pinned GitHub Actions (and their "# vX" comments).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: deps

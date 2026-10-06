@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Read-only by default (least privilege) — this workflow only builds,
+# vets, and tests; it never publishes anything.
+permissions:
+  contents: read
+
+# golangci-lint release the lint step runs (pinned, so a new linter release
+# cannot fail CI on unchanged code).
+env:
+  GOLANGCI_LINT_VERSION: v2.14.0
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # later steps never push, so the token isn't left in .git/config
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26"
+          check-latest: true # newest 1.26.x patch, not an older one cached on the runner
+
+      # Windows checkouts convert line endings, so formatting is checked on
+      # Linux only.
+      - name: Format check
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::The following files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        if: runner.os == 'Linux'
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: govulncheck
+        if: runner.os == 'Linux'
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  # Runs scripts/release, the program releases are built with, under a
+  # pre-release tag, then checks that self-update can find, verify and run
+  # its binaries and that server.json passes the MCP Registry validation.
+  release-contract:
+    runs-on: ubuntu-latest
+    env:
+      MCP_PUBLISHER_VERSION: v1.8.1
+      MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26"
+          check-latest: true
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          go run ./scripts/release -allow-prerelease v0.0.0-ci
+          test "$(./dist/sync82_linux_amd64 --version)" = "v0.0.0-ci"
+
+      - name: Check the release contract
+        run: SYNC82_DIST_DIR="$PWD/dist" go test -run TestReleaseContract -v ./internal/selfupdate
+
+      - name: Install mcp-publisher
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/mcp-publisher.tar.gz" \
+            "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${MCP_PUBLISHER_SHA256}  $RUNNER_TEMP/mcp-publisher.tar.gz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/mcp-publisher.tar.gz" -C "$RUNNER_TEMP" mcp-publisher
+
+      - name: Validate server.json against the MCP Registry schema
+        working-directory: dist
+        run: '"$RUNNER_TEMP/mcp-publisher" validate'
