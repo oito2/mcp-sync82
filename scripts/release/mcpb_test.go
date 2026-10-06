@@ -28,6 +28,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -110,7 +111,7 @@ func TestWriteUniversalMachO_ProducesValidFatBinary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm()&0o111 == 0 {
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
 		t.Errorf("universal binary is not executable: %v", info.Mode())
 	}
 }
@@ -391,6 +392,9 @@ func TestWriteMCPB_BundleIsCompleteAndReproducible(t *testing.T) {
 // stdout, stderr and the exit code; setup failures fail the test.
 func runLauncher(t *testing.T, arch string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows cannot execute shebang scripts directly")
+	}
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("no POSIX shell available")
 	}

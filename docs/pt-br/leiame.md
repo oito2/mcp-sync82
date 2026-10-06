@@ -214,7 +214,3 @@ Este projeto contou com o auxílio de ferramentas de IA generativa:
 ## Licença
 
 GPL-3.0 — veja [LICENSE](../../LICENSE).
-
----
-
-Feito com ❤️ e IA por [Kadu Velasco](https://github.com/kaduvelasco)

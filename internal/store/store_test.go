@@ -46,6 +46,9 @@ func newTestStore(t *testing.T) *Store {
 // failure caused by an unwritable parent directory returns an error wrapping
 // ErrOpenFailed.
 func TestOpen_DirectoryCreationFailure_WrapsErrOpenFailed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("running as root: permission bits don't block directory creation")
 	}

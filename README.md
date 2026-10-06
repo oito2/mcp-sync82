@@ -214,7 +214,3 @@ This project was developed with the assistance of generative AI tools:
 ## License
 
 GPL-3.0 — see [LICENSE](LICENSE).
-
----
-
-Made with ❤️ and AI by [Kadu Velasco](https://github.com/kaduvelasco)

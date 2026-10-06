@@ -50,6 +50,11 @@ func TestFind(t *testing.T) {
 
 // mustFind returns the built-in target named name, failing the test when it does
 // not exist.
+// absRoot is a filesystem root that filepath.IsAbs accepts on the host OS
+// ("/" on Unix, the temp directory's volume plus a separator on Windows),
+// for environment variables the code ignores unless they are absolute.
+var absRoot = filepath.VolumeName(os.TempDir()) + string(filepath.Separator)
+
 func mustFind(t *testing.T, name string) Target {
 	t.Helper()
 	target, ok := Find(name)
@@ -73,19 +78,19 @@ func TestTargets_PathsPerOS(t *testing.T) {
 		{"claude-desktop", "windows", map[string]string{"APPDATA": j("/", "appdata")}, []string{j("/", "appdata", "Claude", "claude_desktop_config.json")}},
 		{"claude-desktop", "windows", nil, []string{j(home, "AppData", "Roaming", "Claude", "claude_desktop_config.json")}},
 		{"claude-desktop", "linux", nil, []string{j(home, ".config", "Claude", "claude_desktop_config.json")}},
-		{"claude-desktop", "linux", map[string]string{"XDG_CONFIG_HOME": j("/", "xdg")}, []string{j("/", "xdg", "Claude", "claude_desktop_config.json")}},
+		{"claude-desktop", "linux", map[string]string{"XDG_CONFIG_HOME": j(absRoot, "xdg")}, []string{j(absRoot, "xdg", "Claude", "claude_desktop_config.json")}},
 		{"claude-desktop", "linux", map[string]string{"XDG_CONFIG_HOME": "relative"}, []string{j(home, ".config", "Claude", "claude_desktop_config.json")}},
 		{"claude-desktop", "freebsd", nil, nil},
 		{"antigravity", "linux", nil, []string{j(home, ".gemini", "config", "mcp_config.json")}},
 		{"antigravity", "windows", nil, []string{j(home, ".gemini", "config", "mcp_config.json")}},
 		{"opencode", "linux", nil, []string{j(home, ".config", "opencode", "opencode.json")}},
-		{"opencode", "linux", map[string]string{"XDG_CONFIG_HOME": j("/", "xdg")}, []string{j("/", "xdg", "opencode", "opencode.json")}},
+		{"opencode", "linux", map[string]string{"XDG_CONFIG_HOME": j(absRoot, "xdg")}, []string{j(absRoot, "xdg", "opencode", "opencode.json")}},
 		{"opencode", "windows", nil, []string{j(home, ".config", "opencode", "opencode.json")}},
 		{"cursor", "windows", nil, []string{j(home, ".cursor", "mcp.json")}},
 		{"zed", "linux", nil, []string{j(home, ".config", "zed", "settings.json")}},
-		{"zed", "linux", map[string]string{"XDG_CONFIG_HOME": j("/", "xdg")}, []string{j("/", "xdg", "zed", "settings.json")}},
+		{"zed", "linux", map[string]string{"XDG_CONFIG_HOME": j(absRoot, "xdg")}, []string{j(absRoot, "xdg", "zed", "settings.json")}},
 		{"zed", "linux", map[string]string{"XDG_CONFIG_HOME": "relative"}, []string{j(home, ".config", "zed", "settings.json")}},
-		{"zed", "darwin", map[string]string{"XDG_CONFIG_HOME": j("/", "xdg")}, []string{j(home, ".config", "zed", "settings.json")}},
+		{"zed", "darwin", map[string]string{"XDG_CONFIG_HOME": j(absRoot, "xdg")}, []string{j(home, ".config", "zed", "settings.json")}},
 		{"zed", "windows", map[string]string{"APPDATA": j("/", "appdata")}, []string{j("/", "appdata", "Zed", "settings.json")}},
 	}
 	for _, c := range cases {
@@ -119,10 +124,10 @@ func TestTargets_RemovePathsPerOS(t *testing.T) {
 			j(home, ".config", "opencode", "opencode.jsonc"),
 			j(home, ".config", "opencode", "config.json"),
 		}},
-		{"opencode", "linux", map[string]string{"XDG_CONFIG_HOME": j("/", "xdg")}, []string{
-			j("/", "xdg", "opencode", "opencode.json"),
-			j("/", "xdg", "opencode", "opencode.jsonc"),
-			j("/", "xdg", "opencode", "config.json"),
+		{"opencode", "linux", map[string]string{"XDG_CONFIG_HOME": j(absRoot, "xdg")}, []string{
+			j(absRoot, "xdg", "opencode", "opencode.json"),
+			j(absRoot, "xdg", "opencode", "opencode.jsonc"),
+			j(absRoot, "xdg", "opencode", "config.json"),
 		}},
 		{"cline", "linux", nil, []string{
 			ext(j(home, ".config", "Code", "User")),
@@ -136,10 +141,10 @@ func TestTargets_RemovePathsPerOS(t *testing.T) {
 			ext(j("/", "appdata", "Code", "User")),
 			j(home, ".cline", "data", "settings", "cline_mcp_settings.json"),
 		}},
-		{"cline", "linux", map[string]string{"CLINE_MCP_SETTINGS_PATH": j("/", "custom", "mcp.json")}, []string{
+		{"cline", "linux", map[string]string{"CLINE_MCP_SETTINGS_PATH": j(absRoot, "custom", "mcp.json")}, []string{
 			ext(j(home, ".config", "Code", "User")),
 			j(home, ".cline", "data", "settings", "cline_mcp_settings.json"),
-			j("/", "custom", "mcp.json"),
+			j(absRoot, "custom", "mcp.json"),
 		}},
 		{"cline", "linux", map[string]string{"CLINE_MCP_SETTINGS_PATH": "relative/mcp.json"}, []string{
 			ext(j(home, ".config", "Code", "User")),

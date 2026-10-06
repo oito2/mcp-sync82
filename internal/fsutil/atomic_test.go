@@ -77,6 +77,9 @@ func TestAtomicWriteFile_NoTempFileLeftBehindOnSuccess(t *testing.T) {
 // TestAtomicWriteFile_SetsRequestedPermissions verifies that a newly created
 // file gets exactly the requested permission bits.
 func TestAtomicWriteFile_SetsRequestedPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits")
+	}
 	path := filepath.Join(t.TempDir(), "file.txt")
 	if err := AtomicWriteFile(path, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)

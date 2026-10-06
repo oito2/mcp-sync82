@@ -756,7 +756,18 @@ func TestRunSelfUpdate_StagesNextToBinaryByDefault(t *testing.T) {
 	if code := RunSelfUpdate(context.Background(), []string{"--yes"}, deps, strings.NewReader(""), &stdout, &stderr); code != 0 {
 		t.Fatalf("exit code = %d; stderr=%s", code, stderr.String())
 	}
-	if stagedIn != exeDir {
+	// Compared by identity, not by string: the code resolves the binary's
+	// path, which may name the same directory differently (macOS /var vs
+	// /private/var, Windows 8.3 short names).
+	stagedInfo, err := os.Stat(stagedIn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exeDirInfo, err := os.Stat(exeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(stagedInfo, exeDirInfo) {
 		t.Errorf("staged in %q, want the binary's directory %q", stagedIn, exeDir)
 	}
 	entries, err := os.ReadDir(exeDir)
