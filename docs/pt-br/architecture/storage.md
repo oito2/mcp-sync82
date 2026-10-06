@@ -41,7 +41,7 @@ Todo projeto ganha seis kinds padrão no `init_project_memory`: `memory`, `archi
 
 ## Concorrência
 
-Toda requisição MCP recebida roda em sua própria goroutine (modelo de transporte do SDK subjacente), então múltiplas chamadas de tool podem executar concorrentemente contra o mesmo vault. O modo `WAL` mais o `busy_timeout` em toda conexão é o que torna isso seguro sem nenhum lock adicional no nível da aplicação — `store.Manager` mantém em cache um `*Store` por vault path resolvido, então chamadas concorrentes contra vaults diferentes também não se bloqueiam entre si.
+Toda requisição MCP recebida roda em sua própria goroutine (modelo de transporte do SDK subjacente), então múltiplas chamadas de tool podem executar concorrentemente contra o mesmo vault. Cada `*Store` mantém uma única conexão com o banco, então as chamadas dele esperam pela conexão dentro do processo em vez de disputar o lock de escrita do SQLite; o modo `WAL` mais o `busy_timeout` cobrem a disputa que resta entre processos (vários clientes usando o mesmo vault). `store.Manager` mantém em cache um `*Store` por vault path resolvido, então chamadas concorrentes contra vaults diferentes também não se bloqueiam entre si.
 
 ---
 

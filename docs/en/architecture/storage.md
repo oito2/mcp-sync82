@@ -41,7 +41,7 @@ Every project gets six standard kinds on `init_project_memory`: `memory`, `archi
 
 ## Concurrency
 
-Every incoming MCP request runs in its own goroutine (the underlying SDK's transport model), so multiple tool calls can execute concurrently against the same vault. `WAL` mode plus `busy_timeout` on every connection is what makes that safe without any additional application-level locking — `store.Manager` caches one `*Store` per resolved vault path so concurrent calls against different vaults don't block each other either.
+Every incoming MCP request runs in its own goroutine (the underlying SDK's transport model), so multiple tool calls can execute concurrently against the same vault. Each `*Store` keeps a single database connection, so its calls wait for that connection inside the process instead of contending for SQLite's write lock; `WAL` mode plus `busy_timeout` covers the remaining contention between processes (several clients sharing a vault). `store.Manager` caches one `*Store` per resolved vault path so concurrent calls against different vaults don't block each other either.
 
 ---
 

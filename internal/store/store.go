@@ -62,7 +62,10 @@ type Store struct {
 // (modernc.org/sqlite applies "_pragma" params to every new physical
 // connection the pool creates) rather than a one-time PRAGMA statement —
 // that guarantees every connection enforces foreign keys and uses WAL,
-// even as database/sql opens additional connections under load.
+// including a connection database/sql reopens after closing one.
+//
+// The pool holds a single connection, so the operations of one Store run
+// one at a time and only other processes contend for the file lock.
 func Open(ctx context.Context, path string) (*Store, error) {
 	// The DSN below is built by plain string concatenation, and
 	// modernc.org/sqlite splits it on "?" to find the pragma query string,
@@ -97,6 +100,11 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: open vault %s: %w", ErrOpenFailed, path, err)
 	}
+
+	// One connection per pool: concurrent calls wait in database/sql for the
+	// connection instead of contending for SQLite's write lock, where waiters
+	// poll with growing sleeps and the slowest exceed busy_timeout.
+	db.SetMaxOpenConns(1)
 
 	if err := pingUntilNotBusy(ctx, db); err != nil {
 		db.Close()
