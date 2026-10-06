@@ -114,6 +114,8 @@ Quando o próprio projeto veio de `lastProject`, o `lastVaultPath` dele é usado
 
 O sync82 serve MCP **somente via stdio**: rodar `sync82` sem argumentos inicia o servidor. Não há transporte HTTP, SSE ou Streamable HTTP, nem flag ou variável para ativar um.
 
+O servidor suporta as revisões do protocolo MCP de `2024-11-05` a `2026-07-28` e negocia a mais nova que o cliente também suporta. Uma única mensagem JSON-RPC recebida pode ter no máximo **64 MiB**, o suficiente para a maior chamada de tool válida (10 MB de conteúdo) mesmo depois do escape do JSON; uma mensagem maior encerra a conexão.
+
 ---
 
 ## Bundle do Claude Desktop (`sync82.mcpb`)

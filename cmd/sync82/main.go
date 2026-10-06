@@ -47,6 +47,12 @@ import (
 // serverName is the name the MCP server reports to clients.
 const serverName = "sync82"
 
+// maxFrameBytes is the largest inbound JSON-RPC message the stdio transport
+// accepts. A tool call carries at most 10 MB of content, and JSON escaping
+// can grow each byte up to six (a control character becomes \u00XX), so
+// 64 MiB fits the largest valid call with room for the other arguments.
+const maxFrameBytes = 64 << 20
+
 // usageExitCode is the exit status of a usage error: an unknown flag, a
 // flag without its value, or an unexpected argument.
 const usageExitCode = 2
@@ -192,7 +198,7 @@ func runServe(ctx context.Context, logger *slog.Logger) error {
 	resolver := tools.NewResolver(config.DefaultVaultPath(), logger)
 
 	s := server.New(serverName, version.Get(), logger, tools.Registered(resolver, stores))
-	if err := s.Run(ctx, &mcp.StdioTransport{}); err != nil && !errors.Is(err, context.Canceled) {
+	if err := s.Run(ctx, &mcp.StdioTransport{MaxLineLength: maxFrameBytes}); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
 	return nil
