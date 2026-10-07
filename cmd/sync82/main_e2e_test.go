@@ -77,8 +77,8 @@ func TestBinary_ServesMCPOverStdio(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
-	if len(res.Tools) != 18 {
-		t.Fatalf("binary lists %d tools, want 18", len(res.Tools))
+	if len(res.Tools) != 19 {
+		t.Fatalf("binary lists %d tools, want 19", len(res.Tools))
 	}
 
 	for _, call := range []struct {

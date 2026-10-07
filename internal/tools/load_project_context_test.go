@@ -17,8 +17,10 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // TestLoadProjectContextTool_ConcatenatesNonBlankFiles verifies that the
@@ -280,7 +282,8 @@ func TestLoadProjectContextTool_MaxEntriesCountsOnlyDatedEntries(t *testing.T) {
 // current-state documents come before long logs, that the output is cut near
 // max_bytes with a truncation notice so a long log cannot fill the agent
 // context, that max_bytes below the minimum is rejected, and that max_bytes
-// defaults to defaultContextBytes.
+// defaults to summaryContextBytes in summary mode and fullContextBytes in
+// full mode.
 func TestLoadProjectContextTool_BoundedWithCurrentStateFirst(t *testing.T) {
 	r, mgr := newToolTestEnv(t)
 	ctx := context.Background()
@@ -326,7 +329,228 @@ func TestLoadProjectContextTool_BoundedWithCurrentStateFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := parsed.(loadProjectContextArgs).MaxBytes; got != defaultContextBytes {
-		t.Errorf("default max_bytes = %d, want %d", got, defaultContextBytes)
+	if got := parsed.(loadProjectContextArgs).MaxBytes; got != summaryContextBytes {
+		t.Errorf("default max_bytes = %d, want %d", got, summaryContextBytes)
+	}
+	parsed, err = tool.Validate(mustJSON(t, map[string]any{"project": "acme", "mode": "full"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := parsed.(loadProjectContextArgs).MaxBytes; got != fullContextBytes {
+		t.Errorf("full mode max_bytes = %d, want %d", got, fullContextBytes)
+	}
+}
+
+// seedProgress creates project acme in the default vault of r with n dated
+// progress entries, one per day from 2026-01-01, each body holding
+// "entry N", and returns the tool under test.
+func seedProgress(t *testing.T, n int) (*LoadProjectContextTool, context.Context) {
+	t.Helper()
+	r, mgr := newToolTestEnv(t)
+	ctx := context.Background()
+	s, err := mgr.Get(ctx, r.DefaultDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteDocument(ctx, "acme", "", "memory", "current memory state"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= n; i++ {
+		date := fmt.Sprintf("2026-01-%02d", i)
+		if err := s.AppendEntry(ctx, "acme", "", "progress", date, fmt.Sprintf("## %s\n- entry %d.", date, i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return &LoadProjectContextTool{Resolver: r, Stores: mgr}, ctx
+}
+
+// runLoadContext validates args with tool and executes it, failing the test
+// on any error, and returns the response text.
+func runLoadContext(t *testing.T, tool *LoadProjectContextTool, ctx context.Context, args map[string]any) string {
+	t.Helper()
+	parsed, err := tool.Validate(mustJSON(t, args))
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	result, err := tool.Execute(ctx, parsed)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	return result.Text
+}
+
+// TestLoadProjectContextTool_SummaryModeIsDefault verifies that, with no
+// mode, only the summaryMaxEntries most recent dated entries are loaded in
+// ascending order, current-state files load in full, and a footer reports
+// how many entries were shown out of how many.
+func TestLoadProjectContextTool_SummaryModeIsDefault(t *testing.T) {
+	tool, ctx := seedProgress(t, 15)
+	text := runLoadContext(t, tool, ctx, map[string]any{"project": "acme"})
+
+	if !strings.Contains(text, "current memory state") {
+		t.Errorf("memory should load in full, got: %s", text)
+	}
+	for i := 1; i <= 5; i++ {
+		if strings.Contains(text, fmt.Sprintf("entry %d.", i)) {
+			t.Errorf("entry %d is older than the 10 most recent and should be left out, got: %s", i, text)
+		}
+	}
+	if !strings.Contains(text, "entry 6.") || !strings.Contains(text, "entry 15.") {
+		t.Errorf("expected entries 6 to 15, got: %s", text)
+	}
+	if strings.Index(text, "entry 6.") > strings.Index(text, "entry 15.") {
+		t.Errorf("entries should be in ascending order, got: %s", text)
+	}
+	want := "[older history omitted — progress: 10 of 15 dated entries shown (oldest shown 2026-01-06);"
+	if !strings.Contains(text, want) {
+		t.Errorf("expected footer %q, got: %s", want, text)
+	}
+	if !strings.HasSuffix(text, `set "mode" to "full"]`) {
+		t.Errorf("the footer should end the response, got: %s", text)
+	}
+}
+
+// TestLoadProjectContextTool_SummaryWithoutOmissionHasNoFooter verifies
+// that summary mode adds no footer when every dated entry fits.
+func TestLoadProjectContextTool_SummaryWithoutOmissionHasNoFooter(t *testing.T) {
+	tool, ctx := seedProgress(t, 3)
+	text := runLoadContext(t, tool, ctx, map[string]any{"project": "acme"})
+	if strings.Contains(text, "older history omitted") {
+		t.Errorf("no entries were left out, so there should be no footer, got: %s", text)
+	}
+}
+
+// TestLoadProjectContextTool_FullModeLoadsEverything verifies that full
+// mode loads every entry without a footer, in the format the tool produced
+// before summary mode existed.
+func TestLoadProjectContextTool_FullModeLoadsEverything(t *testing.T) {
+	tool, ctx := seedProgress(t, 3)
+	text := runLoadContext(t, tool, ctx, map[string]any{"project": "acme", "mode": "full"})
+	want := "# Context: acme\n\n## memory\n\ncurrent memory state\n\n---\n\n## progress\n\n" +
+		"## 2026-01-01\n- entry 1.\n\n## 2026-01-02\n- entry 2.\n\n## 2026-01-03\n- entry 3."
+	if text != want {
+		t.Errorf("full mode output = %q, want %q", text, want)
+	}
+}
+
+// TestLoadProjectContextTool_ExplicitFiltersOverrideSummaryDefaults
+// verifies that an explicit max_entries replaces the summary default, that
+// an explicit since lifts the default entry limit, and that the footer also
+// reports entries left out by them.
+func TestLoadProjectContextTool_ExplicitFiltersOverrideSummaryDefaults(t *testing.T) {
+	tool, ctx := seedProgress(t, 15)
+
+	text := runLoadContext(t, tool, ctx, map[string]any{"project": "acme", "max_entries": 2})
+	if strings.Contains(text, "entry 13.") || !strings.Contains(text, "entry 14.") || !strings.Contains(text, "entry 15.") {
+		t.Errorf("max_entries 2 should keep only entries 14 and 15, got: %s", text)
+	}
+	if !strings.Contains(text, "progress: 2 of 15 dated entries shown (oldest shown 2026-01-14)") {
+		t.Errorf("footer should report 2 of 15, got: %s", text)
+	}
+
+	text = runLoadContext(t, tool, ctx, map[string]any{"project": "acme", "since": "2026-01-03"})
+	if strings.Contains(text, "entry 2.") || !strings.Contains(text, "entry 3.") || !strings.Contains(text, "entry 15.") {
+		t.Errorf("since should keep entries 3 to 15 with no 10-entry limit, got: %s", text)
+	}
+	if !strings.Contains(text, "progress: 13 of 15 dated entries shown") {
+		t.Errorf("footer should report 13 of 15, got: %s", text)
+	}
+
+	parsed, err := tool.Validate(mustJSON(t, map[string]any{"project": "acme", "since": "2026-01-03"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := parsed.(loadProjectContextArgs).MaxEntries; got != 0 {
+		t.Errorf("since in summary mode: MaxEntries = %d, want 0", got)
+	}
+}
+
+// TestLoadProjectContextTool_TruncationNoteNamesCutKinds verifies that
+// when the current-state files alone exceed max_bytes, the truncation note
+// names the kind cut short and the kinds left out, and the footer about
+// omitted history still ends the response.
+func TestLoadProjectContextTool_TruncationNoteNamesCutKinds(t *testing.T) {
+	tool, ctx := seedProgress(t, 12)
+	s, err := tool.Stores.Get(ctx, tool.Resolver.DefaultDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteDocument(ctx, "acme", "", "architecture", strings.Repeat("architecture line\n", 200)); err != nil {
+		t.Fatal(err)
+	}
+
+	text := runLoadContext(t, tool, ctx, map[string]any{"project": "acme", "max_bytes": 2048})
+	if len(text) > 2048+300 {
+		t.Errorf("response is %d bytes, want about 2048", len(text))
+	}
+	if !strings.Contains(text, "; cut short: architecture; left out: progress") {
+		t.Errorf("the note should name the cut and left-out kinds, got: %s", text)
+	}
+	if !strings.HasSuffix(text, `set "mode" to "full"]`) {
+		t.Errorf("the omitted-history footer should still end the response, got: %s", text)
+	}
+}
+
+// TestLoadProjectContextTool_Validate_RejectsUnknownMode verifies that an
+// unknown mode is rejected.
+func TestLoadProjectContextTool_Validate_RejectsUnknownMode(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	tool := &LoadProjectContextTool{Resolver: r, Stores: mgr}
+	if _, err := tool.Validate(mustJSON(t, map[string]any{"project": "acme", "mode": "brief"})); err == nil {
+		t.Fatal(`expected an error for mode "brief"`)
+	}
+}
+
+// TestLoadProjectContextTool_NeverExceedsMaxBytes verifies that the
+// response, truncation note and footer included, fits in max_bytes for
+// small budgets, many cut kinds and long lines.
+func TestLoadProjectContextTool_NeverExceedsMaxBytes(t *testing.T) {
+	tool, ctx := seedProgress(t, 30)
+	s, err := tool.Stores.Get(ctx, tool.Resolver.DefaultDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 15; i++ {
+		kind := fmt.Sprintf("custom_kind_with_a_rather_long_name_%02d", i)
+		if err := s.WriteDocument(ctx, "acme", "", kind, strings.Repeat("line of text\n", 40)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, maxBytes := range []int{1024, 1500, 2048, 4096, 8192} {
+		text := runLoadContext(t, tool, ctx, map[string]any{"project": "acme", "max_bytes": maxBytes})
+		if len(text) > maxBytes {
+			t.Errorf("max_bytes %d: response is %d bytes", maxBytes, len(text))
+		}
+		if !strings.Contains(text, "context truncated") {
+			t.Errorf("max_bytes %d: no truncation note", maxBytes)
+		}
+	}
+}
+
+// TestLoadProjectContextTool_LongLineKeepsMostOfTheBudget verifies that a
+// file made of one huge line is cut near max_bytes instead of falling back
+// to the last line break far before it.
+func TestLoadProjectContextTool_LongLineKeepsMostOfTheBudget(t *testing.T) {
+	tool, ctx := seedProgress(t, 0)
+	s, err := tool.Stores.Get(ctx, tool.Resolver.DefaultDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteDocument(ctx, "acme", "", "memory", strings.Repeat("é", 5000)); err != nil {
+		t.Fatal(err)
+	}
+	text := runLoadContext(t, tool, ctx, map[string]any{"project": "acme", "max_bytes": 4096})
+	if len(text) > 4096 {
+		t.Fatalf("response is %d bytes, want at most 4096", len(text))
+	}
+	kept := strings.Count(text, "é") * len("é")
+	if kept < 4096/2 {
+		t.Errorf("kept %d bytes of the long line, want at least half of the budget", kept)
+	}
+	if !utf8.ValidString(text) {
+		t.Error("the cut split a UTF-8 character")
 	}
 }

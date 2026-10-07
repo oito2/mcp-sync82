@@ -88,12 +88,12 @@ O único modo de transporte MCP que o sync82 suporta. O servidor roda como um su
 
 ## Tool (MCP)
 
-Uma função executável exposta pelo servidor MCP que o assistente de IA pode chamar explicitamente. O sync82 expõe 18 tools, agrupadas por etapa do fluxo de trabalho:
+Uma função executável exposta pelo servidor MCP que o assistente de IA pode chamar explicitamente. O sync82 expõe 19 tools, agrupadas por etapa do fluxo de trabalho:
 
 | Grupo | Tools |
 | --- | --- |
 | Gerenciamento de projeto | `list_projects`, `create_project`, `delete_project`, `rename_project`, `get_vault_config` |
-| Leitura/escrita de memória | `list_files`, `read_memory`, `write_memory`, `append_memory`, `delete_memory`, `archive_memory`, `search_memory` |
+| Leitura/escrita de memória | `list_files`, `read_memory`, `write_memory`, `append_memory`, `delete_memory`, `edit_entry`, `archive_memory`, `search_memory` |
 | Fluxo de sessão | `load_project_context`, `check_project_health`, `init_project_memory`, `update_project_memory` |
 | Exportação e importação | `export_memory`, `import_memory` |
 

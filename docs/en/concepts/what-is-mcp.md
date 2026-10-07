@@ -34,13 +34,13 @@ AI Client (Claude Code, Codex, OpenCode...)
   Your memory vault (~/.sync82/knowledge.db)
 ```
 
-An MCP server can expose three types of capabilities — **Tools**, **Resources**, and **Prompts**. sync82 only exposes **Tools**: 16 functions the AI explicitly calls (`init_project_memory`, `search_memory`, `update_project_memory`, ...). It doesn't register any MCP Resources or Prompts.
+An MCP server can expose three types of capabilities — **Tools**, **Resources**, and **Prompts**. sync82 exposes all three: 19 **Tools** the AI explicitly calls (`init_project_memory`, `search_memory`, `update_project_memory`, ...), read-only **Resources** with each project's memory, and two **Prompts** that start and end a session.
 
 | Capability | Description | Used by sync82? |
 | --- | --- | --- |
-| **Tools** | Functions the AI can call | ✅ Yes — all 16 |
-| **Resources** | URIs that expose data, read passively | ❌ No |
-| **Prompts** | Prebuilt prompt templates | ❌ No |
+| **Tools** | Functions the AI can call | ✅ Yes — all 19 ([reference](../reference/tools.md)) |
+| **Resources** | URIs that expose data, read passively | ✅ Yes — `sync82://projects/...` ([reference](../reference/resources.md)) |
+| **Prompts** | Prebuilt prompt templates | ✅ Yes — `start_session`, `end_session` ([reference](../reference/mcp-prompts.md)) |
 
 ---
 

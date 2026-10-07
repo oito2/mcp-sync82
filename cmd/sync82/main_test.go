@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -221,12 +222,20 @@ func TestRun_Dispatch(t *testing.T) {
 // so using it also detects a schema typo that would crash startup.
 func connectRegisteredTools(t *testing.T) (*mcp.ClientSession, int) {
 	t.Helper()
+	return connectRegisteredToolsWith(t, nil)
+}
+
+// connectRegisteredToolsWith is connectRegisteredTools with the client
+// options opts (nil for the defaults).
+func connectRegisteredToolsWith(t *testing.T, opts *mcp.ClientOptions) (*mcp.ClientSession, int) {
+	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", os.Getenv("HOME"))
 	mgr := store.NewManager()
 	t.Cleanup(func() { mgr.Close() })
-	registered := tools.Registered(tools.NewResolver(filepath.Join(t.TempDir(), "vault.db"), slog.New(slog.DiscardHandler)), mgr)
-	s := server.New("sync82-test", "v0", slog.New(slog.DiscardHandler), registered)
+	resolver := tools.NewResolver(filepath.Join(t.TempDir(), "vault.db"), slog.New(slog.DiscardHandler))
+	registered := tools.Registered(resolver, mgr)
+	s := server.New("sync82-test", "v0", slog.New(slog.DiscardHandler), registered, &tools.Resources{Resolver: resolver, Stores: mgr})
 
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	ss, err := s.Connect(context.Background(), serverTransport, nil)
@@ -234,7 +243,7 @@ func connectRegisteredTools(t *testing.T) (*mcp.ClientSession, int) {
 		t.Fatalf("server connect: %v", err)
 	}
 	t.Cleanup(func() { ss.Close() })
-	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "v0"}, nil).Connect(context.Background(), clientTransport, nil)
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "v0"}, opts).Connect(context.Background(), clientTransport, nil)
 	if err != nil {
 		t.Fatalf("client connect: %v", err)
 	}
@@ -258,6 +267,25 @@ func TestBuildRegisteredTools_ServesEveryToolWithValidSchemas(t *testing.T) {
 	for _, tool := range res.Tools {
 		if tool.Description == "" {
 			t.Errorf("tool %q has no description", tool.Name)
+		}
+		a := tool.Annotations
+		if a == nil || a.Title == "" || a.DestructiveHint == nil || a.OpenWorldHint == nil || *a.OpenWorldHint {
+			t.Errorf("tool %q annotations = %+v, want a title and explicit destructive and closed-world hints", tool.Name, a)
+			continue
+		}
+		switch tool.Name {
+		case "read_memory", "search_memory", "load_project_context":
+			if !a.ReadOnlyHint || *a.DestructiveHint {
+				t.Errorf("tool %q should be read-only: %+v", tool.Name, a)
+			}
+		case "delete_project", "delete_memory", "edit_entry", "import_memory":
+			if a.ReadOnlyHint || !*a.DestructiveHint {
+				t.Errorf("tool %q should be destructive: %+v", tool.Name, a)
+			}
+		case "append_memory", "create_project":
+			if a.ReadOnlyHint || *a.DestructiveHint {
+				t.Errorf("tool %q should be additive: %+v", tool.Name, a)
+			}
 		}
 	}
 }
@@ -312,6 +340,131 @@ func TestRegisteredTools_MemoryRoundTrip(t *testing.T) {
 	callText(t, cs, "write_memory", map[string]any{"project": "ghost", "filename": "memory", "content": "x"}, true)
 }
 
+// TestServer_ResourcesAndPrompts drives the resources and prompts through
+// an MCP client: the server advertises both, lists the four templates,
+// lists a project created during the session, reads its context and one
+// file, reports an unknown resource as not found, and renders a prompt.
+func TestServer_ResourcesAndPrompts(t *testing.T) {
+	cs, _ := connectRegisteredTools(t)
+	ctx := context.Background()
+
+	caps := cs.InitializeResult().Capabilities
+	if caps.Resources == nil || caps.Prompts == nil {
+		t.Fatalf("capabilities = %+v, want resources and prompts", caps)
+	}
+	templates, err := cs.ListResourceTemplates(ctx, nil)
+	if err != nil || len(templates.ResourceTemplates) != 4 {
+		t.Fatalf("ListResourceTemplates = %+v, %v; want 4", templates, err)
+	}
+
+	list, err := cs.ListResources(ctx, nil)
+	if err != nil || len(list.Resources) != 0 {
+		t.Fatalf("ListResources before any project = %+v, %v", list, err)
+	}
+	callText(t, cs, "create_project", map[string]any{"project": "acme"}, false)
+	callText(t, cs, "write_memory", map[string]any{"project": "acme", "filename": "memory", "content": "Acme builds rockets."}, false)
+	list, err = cs.ListResources(ctx, nil)
+	if err != nil || len(list.Resources) != 1 || list.Resources[0].URI != "sync82://projects/acme/context" || list.Resources[0].MIMEType != "text/markdown" {
+		t.Fatalf("ListResources = %+v, %v; want acme's context", list, err)
+	}
+	if list.CacheScope != "private" {
+		t.Errorf("ListResources cacheScope = %q, want private (an empty one is rejected by clients)", list.CacheScope)
+	}
+
+	for uri, want := range map[string]string{
+		"sync82://projects/acme/context":      "# Context: acme",
+		"sync82://projects/acme/files/memory": "Acme builds rockets.",
+	} {
+		read, err := cs.ReadResource(ctx, &mcp.ReadResourceParams{URI: uri})
+		if err != nil || len(read.Contents) != 1 || !strings.Contains(read.Contents[0].Text, want) || read.Contents[0].MIMEType != "text/markdown" {
+			t.Errorf("ReadResource(%s) = %+v, %v", uri, read, err)
+			continue
+		}
+		if read.CacheScope != "private" {
+			t.Errorf("ReadResource(%s) cacheScope = %q, want private", uri, read.CacheScope)
+		}
+	}
+	for _, uri := range []string{"sync82://projects/ghost/context", "sync82://projects/acme/files/nothing", "sync82://projects/../context"} {
+		if _, err := cs.ReadResource(ctx, &mcp.ReadResourceParams{URI: uri}); err == nil || !strings.Contains(err.Error(), "Resource not found") {
+			t.Errorf("ReadResource(%s): err = %v, want resource not found", uri, err)
+		}
+	}
+
+	prompts, err := cs.ListPrompts(ctx, nil)
+	if err != nil || len(prompts.Prompts) != 2 {
+		t.Fatalf("ListPrompts = %+v, %v", prompts, err)
+	}
+	got, err := cs.GetPrompt(ctx, &mcp.GetPromptParams{Name: "start_session", Arguments: map[string]string{"project": "acme"}})
+	if err != nil || len(got.Messages) != 1 || got.Messages[0].Role != "user" {
+		t.Fatalf("GetPrompt = %+v, %v", got, err)
+	}
+	if text, ok := got.Messages[0].Content.(*mcp.TextContent); !ok || !strings.Contains(text.Text, `load_project_context with project "acme"`) {
+		t.Errorf("start_session message = %+v", got.Messages[0].Content)
+	}
+	if _, err := cs.GetPrompt(ctx, &mcp.GetPromptParams{Name: "end_session", Arguments: map[string]string{"subproject": "api"}}); err == nil {
+		t.Error("end_session with a subproject but no project should fail")
+	}
+
+	if caps.Completions == nil {
+		t.Errorf("capabilities = %+v, want completions", caps)
+	}
+	for _, ref := range []*mcp.CompleteReference{
+		{Type: "ref/prompt", Name: "start_session"},
+		{Type: "ref/resource", URI: "sync82://projects/{project}/context"},
+	} {
+		done, err := cs.Complete(ctx, &mcp.CompleteParams{Ref: ref, Argument: mcp.CompleteParamsArgument{Name: "project", Value: "ac"}})
+		if err != nil || strings.Join(done.Completion.Values, ",") != "acme" {
+			t.Errorf("Complete(%+v) = %+v, %v; want acme", ref, done, err)
+		}
+	}
+	done, err := cs.Complete(ctx, &mcp.CompleteParams{
+		Ref:      &mcp.CompleteReference{Type: "ref/resource", URI: "sync82://projects/{project}/files/{file}"},
+		Argument: mcp.CompleteParamsArgument{Name: "file", Value: "mem"},
+		Context:  &mcp.CompleteContext{Arguments: map[string]string{"project": "acme"}},
+	})
+	if err != nil || strings.Join(done.Completion.Values, ",") != "memory" {
+		t.Errorf("file completion = %+v, %v; want memory", done, err)
+	}
+	done, err = cs.Complete(ctx, &mcp.CompleteParams{Ref: &mcp.CompleteReference{Type: "ref/prompt", Name: "other"}, Argument: mcp.CompleteParamsArgument{Name: "project", Value: "ac"}})
+	if err != nil || len(done.Completion.Values) != 0 {
+		t.Errorf("completion for another prompt = %+v, %v; want no values", done, err)
+	}
+}
+
+// TestServer_NotifiesResourceListChanges verifies that creating, renaming
+// and deleting a project send notifications/resources/list_changed, and
+// that a failed call or a tool that doesn't change projects does not.
+func TestServer_NotifiesResourceListChanges(t *testing.T) {
+	changed := make(chan struct{}, 10)
+	cs, _ := connectRegisteredToolsWith(t, &mcp.ClientOptions{
+		ResourceListChangedHandler: func(context.Context, *mcp.ResourceListChangedRequest) { changed <- struct{}{} },
+	})
+	expect := func(what string, want bool) {
+		t.Helper()
+		select {
+		case <-changed:
+			if !want {
+				t.Errorf("%s sent a resource list change", what)
+			}
+		case <-time.After(300 * time.Millisecond):
+			if want {
+				t.Errorf("%s sent no resource list change", what)
+			}
+		}
+	}
+
+	callText(t, cs, "create_project", map[string]any{"project": "acme"}, false)
+	expect("create_project", true)
+	callText(t, cs, "write_memory", map[string]any{"project": "acme", "filename": "memory", "content": "x"}, false)
+	expect("write_memory", false)
+	callText(t, cs, "rename_project", map[string]any{"project": "acme", "new_name": "acme2"}, false)
+	expect("rename_project", true)
+	callText(t, cs, "delete_project", map[string]any{"project": "ghost", "confirm": true}, true)
+	expect("a failed delete_project", false)
+	callText(t, cs, "delete_project", map[string]any{"project": "acme2", "confirm": true}, false)
+	expect("delete_project", true)
+}
+
 // TestParseArgs_StrictFlags checks that "--path=X" is parsed as a flag
 // rather than a positional argument, that unknown flags like "--force" are
 // rejected rather than taken as project names, that repeated flags and a
@@ -324,10 +477,15 @@ func TestParseArgs_StrictFlags(t *testing.T) {
 	if p.values["path"] != "/v.db" || !p.flags["all"] || !slices.Equal(p.positional, []string{"acme", "out"}) {
 		t.Fatalf("parsed = %+v", p)
 	}
+	if p, err := parseArgs([]string{"acme", "--path=-odd.db"}, nil, []string{"path"}); err != nil || p.values["path"] != "-odd.db" {
+		t.Errorf("--path=-odd.db = %+v, %v; want the value kept", p, err)
+	}
 	for _, args := range [][]string{
 		{"--force", "dir"},
 		{"acme", "dir", "--path"},
 		{"acme", "dir", "--path", ""},
+		{"acme", "dir", "--path", "--all"},
+		{"acme", "--path", "-v", "dir"},
 		{"acme", "dir", "--path", "a", "--path", "b"},
 		{"-x"},
 	} {

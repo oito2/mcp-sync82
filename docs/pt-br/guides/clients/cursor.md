@@ -44,6 +44,8 @@ Abra **Customize** na barra lateral do Cursor e confira se o `sync82` está list
 Inicialize a memória deste projeto. Analise o código automaticamente.
 ```
 
+O Cursor também suporta resources e prompts MCP, então os [resources](../../reference/resources.md) (a memória de cada projeto) e os [prompts MCP](../../reference/mcp-prompts.md) (`start_session`, `end_session`) do sync82 ficam disponíveis junto com as tools.
+
 ---
 
 ## 🗑️ Removendo

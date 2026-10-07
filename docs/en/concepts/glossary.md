@@ -88,12 +88,12 @@ The only MCP transport mode sync82 supports. The server runs as a subprocess of 
 
 ## Tool (MCP)
 
-An executable function exposed by the MCP server that the AI assistant can explicitly call. sync82 exposes 18 tools, grouped by workflow stage:
+An executable function exposed by the MCP server that the AI assistant can explicitly call. sync82 exposes 19 tools, grouped by workflow stage:
 
 | Group | Tools |
 | --- | --- |
 | Project management | `list_projects`, `create_project`, `delete_project`, `rename_project`, `get_vault_config` |
-| Memory read/write | `list_files`, `read_memory`, `write_memory`, `append_memory`, `delete_memory`, `archive_memory`, `search_memory` |
+| Memory read/write | `list_files`, `read_memory`, `write_memory`, `append_memory`, `delete_memory`, `edit_entry`, `archive_memory`, `search_memory` |
 | Session workflow | `load_project_context`, `check_project_health`, `init_project_memory`, `update_project_memory` |
 | Export and import | `export_memory`, `import_memory` |
 

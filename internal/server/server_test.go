@@ -87,7 +87,7 @@ func connect(t *testing.T, registeredTools []tools.Tool) *mcp.ClientSession {
 	t.Helper()
 
 	logger := slog.New(slog.DiscardHandler)
-	s := server.New("sync82-test", "v0.0.0-test", logger, registeredTools)
+	s := server.New("sync82-test", "v0.0.0-test", logger, registeredTools, nil)
 
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	ctx := context.Background()
@@ -265,6 +265,25 @@ func TestCallTool_ExecutionFailure_StoreOpenFailure_IsMasked(t *testing.T) {
 	text := callToolError(t, cs, tool.name)
 	if strings.Contains(text, "/home/carlos/.sync82/knowledge.db") || strings.Contains(text, "permission denied") {
 		t.Fatalf("result text = %q, must not contain the vault open failure's detail", text)
+	}
+}
+
+// TestCallTool_ExecutionFailure_NewerSchema_SaysToUpgrade verifies that a
+// vault refused for its newer schema is reported with a message telling
+// the agent to upgrade sync82, without the vault file's path.
+func TestCallTool_ExecutionFailure_NewerSchema_SaysToUpgrade(t *testing.T) {
+	underlying := fmt.Errorf("%w: migrate vault %s: vault schema version 4 is newer than this sync82 supports (3): %w",
+		store.ErrOpenFailed, "/home/carlos/.sync82/knowledge.db", store.ErrSchemaTooNew)
+	tool := &fakeTool{
+		name:    "old-binary",
+		schema:  map[string]any{"type": "object"},
+		execErr: underlying,
+	}
+	cs := connect(t, []tools.Tool{tool})
+
+	text := callToolError(t, cs, tool.name)
+	if !strings.Contains(text, "upgrade sync82") || strings.Contains(text, "/home/carlos/.sync82/knowledge.db") {
+		t.Fatalf("result text = %q, want the upgrade hint without the vault path", text)
 	}
 }
 

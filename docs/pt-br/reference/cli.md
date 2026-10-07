@@ -6,7 +6,7 @@
 
 `sync82` é ao mesmo tempo o binário do servidor MCP e sua própria CLI. Todos os comandos abaixo são subcomandos do mesmo binário `sync82` — não há nada mais pra instalar.
 
-**Leitura de argumentos:** flags podem ser dadas como `--path valor` ou `--path=valor`, em qualquer posição da linha. Uma opção desconhecida (ex. `--force`), um `--path` vazio ou repetido, e argumentos sobrando (ex. `sync82 version x`, `sync82 install claude codex`) são **erros de uso**: o comando não faz nada, imprime `Error: <motivo>` seguido de `Run 'sync82 --help' for usage.` no stderr e sai com código `2`. Um subcomando desconhecido (ex. `sync82 instal`) sai com código `1` e imprime a ajuda, e um primeiro argumento com cara de flag (ex. `sync82 --bogus`) é erro de uso. Um prompt de confirmação que fica sem resposta porque o stdin está fechado (ex. `sync82 install </dev/null`) é um erro (código `1`), nunca lido como "não".
+**Leitura de argumentos:** flags podem ser dadas como `--path valor` ou `--path=valor`, em qualquer posição da linha. Uma opção desconhecida (ex. `--force`), um `--path` vazio ou repetido, um `--path` seguido de outra flag (ex. `--path --all`; escreva `--path=<valor>` para um valor que começa com `-`), e argumentos sobrando (ex. `sync82 version x`, `sync82 install claude codex`) são **erros de uso**: o comando não faz nada, imprime `Error: <motivo>` seguido de `Run 'sync82 --help' for usage.` no stderr e sai com código `2`. Um subcomando desconhecido (ex. `sync82 instal`) sai com código `1` e imprime a ajuda, e um primeiro argumento com cara de flag (ex. `sync82 --bogus`) é erro de uso. Um prompt de confirmação que fica sem resposta porque o stdin está fechado (ex. `sync82 install </dev/null`) é um erro (código `1`), nunca lido como "não".
 
 ## `sync82` (serve)
 
@@ -16,7 +16,7 @@ Rodar o binário sem argumentos inicia o servidor MCP via stdio. É isso que seu
 sync82
 ```
 
-- Registra todas as [18 tools](./tools.md).
+- Registra todas as [19 tools](./tools.md).
 - Resolve o caminho padrão do vault a partir da variável de ambiente `SYNC82_DB_PATH`, ou `~/.sync82/knowledge.db` se não definida.
 - Registra logs só em stderr — stdout é reservado pro protocolo JSON-RPC.
 - Para de forma limpa com `SIGINT`/`SIGTERM` (assim como os outros subcomandos): o servidor fecha os vaults abertos e sai com código `0`.
@@ -43,7 +43,7 @@ sync82 --version
 sync82 -v
 ```
 
-Builds de release imprimem a versão injetada em tempo de compilação em `github.com/oito2/mcp-sync82/internal/version.Current`. Um binário compilado com `go install github.com/oito2/mcp-sync82/cmd/sync82@vX.Y.Z` informa `vX.Y.Z` (lido das informações de build do módulo). Só um build local a partir de um checkout do código-fonte imprime `dev` — veja [`self-update`](#self-update) abaixo pra entender por que isso importa.
+Builds de release imprimem a versão injetada em tempo de compilação em `github.com/oito2/mcp-sync82/internal/version.Current`. Um binário compilado com `go install github.com/oito2/mcp-sync82/cmd/sync82@vX.Y.Z` informa `vX.Y.Z` (lido das informações de build do módulo). Qualquer outro build imprime `dev`: um build local a partir de um checkout do código-fonte (mesmo um que o Go marca com dados do VCS, como `v1.0.0+dirty`) e um `go install` de um commit sem tag (uma pseudo-versão como `v1.0.1-0.20261007120000-abcdef123456`) — veja [`self-update`](#self-update) abaixo pra entender por que isso importa.
 
 ## `install`
 
@@ -117,7 +117,7 @@ Atualizações do `config.json` feitas por vários processos do sync82 ao mesmo 
 
 ## `self-update`
 
-Verifica o GitHub Releases por uma versão mais nova e substitui o binário em disco no lugar. As versões são comparadas pela precedência semver completa, incluindo identificadores de pré-release: `v1.2.3` é mais nova que `v1.2.3-rc.1`, `rc.10` mais nova que `rc.2`, e metadados de build (`+...`) são ignorados — então um build via `go install` numa pseudo-versão depois de uma tag não recebe essa tag de novo.
+Verifica o GitHub Releases por uma versão mais nova e substitui o binário em disco no lugar. As versões são comparadas pela precedência semver completa, incluindo identificadores de pré-release: `v1.2.3` é mais nova que `v1.2.3-rc.1`, `rc.10` mais nova que `rc.2`, e metadados de build (`+...`) são ignorados.
 
 ```bash
 sync82 self-update            # verifica, mostra atual → mais recente, confirma, depois atualiza
@@ -128,7 +128,7 @@ sync82 self-update --rollback # volta pra versão anterior guardada pela última
 
 Qualquer outra opção é erro de uso (código de saída `2`). Sem `--yes`, um stdin fechado no prompt `Update now? [y/N]` é um erro (código de saída `1`) que sugere `--yes`.
 
-`self-update` só funciona num binário que conhece sua versão — um build de release, ou um build via `go install github.com/oito2/mcp-sync82/cmd/sync82@vX.Y.Z`. Um build local a partir de um checkout do código-fonte informa `dev` e se recusa a rodar. A atualização:
+`self-update` só funciona num binário que conhece sua versão — um build de release, ou um build via `go install github.com/oito2/mcp-sync82/cmd/sync82@vX.Y.Z`. Um build local a partir de um checkout do código-fonte, ou um `go install` de um commit sem tag, informa `dev` e se recusa a rodar. A atualização:
 
 1. Busca a release mais recente na API do GitHub (User-Agent `sync82/<versão>`, timeout de 30 s; uma resposta de limite de requisições do GitHub é informada como tal).
 2. Baixa o binário da plataforma correspondente (`sync82_<so>_<arquitetura>`, `.exe` no Windows, timeout de 5 min) e o `checksums.txt` — só URLs HTTPS em `github.com` ou `*.githubusercontent.com` são aceitas, tanto a URL inicial quanto cada redirecionamento seguido (no máximo 10). O binário é preparado num diretório temporário `.sync82-update-*` **ao lado do binário em execução**, pra que o rename final nunca atravesse sistemas de arquivos (ex. um `/tmp` em tmpfs).
@@ -138,7 +138,7 @@ Qualquer outra opção é erro de uso (código de saída `2`). Sem `--yes`, um s
 
 Em caso de sucesso, imprime onde a versão anterior foi guardada e como desfazer a atualização com `sync82 self-update --rollback`. Como o download é preparado ao lado do binário, o `self-update` precisa de permissão de escrita no diretório do binário; um erro de permissão sugere rodar de novo com privilégios elevados ou reinstalar via `go install`.
 
-`sync82 self-update --rollback` troca o binário pelo `<binário>.bak`, depois de verificar que o backup roda (`--version`). Rodar de novo troca de volta. Falha com código de saída `1` se não houver backup.
+`sync82 self-update --rollback` troca o binário pelo `<binário>.bak`, depois de verificar que o backup roda (`--version`). Rodar de novo troca de volta. Falha com código de saída `1` se não houver backup. Voltar para antes de uma release que atualizou o schema do vault (como a 1.1.0) deixa o binário restaurado sem conseguir abrir um vault que o mais novo já abriu — veja [Solução de Problemas](../troubleshooting/common-issues.md#a-versão-do-schema-do-vault-é-mais-nova-do-que-este-sync82-suporta).
 
 A atualização entra em vigor na **próxima vez** que algo iniciar o `sync82` do zero (ex. o próximo reinício do seu cliente MCP) — o processo do servidor rodando no momento não é afetado.
 

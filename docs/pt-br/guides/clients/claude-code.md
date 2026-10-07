@@ -44,7 +44,7 @@ Dentro de uma sessão do Claude Code, rode:
 /mcp
 ```
 
-Você verá `sync82` listado como conectado com as 18 tools disponíveis. Se o servidor não aparecer, veja [Solução de Problemas](#solucao-de-problemas) abaixo.
+Você verá `sync82` listado como conectado com as 19 tools disponíveis. Se o servidor não aparecer, veja [Solução de Problemas](#solucao-de-problemas) abaixo.
 
 ### 3. Inicialize seu primeiro projeto
 
@@ -80,7 +80,7 @@ mudou com `update_project_memory`.
 Carregue o contexto do projeto antes de começarmos.
 ```
 
-O Claude chama `load_project_context` e ganha todo o histórico registrado do projeto — visão geral, arquitetura, stack, decisões, progresso, próximos passos — em uma única chamada.
+O Claude chama `load_project_context` e ganha a memória registrada do projeto — visão geral, arquitetura, stack, próximos passos e as decisões e o progresso mais recentes — em uma única chamada.
 
 ### Registrando uma decisão no meio da sessão
 
@@ -107,6 +107,15 @@ não só neste projeto.
 ```
 
 O Claude chama `search_memory` sem `project` — uma busca sem escopo cobre o vault inteiro deliberadamente.
+
+### Anexando a memória e usando os prompts
+
+Os [resources](../../reference/resources.md) e os [prompts MCP](../../reference/mcp-prompts.md) do sync82 funcionam no Claude Code sem pedir ao agente que chame uma tool:
+
+- Digite `@` e escolha um resource do sync82, ou escreva a URI dele depois do nome do servidor: `@sync82:sync82://projects/acme/context` anexa a memória de acme, `@sync82:sync82://projects/acme/files/decisions` as decisões dele.
+- Digite `/` para achar os prompts, listados como `/sync82:start_session (MCP)` e `/sync82:end_session (MCP)`, ou rode-os como `/mcp__sync82__start_session acme`. Os argumentos vêm depois do comando, separados por espaço, nesta ordem: `project` e depois `subproject`. Sem argumentos, o agente acha o projeto pelo workspace atual.
+
+O nome do servidor é o que você registrou (`sync82` com `sync82 install claude`).
 
 ### Projetos multi-componente
 

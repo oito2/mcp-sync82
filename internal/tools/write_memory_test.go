@@ -19,6 +19,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/oito2/mcp-sync82/internal/config"
 )
 
 // TestWriteMemoryTool_OverwritesDocumentInPlace verifies that writing to an
@@ -152,7 +154,7 @@ func TestWriteMemoryTool_KeepsArchivedEntries(t *testing.T) {
 	if err := s.AppendEntry(ctx, "acme", "", "progress", "2020-01-01", "## 2020-01-01\nancient work"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ArchiveEntries(ctx, "acme", "", "progress", "2021-01-01"); err != nil {
+	if _, err := s.ArchiveEntries(ctx, "acme", "", "progress", "2021-01-01", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -171,5 +173,34 @@ func TestWriteMemoryTool_KeepsArchivedEntries(t *testing.T) {
 	}
 	if len(entries) != 2 || !entries[0].Archived || entries[1].Archived {
 		t.Fatalf("entries = %+v, want the archived 2020 entry kept plus the new visible one", entries)
+	}
+}
+
+// TestWriteMemoryTool_RefusesProjectFromLastSession verifies that
+// write_memory refuses to overwrite a project taken only from the last
+// session, and leaves its content unchanged.
+func TestWriteMemoryTool_RefusesProjectFromLastSession(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	ctx := context.Background()
+	s, err := mgr.Get(ctx, r.DefaultDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteDocument(ctx, "acme", "", "memory", "keep me"); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.WriteGlobalConfig(config.GlobalConfig{LastProject: "acme", LastVaultPath: r.DefaultDBPath}); err != nil {
+		t.Fatal(err)
+	}
+
+	result := runTool(t, &WriteMemoryTool{Resolver: r, Stores: mgr}, map[string]any{"filename": "memory", "content": "replaced"})
+	if !result.IsError || !strings.Contains(result.Text, "Refusing to overwrite memory") {
+		t.Fatalf("result = %+v, want a refusal", result)
+	}
+	if content, _, _ := s.ReadContent(ctx, "acme", "", "memory"); content != "keep me" {
+		t.Fatalf("memory = %q, want it unchanged", content)
 	}
 }

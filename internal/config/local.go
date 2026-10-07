@@ -60,8 +60,10 @@ const maxLocalConfigWalkDepth = 64
 // through its "path" field, so otherwise only workspaceRoot is trusted.
 //
 // It returns (nil, nil) when no file is found. It returns an error when
-// workspaceRoot cannot be made absolute, or a candidate file cannot be
-// read (other than not existing) or is not valid JSON.
+// workspaceRoot cannot be made absolute, or a candidate file is not a
+// regular file (a symlink could redirect the read, and WriteLocalConfig's
+// write, to an unrelated file), cannot be read (other than not existing)
+// or is not valid JSON.
 func ReadLocalConfig(workspaceRoot string, searchAncestors bool) (*LocalConfigResult, error) {
 	dir, err := filepath.Abs(workspaceRoot)
 	if err != nil {
@@ -75,6 +77,9 @@ func ReadLocalConfig(workspaceRoot string, searchAncestors bool) (*LocalConfigRe
 
 	for depth := 0; depth < maxDepth; depth++ {
 		candidate := filepath.Join(dir, localConfigFileName)
+		if info, err := os.Lstat(candidate); err == nil && !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("local config %s is not a regular file (a symlink, directory or special file); replace it with a regular file", candidate)
+		}
 		data, err := os.ReadFile(candidate)
 		switch {
 		case err == nil:
@@ -103,9 +108,11 @@ func ReadLocalConfig(workspaceRoot string, searchAncestors bool) (*LocalConfigRe
 }
 
 // WriteLocalConfig atomically writes cfg as .sync82.json directly in
-// workspaceRoot, without searching ancestors. It returns an error when the
-// path cannot be made absolute, cfg cannot be encoded, or the file cannot
-// be written.
+// workspaceRoot, without searching ancestors. It never writes through a
+// symlink: an existing .sync82.json that is not a regular file is refused
+// with an error wrapping fsutil.ErrNotRegularFile. It returns an error
+// when the path cannot be made absolute, cfg cannot be encoded, or the
+// file cannot be written.
 func WriteLocalConfig(workspaceRoot string, cfg LocalConfig) error {
 	dir, err := filepath.Abs(workspaceRoot)
 	if err != nil {
@@ -115,5 +122,5 @@ func WriteLocalConfig(workspaceRoot string, cfg LocalConfig) error {
 	if err != nil {
 		return fmt.Errorf("encode local config: %w", err)
 	}
-	return fsutil.AtomicWriteFile(filepath.Join(dir, localConfigFileName), data, 0o644)
+	return fsutil.AtomicReplaceFile(filepath.Join(dir, localConfigFileName), data, 0o644)
 }

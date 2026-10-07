@@ -37,23 +37,83 @@ type migration struct {
 var migrations = []migration{
 	{version: 1, stmts: schemaV1},
 	{version: 2, stmts: lowercaseNamesV2},
+	{version: 3, stmts: fullTextSearchV3},
+}
+
+// fullTextSearchV3 adds the full-text indexes searched by the words and
+// phrase search modes: documents_fts over documents.content and entries_fts
+// over entries.body, both external-content FTS5 tables keyed by the source
+// row id and tokenized with "unicode61 remove_diacritics 2" (case and Latin
+// diacritics ignored). Triggers keep each index in sync with every insert,
+// delete and change of the indexed column, including deletes cascaded from
+// a project; a change of entries.archived alone does not touch the index,
+// since searches filter archived entries themselves. The two rebuild
+// statements index the rows that already exist. Every statement can run
+// again on a vault that already has them.
+var fullTextSearchV3 = []string{
+	`CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+		content, content='documents', content_rowid='id',
+		tokenize='unicode61 remove_diacritics 2')`,
+	`CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
+		body, content='entries', content_rowid='id',
+		tokenize='unicode61 remove_diacritics 2')`,
+
+	`CREATE TRIGGER IF NOT EXISTS documents_fts_insert AFTER INSERT ON documents BEGIN
+		INSERT INTO documents_fts(rowid, content) VALUES (new.id, new.content);
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS documents_fts_delete AFTER DELETE ON documents BEGIN
+		INSERT INTO documents_fts(documents_fts, rowid, content) VALUES ('delete', old.id, old.content);
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS documents_fts_update AFTER UPDATE OF content ON documents BEGIN
+		INSERT INTO documents_fts(documents_fts, rowid, content) VALUES ('delete', old.id, old.content);
+		INSERT INTO documents_fts(rowid, content) VALUES (new.id, new.content);
+	END`,
+
+	`CREATE TRIGGER IF NOT EXISTS entries_fts_insert AFTER INSERT ON entries BEGIN
+		INSERT INTO entries_fts(rowid, body) VALUES (new.id, new.body);
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS entries_fts_delete AFTER DELETE ON entries BEGIN
+		INSERT INTO entries_fts(entries_fts, rowid, body) VALUES ('delete', old.id, old.body);
+	END`,
+	`CREATE TRIGGER IF NOT EXISTS entries_fts_update AFTER UPDATE OF body ON entries BEGIN
+		INSERT INTO entries_fts(entries_fts, rowid, body) VALUES ('delete', old.id, old.body);
+		INSERT INTO entries_fts(rowid, body) VALUES (new.id, new.body);
+	END`,
+
+	`INSERT INTO documents_fts(documents_fts) VALUES ('rebuild')`,
+	`INSERT INTO entries_fts(entries_fts) VALUES ('rebuild')`,
 }
 
 // lowercaseNamesV2 lower-cases project, subproject and document kind names
 // and entries kinds (names are ASCII slugs, so SQLite's lower() is exact). A
 // project or document name whose lower-cased form is already taken in the
 // same scope is left unchanged, so no two projects or documents are merged.
-// Entries of a kind are merged with those of its lower-cased spelling,
-// keeping every entry in one log.
+// When several spellings of one name need lower-casing and none is lower
+// case yet (for example "Foo" and "FOO"), only the one with the smallest id
+// is renamed: SQLite checks the guard for every row before updating any,
+// so renaming them all would break the unique indexes and fail the whole
+// migration. Entries of a kind are merged with those of its lower-cased
+// spelling, keeping every entry in one log.
+//
+// The guards were widened after release to handle that collision. The
+// change is safe for vaults that already applied version 2, since they
+// never run it again, and it renames exactly the same rows whenever the
+// original statements succeeded.
 var lowercaseNamesV2 = []string{
 	`UPDATE projects SET name = lower(name)
 		WHERE name <> lower(name)
 		AND NOT EXISTS (SELECT 1 FROM projects other
-			WHERE other.id <> projects.id AND other.name = lower(projects.name) AND other.parent_id IS projects.parent_id)`,
+			WHERE other.id <> projects.id
+			  AND other.parent_id IS projects.parent_id
+			  AND lower(other.name) = lower(projects.name)
+			  AND (other.name = lower(other.name) OR other.id < projects.id))`,
 	`UPDATE documents SET kind = lower(kind)
 		WHERE kind <> lower(kind)
 		AND NOT EXISTS (SELECT 1 FROM documents other
-			WHERE other.project_id = documents.project_id AND other.kind = lower(documents.kind))`,
+			WHERE other.id <> documents.id
+			  AND other.project_id = documents.project_id
+			  AND lower(other.kind) = lower(documents.kind)
+			  AND (other.kind = lower(other.kind) OR other.id < documents.id))`,
 	`UPDATE entries SET kind = lower(kind) WHERE kind <> lower(kind)`,
 }
 
@@ -139,7 +199,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	// A vault migrated by a newer sync82 may hold data this binary does not
 	// understand, so it is refused rather than read or written.
 	if latest := migrations[len(migrations)-1].version; current > latest {
-		return fmt.Errorf("vault schema version %d is newer than this sync82 supports (%d); upgrade sync82", current, latest)
+		return fmt.Errorf("vault schema version %d is newer than this sync82 supports (%d): %w", current, latest, ErrSchemaTooNew)
 	}
 
 	for _, m := range migrations {

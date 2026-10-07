@@ -21,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/oito2/mcp-sync82/internal/config"
 )
 
 // TestUpdateProjectMemoryTool_NothingToUpdate verifies that a call without any
@@ -349,5 +351,43 @@ func TestUpdateProjectMemoryTool_BoundsOneCall(t *testing.T) {
 	half := strings.Repeat("x", maxContentSize/2+1)
 	if _, err := tool.Validate(mustJSON(t, map[string]any{"project": "acme", "memory": half, "architecture": half})); err == nil {
 		t.Error("expected content over the total limit to be rejected")
+	}
+}
+
+// TestUpdateProjectMemoryTool_LastSessionAllowsOnlyAppends verifies that a
+// project taken only from the last session accepts a call that only
+// appends, and refuses one that overwrites, writing nothing at all.
+func TestUpdateProjectMemoryTool_LastSessionAllowsOnlyAppends(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	ctx := context.Background()
+	s, err := mgr.Get(ctx, r.DefaultDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteDocument(ctx, "acme", "", "memory", "keep me"); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.WriteGlobalConfig(config.GlobalConfig{LastProject: "acme", LastVaultPath: r.DefaultDBPath}); err != nil {
+		t.Fatal(err)
+	}
+	tool := &UpdateProjectMemoryTool{Resolver: r, Stores: mgr}
+
+	result := runTool(t, tool, map[string]any{"progress": "## 2026-01-01\n- appended", "memory": "replaced"})
+	if !result.IsError || !strings.Contains(result.Text, "Refusing to overwrite memory") {
+		t.Fatalf("result = %+v, want a refusal", result)
+	}
+	if content, _, _ := s.ReadContent(ctx, "acme", "", "memory"); content != "keep me" {
+		t.Fatalf("memory = %q, want it unchanged", content)
+	}
+	if _, ok, _ := s.ReadContent(ctx, "acme", "", "progress"); ok {
+		t.Fatal("progress was written by a refused call")
+	}
+
+	result = runTool(t, tool, map[string]any{"progress": "## 2026-01-01\n- appended"})
+	if result.IsError || !strings.Contains(result.Text, "Appended: progress") {
+		t.Fatalf("append-only call = %+v, want it accepted", result)
 	}
 }

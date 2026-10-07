@@ -54,7 +54,7 @@ Sem runtime, sem `node_modules`, sem gerenciador de versão — baixe, ou faça 
 
 | Situação | Sem o sync82 | Com o sync82 |
 | --- | --- | --- |
-| Nova sessão | Você reexplica o projeto do zero | `load_project_context` restaura tudo |
+| Nova sessão | Você reexplica o projeto do zero | `load_project_context` restaura o estado atual e o histórico recente |
 | Uma decisão passada | Você tenta lembrar, ou vasculha chats antigos | `search_memory` encontra, com o raciocínio original |
 | Trocar de cliente de IA | O contexto não é transferido | Mesmo vault, qualquer cliente MCP |
 | Monorepo / projeto com plugins | Você descreve cada componente toda vez | `project`/`subproject` rastreia cada um independentemente |

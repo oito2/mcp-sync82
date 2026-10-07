@@ -63,7 +63,9 @@ Configure o servidor no seu assistente de IA preferido.
 
 Consulte as tools e comandos disponíveis no servidor.
 
-- [Tools](./reference/tools.md) — As 18 tools MCP que a IA pode chamar, referência completa de parâmetros.
+- [Tools](./reference/tools.md) — As 19 tools MCP que a IA pode chamar, referência completa de parâmetros.
+- [Resources](./reference/resources.md) — A memória dos projetos como resources MCP somente leitura (`sync82://projects/...`).
+- [Prompts MCP](./reference/mcp-prompts.md) — Os prompts `start_session` e `end_session`.
 - [CLI](./reference/cli.md) — Todos os subcomandos da CLI `sync82`: `install`, `uninstall`, `config`, `self-update`, `export`, `import`.
 - [Configuração](./reference/configuration.md) — `SYNC82_DB_PATH`, `~/.sync82/config.json`, `.sync82.json`, precedência, transporte e as configurações do bundle.
 

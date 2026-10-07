@@ -29,14 +29,27 @@ import (
 )
 
 // New builds the sync82 MCP server and registers every tool in
-// registeredTools. name/version identify the server to connecting
-// clients; logger receives every diagnostic message and must write only
-// to stderr — stdout is the JSON-RPC channel over the stdio transport.
-func New(name, version string, logger *slog.Logger, registeredTools []tools.Tool) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: name, Version: version, Icons: serverIcons()}, &mcp.ServerOptions{
-		Logger: logger,
-	})
+// registeredTools, with its toolAnnotations, and every prompt in
+// tools.Prompts. When resources is not nil it also serves the resources
+// and completes the arguments of the prompts and resource templates.
+// name/version identify the server to connecting clients; logger receives
+// every diagnostic message and must write only to stderr — stdout is the
+// JSON-RPC channel over the stdio transport.
+func New(name, version string, logger *slog.Logger, registeredTools []tools.Tool, resources *tools.Resources) *mcp.Server {
+	opts := &mcp.ServerOptions{Logger: logger}
+	if resources != nil {
+		opts.CompletionHandler = completionHandler(resources, logger)
+	}
+	s := mcp.NewServer(&mcp.Implementation{Name: name, Version: version, Icons: serverIcons()}, opts)
 
+	// projectsChanged is set once the resources are registered; until then,
+	// and without resources, a change to the project list notifies nobody.
+	var projectsChanged func()
+	onProjectsChanged := func() {
+		if projectsChanged != nil {
+			projectsChanged()
+		}
+	}
 	for _, t := range registeredTools {
 		schema := t.InputSchema()
 		// Arguments a tool doesn't define are rejected by its Validate;
@@ -48,10 +61,34 @@ func New(name, version string, logger *slog.Logger, registeredTools []tools.Tool
 			Name:        t.Name(),
 			Description: t.Description(),
 			InputSchema: schema,
-		}, adapt(t, logger))
+			Annotations: toolAnnotations(t.Name()),
+		}, adapt(t, logger, onProjectsChanged))
+	}
+	addPrompts(s)
+	if resources != nil {
+		projectsChanged = addResources(s, resources, logger)
 	}
 
 	return s
+}
+
+// toolAnnotations returns the MCP annotations of the tool called name, from
+// tools.HintsFor, or nil when it has no hints. Every annotation is set
+// explicitly, since the protocol defaults destructiveHint and openWorldHint
+// to true.
+func toolAnnotations(name string) *mcp.ToolAnnotations {
+	h, ok := tools.HintsFor(name)
+	if !ok {
+		return nil
+	}
+	destructive, openWorld := h.Destructive && !h.ReadOnly, false
+	return &mcp.ToolAnnotations{
+		Title:           h.Title,
+		ReadOnlyHint:    h.ReadOnly,
+		DestructiveHint: &destructive,
+		IdempotentHint:  h.Idempotent || h.ReadOnly,
+		OpenWorldHint:   &openWorld,
+	}
 }
 
 // iconPNG is the 64×64 server icon advertised in serverInfo. It is
@@ -83,7 +120,8 @@ func serverIcons() []mcp.Icon {
 // tools, and some clients don't show them to the model at all, while a
 // tool error result lets the calling agent read the message and correct
 // its call.
-func adapt(t tools.Tool, logger *slog.Logger) mcp.ToolHandler {
+func adapt(t tools.Tool, logger *slog.Logger, onProjectsChanged func()) mcp.ToolHandler {
+	hints, _ := tools.HintsFor(t.Name())
 	return func(ctx context.Context, req *mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
 		// The MCP SDK runs each request in its own goroutine — an
 		// unrecovered panic here (a bad type assertion, a nil map write on
@@ -105,6 +143,9 @@ func adapt(t tools.Tool, logger *slog.Logger) mcp.ToolHandler {
 		toolResult, eerr := t.Execute(ctx, args)
 		if eerr != nil {
 			return errorResult(clientMessage(logger, t.Name(), eerr)), nil
+		}
+		if hints.ChangesProjects && !toolResult.IsError {
+			onProjectsChanged()
 		}
 
 		return &mcp.CallToolResult{
@@ -129,9 +170,13 @@ func errorResult(msg string) *mcp.CallToolResult {
 // (e.g. `project not found: "foo"`), so err.Error() is used as-is, with
 // one exception: a store.ErrOpenFailed error carries low-level detail
 // about opening the vault file (paths, SQLite errors) and is replaced by
-// a generic message — the full error is still in the log.
+// a generic message, or by store.ErrSchemaTooNew's message when the vault
+// was upgraded by a newer sync82 — the full error is still in the log.
 func clientMessage(logger *slog.Logger, toolName string, err error) string {
 	logger.Error("tool execution failed", "tool", toolName, "error", err)
+	if errors.Is(err, store.ErrSchemaTooNew) {
+		return "could not open the vault database: " + store.ErrSchemaTooNew.Error()
+	}
 	if errors.Is(err, store.ErrOpenFailed) {
 		return "internal error: could not open the vault database"
 	}

@@ -16,6 +16,7 @@
 package fsutil
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -181,5 +182,50 @@ func TestAtomicWriteFile_LeavesNoTempFileBehind(t *testing.T) {
 	}
 	if len(entries) != 1 {
 		t.Fatalf("directory holds %d entries, want only file.txt", len(entries))
+	}
+}
+
+// TestAtomicReplaceFile_RefusesSymlink verifies that AtomicReplaceFile
+// refuses a symlink at path, leaving both the link and its target as they
+// were.
+func TestAtomicReplaceFile_RefusesSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "victim.json")
+	if err := os.WriteFile(target, []byte(`{"keep":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	err := AtomicReplaceFile(link, []byte(`{"replaced":true}`), 0o644)
+	if !errors.Is(err, ErrNotRegularFile) {
+		t.Fatalf("AtomicReplaceFile on a symlink: err = %v, want ErrNotRegularFile", err)
+	}
+	if data, _ := os.ReadFile(target); string(data) != `{"keep":true}` {
+		t.Errorf("target changed to %q", data)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the symlink was replaced: %v", err)
+	}
+}
+
+// TestAtomicReplaceFile_WritesRegularFiles verifies that AtomicReplaceFile
+// creates a missing file and replaces a regular one, and refuses a
+// directory.
+func TestAtomicReplaceFile_WritesRegularFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	for _, content := range []string{"first", "second"} {
+		if err := AtomicReplaceFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("AtomicReplaceFile(%q): %v", content, err)
+		}
+		if data, _ := os.ReadFile(path); string(data) != content {
+			t.Fatalf("content = %q, want %q", data, content)
+		}
+	}
+	if err := AtomicReplaceFile(dir, []byte("x"), 0o600); !errors.Is(err, ErrNotRegularFile) {
+		t.Errorf("AtomicReplaceFile on a directory: err = %v, want ErrNotRegularFile", err)
 	}
 }

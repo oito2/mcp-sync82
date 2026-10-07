@@ -97,26 +97,29 @@ var bundleIcons = []bundleIcon{
 // mcpbManifest mirrors the subset of the MCPB manifest (manifest_version
 // 0.3) sync82 uses.
 type mcpbManifest struct {
-	ManifestVersion string             `json:"manifest_version"`
-	Name            string             `json:"name"`
-	DisplayName     string             `json:"display_name"`
-	Version         string             `json:"version"`
-	Description     string             `json:"description"`
-	LongDescription string             `json:"long_description"`
-	Author          mcpbAuthor         `json:"author"`
-	Repository      mcpbRepository     `json:"repository"`
-	Homepage        string             `json:"homepage"`
-	Documentation   string             `json:"documentation"`
-	Support         string             `json:"support"`
-	Icon            string             `json:"icon"`
-	Icons           []mcpbIcon         `json:"icons"`
-	Keywords        []string           `json:"keywords"`
-	License         string             `json:"license"`
-	Server          mcpbServer         `json:"server"`
-	Tools           []mcpbTool         `json:"tools"`
-	ToolsGenerated  bool               `json:"tools_generated"`
-	Compatibility   mcpbCompatibility  `json:"compatibility"`
-	UserConfig      map[string]mcpbOpt `json:"user_config"`
+	ManifestVersion string         `json:"manifest_version"`
+	Name            string         `json:"name"`
+	DisplayName     string         `json:"display_name"`
+	Version         string         `json:"version"`
+	Description     string         `json:"description"`
+	LongDescription string         `json:"long_description"`
+	Author          mcpbAuthor     `json:"author"`
+	Repository      mcpbRepository `json:"repository"`
+	Homepage        string         `json:"homepage"`
+	Documentation   string         `json:"documentation"`
+	Support         string         `json:"support"`
+	Icon            string         `json:"icon"`
+	Icons           []mcpbIcon     `json:"icons"`
+	Keywords        []string       `json:"keywords"`
+	License         string         `json:"license"`
+	Server          mcpbServer     `json:"server"`
+	Tools           []mcpbTool     `json:"tools"`
+	ToolsGenerated  bool           `json:"tools_generated"`
+	// PromptsGenerated tells the app that the server provides prompts the
+	// manifest doesn't list: sync82 renders its prompts at runtime.
+	PromptsGenerated bool               `json:"prompts_generated"`
+	Compatibility    mcpbCompatibility  `json:"compatibility"`
+	UserConfig       map[string]mcpbOpt `json:"user_config"`
 }
 
 // mcpbAuthor is the manifest's author entry.
@@ -219,9 +222,10 @@ func buildManifest(version string, tools []mcpbTool) mcpbManifest {
 				},
 			},
 		},
-		Tools:          tools,
-		ToolsGenerated: false,
-		Compatibility:  mcpbCompatibility{Platforms: []string{"darwin", "win32", "linux"}},
+		Tools:            tools,
+		ToolsGenerated:   false,
+		PromptsGenerated: true,
+		Compatibility:    mcpbCompatibility{Platforms: []string{"darwin", "win32", "linux"}},
 		UserConfig: map[string]mcpbOpt{
 			"db_path": {
 				Type:  "string",
@@ -255,7 +259,7 @@ func serverTools(version string) ([]mcpbTool, error) {
 	stores := store.NewManager()
 	defer stores.Close()
 	resolver := tools.NewResolver(filepath.Join(tmp, "knowledge.db"), logger)
-	srv := server.New(binary, version, logger, tools.Registered(resolver, stores))
+	srv := server.New(binary, version, logger, tools.Registered(resolver, stores), nil)
 
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	serverSession, err := srv.Connect(ctx, serverTransport, nil)

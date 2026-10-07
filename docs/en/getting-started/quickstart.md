@@ -80,7 +80,7 @@ In your next session — a fresh chat, no memory of the last one — ask the AI 
 Load the project context before we start.
 ```
 
-The AI calls `load_project_context`, which concatenates every non-blank memory file (overview, architecture, stack, decisions, progress, next steps) into one block — the full history you built up, pasted straight into the conversation.
+The AI calls `load_project_context`, which concatenates every non-blank memory file (overview, architecture, stack, decisions, progress, next steps) into one block, pasted straight into the conversation. Logs bring their 10 most recent entries by default; ask for the full history when you need it.
 
 ---
 

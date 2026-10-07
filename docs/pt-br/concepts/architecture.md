@@ -19,9 +19,9 @@ mcp-sync82/
 ├── scripts/release/      ← o gerador de release: `go run ./scripts/release vX.Y.Z` escreve dist/
 ├── cmd/sync82/          ← main.go — dispatch da CLI: serve (padrão), install, uninstall, config, self-update, export, import
 └── internal/
-    ├── server/           ← construção do servidor MCP, registro de tools, ícone do servidor, tratamento de erro JSON-RPC
-    ├── tools/            ← um arquivo por tool — as 18 tools documentadas em reference/tools.md; registry.go as lista (tools.Registered)
-    ├── store/            ← persistência SQLite: projects, documents, entries, schema_migrations
+    ├── server/           ← construção do servidor MCP, registro de tools, resources e prompts, ícone do servidor, tratamento de erro JSON-RPC
+    ├── tools/            ← um arquivo por tool — as 19 tools documentadas em reference/tools.md; registry.go as lista (tools.Registered)
+    ├── store/            ← persistência SQLite: projects, documents, entries, schema_migrations, índices de texto completo
     ├── config/           ← config global (~/.sync82/config.json) e descoberta de config local (.sync82.json)
     ├── analyzer/         ← auto-detecção de stack/descrição, usada pelo auto_detect do init_project_memory
     ├── installer/        ← o instalador e desinstalador de 8 targets de cliente MCP (incl. --purge)
@@ -54,16 +54,17 @@ mcp-sync82/
 3. internal/server envolve o resultado
    └─ uma falha de Validate() vira isError:true (o agente vê uma
       mensagem útil, a conexão permanece saudável)
-   └─ uma falha de Execute() vira um erro de protocolo JSON-RPC,
-      com detalhes internos (ex. caminhos de arquivo) removidos
-      antes de chegar ao agente — registrado no servidor em vez disso
+   └─ uma falha de Execute() (ou um pânico) também vira isError:true;
+      só uma falha ao abrir o vault tem os detalhes de baixo nível
+      (caminhos, erros do SQLite) trocados por uma mensagem genérica —
+      o erro completo vai para o log do servidor
 
 4. Resultado retornado ao cliente de IA via stdio
    └─ tools de listagem chamadas com format: "json" também
       devolvem os mesmos dados como structuredContent
 ```
 
-A lista de tools do servidor é uma única função, `tools.Registered` em `internal/tools/registry.go`: o `sync82` (serve) a passa para o `internal/server`, e o gerador de release sobe um servidor em memória com a mesma lista para escrever as tools no manifesto do `.mcpb` — assim o bundle nunca lista uma tool que o binário não tem.
+A lista de tools do servidor é uma única função, `tools.Registered` em `internal/tools/registry.go`: o `sync82` (serve) a passa para o `internal/server`, e o gerador de release sobe um servidor em memória com a mesma lista para escrever as tools no manifesto do `.mcpb` — assim o bundle nunca lista uma tool que o binário não tem. Os [resources](../reference/resources.md) (`tools.ResourceTemplates`, lidos por `tools.Resources`) e os [prompts MCP](../reference/mcp-prompts.md) (`tools.Prompts`) também são definidos em `internal/tools`, sem depender do SDK MCP; o `internal/server` só os adapta a ele. Os resources leem o vault padrão diretamente, sem a resolução de projeto das tools, e nunca gravam. As anotações MCP das tools (somente leitura, destrutiva, idempotente) vêm de uma única tabela, `internal/tools/hints.go`, conferida por um teste contra as tools registradas.
 
 ---
 

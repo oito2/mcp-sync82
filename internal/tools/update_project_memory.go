@@ -52,6 +52,11 @@ FLOW — follow these steps before calling:
 
 3. Populate only the fields that actually changed. Leave others unset.
 
+PROJECT — pass "project" or "workspace_root" when any field overwrites
+(next_steps, memory, architecture, stack, or a custom item with mode
+"write"): a project taken only from the last session is refused for them.
+Appends alone (progress, decisions, custom "append") may use it.
+
 WRITE RULES — how each field is stored:
 - "progress"     → APPENDED to progress   (log, never overwrites history)
 - "decisions"    → APPENDED to decisions  (log, never overwrites history)
@@ -84,13 +89,11 @@ type customMemoryItem struct {
 }
 
 // updateProjectMemoryArgs holds the decoded arguments of the
-// update_project_memory tool. Every content field is a *string so that an
+// update_project_memory tool; its JSON tags match the property names
+// declared in InputSchema. Every content field is a *string so that an
 // unset field (nil) is distinguishable from one explicitly set to an empty
 // string (non-nil), which Execute uses to decide whether any content was
 // provided.
-// updateProjectMemoryArgs holds the decoded arguments of the
-// update_project_memory tool; its JSON tags match the property names
-// declared in InputSchema.
 type updateProjectMemoryArgs struct {
 	Project          string             `json:"project,omitempty"`
 	Subproject       string             `json:"subproject,omitempty"`
@@ -119,7 +122,7 @@ func (t *UpdateProjectMemoryTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"project":            map[string]any{"type": "string", "description": "Project name. If omitted, auto-discovered from workspace_root or the last used project."},
+			"project":            map[string]any{"type": "string", "description": "Project name. If omitted, auto-discovered from workspace_root or the last used project; the last used project is refused when any field overwrites."},
 			"subproject":         map[string]any{"type": "string", "description": "Subproject name."},
 			"workspace_root":     map[string]any{"type": "string", "description": "Path to your project folder, used to auto-discover the project via .sync82.json."},
 			"search_parent_dirs": map[string]any{"type": "boolean", "description": SearchParentDirsDescription},
@@ -203,7 +206,9 @@ type memoryOp struct {
 }
 
 // Execute resolves the target project and applies every provided field as an
-// independent append or overwrite operation. A failing operation does not
+// independent append or overwrite operation. When any field overwrites, it
+// refuses, with an error result and before writing anything, a project
+// that was only taken from the last session. A failing operation does not
 // stop or undo the others; the result lists what was appended, what was
 // overwritten and the errors, and has IsError set when any operation failed.
 // It returns a plain notice when no field was provided.
@@ -248,6 +253,18 @@ func (t *UpdateProjectMemoryTool) Execute(ctx context.Context, rawArgs any) (Too
 	}
 	for _, item := range args.Custom {
 		ops = append(ops, memoryOp{isAppend: item.Mode != "write", filename: item.Filename, content: item.Content})
+	}
+
+	var overwrites []string
+	for _, op := range ops {
+		if !op.isAppend {
+			overwrites = append(overwrites, op.filename)
+		}
+	}
+	if len(overwrites) > 0 {
+		if refused := refuseRememberedTarget(rctx, "overwrite "+strings.Join(overwrites, ", ")); refused != nil {
+			return *refused, nil
+		}
 	}
 
 	// Every op runs independently — one failing must not block or roll

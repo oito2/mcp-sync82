@@ -8,7 +8,7 @@ By participating in this project you agree to follow the [Code of Conduct](CODE_
 
 ## Before you start
 
-For anything beyond a small fix (new tools, new CLI commands, schema changes, dependency additions), open an issue first to discuss the approach. This project has a **minimal, justified dependencies** philosophy — see [Concepts — Architecture](docs/en/concepts/architecture.md) and the `require` block in [`go.mod`](go.mod) for the current baseline (`go-sdk`, `modernc.org/sqlite`, both pure Go, no cgo). A PR that adds a new dependency without prior discussion is likely to be asked to remove it.
+For anything beyond a small fix (new tools, new CLI commands, schema changes, dependency additions), open an issue first to discuss the approach. This project has a **minimal, justified dependencies** philosophy — see [Concepts — Architecture](docs/en/concepts/architecture.md) and the `require` block in [`go.mod`](go.mod) for the current baseline (`go-sdk`, `modernc.org/sqlite`, and `golang.org/x/text` for the Unicode normalization of full-text search, all pure Go, no cgo). A PR that adds a new dependency without prior discussion is likely to be asked to remove it.
 
 ## Development setup
 
@@ -50,6 +50,8 @@ Write a concise summary line explaining *why* the change was made, not just what
 
 Root-level documents in this repository (README, CONTRIBUTING, CODE_OF_CONDUCT) ship in English (canonical, at the root) and Portuguese (same name, lowercased and translated, inside [`docs/pt-br/`](docs/pt-br/) — `leiame.md`, `contribuindo.md`, `codigo-de-conduta.md` — kept in sync); the `docs/` reference site is split into parallel [`docs/en/`](docs/en/) and [`docs/pt-br/`](docs/pt-br/) trees the same way. If your change affects behavior described in the [Tools Reference](docs/en/reference/tools.md), [CLI Reference](docs/en/reference/cli.md), [Installation Guide](docs/en/getting-started/installation.md), [Architecture](docs/en/concepts/architecture.md), or the README, update both language versions in the same PR — a PR that updates only one will be asked to add the other.
 
+Add an entry under `[Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) for every user-facing change (internal refactors and test-only changes don't need one). The changelog follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and is kept in English only.
+
 ## Pull requests
 
 - Describe what changed and why in the PR description; link the issue it addresses if one exists.
@@ -68,7 +70,7 @@ go run ./scripts/release v1.2.3
 
 `dist/` then holds the 6 binaries (`sync82_{linux,darwin,windows}_{amd64,arm64}`, `.exe` on Windows), `sync82.mcpb` (the Claude Desktop bundle), `checksums.txt` and `server.json` (the MCP Registry entry). The version must be `vMAJOR.MINOR.PATCH`; `-allow-prerelease` also accepts a suffix such as `v0.0.0-ci` (that's how CI runs it).
 
-**Publishing** — push a `vMAJOR.MINOR.PATCH` tag to trigger the workflow:
+**Publishing** — first, in `CHANGELOG.md`, rename `[Unreleased]` to `[X.Y.Z] - YYYY-MM-DD`, add an empty `[Unreleased]` above it, update the comparison links at the bottom, and commit. Then push a `vMAJOR.MINOR.PATCH` tag to trigger the workflow:
 
 ```bash
 git tag v1.2.3

@@ -188,7 +188,8 @@ func (t *InitProjectMemoryTool) Validate(raw json.RawMessage) (any, error) {
 // workspace_root it also writes .sync82.json unless one already maps the
 // workspace to another project. It returns the instructional text when no
 // project can be determined, and an error result when the workspace's
-// .sync82.json cannot be read; store failures are returned as errors.
+// .sync82.json cannot be read or the determined project or subproject name
+// is invalid; store failures are returned as errors.
 func (t *InitProjectMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(initProjectMemoryArgs)
 
@@ -200,6 +201,12 @@ func (t *InitProjectMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolR
 	}
 	if project == "" {
 		return ToolResult{Text: needsProjectMessage}, nil
+	}
+	// Names from .sync82.json or the global config reach here unchecked;
+	// a project created under an invalid name could never be reached or
+	// deleted by the other tools.
+	if err := ValidateTarget(project, subproject); err != nil {
+		return ToolResult{IsError: true, Text: fmt.Sprintf("Cannot initialize the project: %v. Fix the name in the workspace's .sync82.json, or pass a valid \"project\".", err)}, nil
 	}
 
 	var detected analyzer.Result
@@ -253,7 +260,7 @@ func (t *InitProjectMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolR
 	extra := ""
 	switch {
 	case args.WorkspaceRoot == "":
-	case local != nil && (local.Config.Project != project || local.Config.Subproject != subproject):
+	case local != nil && (NormalizeName(local.Config.Project) != project || NormalizeName(local.Config.Subproject) != subproject):
 		// The workspace is already mapped to another project: re-pointing
 		// it is left to the user rather than done silently.
 		extra = fmt.Sprintf(" (.sync82.json at %s points to %q and was left unchanged — edit or remove it to point this workspace at %q)",

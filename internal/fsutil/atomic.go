@@ -50,7 +50,38 @@ func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	if info, err := os.Stat(path); err == nil {
 		perm = info.Mode().Perm()
 	}
+	return writeAndRename(path, data, perm)
+}
 
+// ErrNotRegularFile is returned by AtomicReplaceFile when path exists and
+// is not a regular file: a symlink, a directory or a special file.
+var ErrNotRegularFile = errors.New("not a regular file")
+
+// AtomicReplaceFile is AtomicWriteFile for a path that must not be
+// redirected: it never follows a symlink at path. It writes data to path
+// atomically, as AtomicWriteFile does, when path does not exist or is a
+// regular file (keeping its permission bits). It returns an error wrapping
+// ErrNotRegularFile, without writing anything, when path is a symlink,
+// directory or special file, and otherwise the errors of AtomicWriteFile.
+func AtomicReplaceFile(path string, data []byte, perm os.FileMode) error {
+	info, err := os.Lstat(path)
+	switch {
+	case err == nil && !info.Mode().IsRegular():
+		return fmt.Errorf("refusing to replace %s: %w", path, ErrNotRegularFile)
+	case err == nil:
+		perm = info.Mode().Perm()
+	case !errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("inspect %s: %w", path, err)
+	}
+	return writeAndRename(path, data, perm)
+}
+
+// writeAndRename writes data to a temporary file in path's directory,
+// creating missing directories private to the user (0700), syncs it, sets
+// perm on it and renames it onto path, which replaces whatever entry path
+// names (a symlink itself, not its target). It then syncs the directory,
+// ignoring a failure. The temporary file is removed on every failure.
+func writeAndRename(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create directory %s: %w", dir, err)

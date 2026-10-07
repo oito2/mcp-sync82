@@ -80,7 +80,7 @@ Na sua próxima sessão — um chat novo, sem memória da anterior — peça par
 Carregue o contexto do projeto antes de começarmos.
 ```
 
-A IA chama `load_project_context`, que concatena todo arquivo de memória não vazio (visão geral, arquitetura, stack, decisões, progresso, próximos passos) em um único bloco — todo o histórico que você construiu, colado direto na conversa.
+A IA chama `load_project_context`, que concatena todo arquivo de memória não vazio (visão geral, arquitetura, stack, decisões, progresso, próximos passos) em um único bloco, colado direto na conversa. Os logs trazem as 10 entradas mais recentes por padrão; peça o histórico completo quando precisar.
 
 ---
 

@@ -16,7 +16,11 @@
 // Package version holds the sync82 release version.
 package version
 
-import "runtime/debug"
+import (
+	"regexp"
+	"runtime/debug"
+	"strings"
+)
 
 // Current is the release version, set at build time with
 //
@@ -27,16 +31,33 @@ var Current = "dev"
 
 // Get returns the running binary's version: Current when it was set at
 // build time, otherwise the main module version embedded in the build info
-// (as recorded by "go install <module>@vX.Y.Z"), otherwise "dev". It never
-// returns an empty string.
+// when it names a release (as recorded by "go install <module>@vX.Y.Z"),
+// otherwise "dev". It never returns an empty string.
 func Get() string {
 	if Current != "dev" {
 		return Current
 	}
 	if info, ok := debug.ReadBuildInfo(); ok {
-		if v := info.Main.Version; v != "" && v != "(devel)" {
+		if v := releaseVersion(info.Main.Version); v != "" {
 			return v
 		}
 	}
 	return Current
+}
+
+// pseudoVersion matches the timestamp-and-commit part of a Go
+// pseudo-version, such as the "0.20260101120000-abcdef123456" of
+// "v1.0.1-0.20260101120000-abcdef123456".
+var pseudoVersion = regexp.MustCompile(`[-.](0\.)?\d{14}-[0-9a-f]{12}`)
+
+// releaseVersion returns v when it is the version of a tagged release, and
+// "" otherwise: for an empty version, "(devel)", a build from a modified
+// checkout ("+dirty", which "go build" stamps since Go 1.24) and a Go
+// pseudo-version of an untagged commit. Those builds are not the release
+// they would otherwise be mistaken for, so they report "dev".
+func releaseVersion(v string) string {
+	if v == "" || v == "(devel)" || strings.Contains(v, "+dirty") || pseudoVersion.MatchString(v) {
+		return ""
+	}
+	return v
 }

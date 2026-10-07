@@ -181,7 +181,7 @@ func importProjectCore(ctx context.Context, s *store.Store, project, subproject,
 		if err != nil {
 			return ImportReport{}, fmt.Errorf("read %s: %w", name, err)
 		}
-		content := string(data)
+		content := stripEntryMarkers(string(data))
 		if strings.TrimSpace(content) == "" {
 			// An empty file has nothing to import; skip it instead of
 			// overwriting existing content with blank.

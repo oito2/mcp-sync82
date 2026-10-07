@@ -121,8 +121,8 @@ func assertColumnExists(t *testing.T, db *sql.DB, table, column string) {
 }
 
 // TestOpen_RefusesVaultFromNewerSchema verifies that Open fails with
-// ErrOpenFailed for a vault whose schema version is newer than the latest
-// known migration.
+// ErrOpenFailed and ErrSchemaTooNew for a vault whose schema version is
+// newer than the latest known migration.
 func TestOpen_RefusesVaultFromNewerSchema(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "vault.db")
@@ -138,8 +138,8 @@ func TestOpen_RefusesVaultFromNewerSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Open(ctx, path); !errors.Is(err, ErrOpenFailed) {
-		t.Fatalf("Open of a newer-schema vault: err = %v, want ErrOpenFailed", err)
+	if _, err := Open(ctx, path); !errors.Is(err, ErrOpenFailed) || !errors.Is(err, ErrSchemaTooNew) {
+		t.Fatalf("Open of a newer-schema vault: err = %v, want ErrOpenFailed and ErrSchemaTooNew", err)
 	}
 }
 
@@ -153,13 +153,13 @@ func TestMigrate_LowercasesExistingNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Set up mixed-case rows and remove the lower-casing migration record so
-	// the migration runs again.
+	// Set up mixed-case rows and remove the records of the lower-casing
+	// migration and of every later one, so they run again.
 	for _, stmt := range []string{
 		`INSERT INTO projects (name, parent_id, created_at) VALUES ('Acme', NULL, 'x'), ('Beta', NULL, 'x'), ('beta', NULL, 'x')`,
 		`INSERT INTO documents (project_id, kind, content, updated_at) VALUES (1, 'Memory', 'kept', 'x')`,
 		`INSERT INTO entries (project_id, kind, entry_date, body, archived, created_at, position) VALUES (1, 'Progress', '2026-01-01', 'log', 0, 'x', 0)`,
-		`DELETE FROM schema_migrations WHERE version = 2`,
+		`DELETE FROM schema_migrations WHERE version >= 2`,
 	} {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
 			t.Fatalf("%s: %v", stmt, err)
@@ -193,5 +193,57 @@ func TestMigrate_LowercasesExistingNames(t *testing.T) {
 	}
 	if !slices.Equal(names, []string{"Beta", "acme", "beta"}) {
 		t.Fatalf("projects = %v, want Acme lower-cased and the colliding Beta left alone", names)
+	}
+}
+
+// TestMigrate_CaseVariantsDoNotCollide verifies that migration 2 opens a
+// vault holding several spellings of one name with no lower-case form:
+// one of them is lower-cased, the others are kept, and nothing is lost.
+func TestMigrate_CaseVariantsDoNotCollide(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "vault.db")
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`INSERT INTO projects (name, parent_id, created_at) VALUES ('Foo', NULL, 'x'), ('FOO', NULL, 'x')`,
+		`INSERT INTO documents (project_id, kind, content, updated_at) VALUES (1, 'Plan', 'a', 'x'), (1, 'PLAN', 'b', 'x')`,
+		`DELETE FROM schema_migrations WHERE version >= 2`,
+	} {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	s.Close()
+
+	s, err = Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open after the case-variant setup: %v", err)
+	}
+	defer s.Close()
+	for _, q := range []struct {
+		sql  string
+		want []string
+	}{
+		{`SELECT name FROM projects ORDER BY name`, []string{"FOO", "foo"}},
+		{`SELECT kind FROM documents ORDER BY kind`, []string{"PLAN", "plan"}},
+	} {
+		rows, err := s.db.QueryContext(ctx, q.sql)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for rows.Next() {
+			var v string
+			if err := rows.Scan(&v); err != nil {
+				t.Fatal(err)
+			}
+			got = append(got, v)
+		}
+		rows.Close()
+		if !slices.Equal(got, q.want) {
+			t.Errorf("%s = %v, want %v", q.sql, got, q.want)
+		}
 	}
 }

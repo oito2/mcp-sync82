@@ -219,7 +219,7 @@ func TestExportImportRoundTrip_KeepsArchivedEntries(t *testing.T) {
 	if err := s.AppendEntry(ctx, "acme", "", "progress", "2026-07-23", "## 2026-07-23\nnew work"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ArchiveEntries(ctx, "acme", "", "progress", "2021-01-01"); err != nil {
+	if _, err := s.ArchiveEntries(ctx, "acme", "", "progress", "2021-01-01", nil); err != nil {
 		t.Fatal(err)
 	}
 

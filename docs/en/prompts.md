@@ -63,7 +63,20 @@ Requests you can type to your AI agent, in plain language, to make it use sync82
 - **Expected parameters:** none (the current workspace), or the project's name.
 - **Example:**
   > "Load the project context before we start."
-- **Expected output:** `load_project_context` returns every non-blank memory file in one block: `memory`, `architecture`, `stack` and `next_steps` first, then the other files in alphabetical order.
+- **Expected output:** `load_project_context` returns every non-blank memory file in one block: `memory`, `architecture`, `stack` and `next_steps` first and in full, then the other files in alphabetical order. Logs such as `progress` and `decisions` bring only their 10 most recent dated entries; a footer says how many were left out.
+
+### Start or end a session with a shortcut
+
+- **Expected parameters:** optionally the project (and subproject) name.
+- **Example:** in Claude Code, type `/mcp__sync82__start_session acme` at the start and `/mcp__sync82__end_session acme` at the end; or attach `@sync82:sync82://projects/acme/context` to any message.
+- **Expected output:** the [MCP prompts](./reference/mcp-prompts.md) send the agent the same request as "load the project context" / "save this session", so it calls `load_project_context` or `update_project_memory`. The [resource](./reference/resources.md) attaches the project memory to the message without any tool call.
+
+### Load the whole history
+
+- **Expected parameters:** none (the current workspace), or the project's name.
+- **Example:**
+  > "Load this project's full memory, with the entire progress and decisions history."
+- **Expected output:** `load_project_context` with `mode: "full"`: every entry of every log, cut at 200 KB with a note if it's larger.
 
 ### Load only recent history
 
@@ -121,6 +134,27 @@ Requests you can type to your AI agent, in plain language, to make it use sync82
   > "The stack file is outdated — rewrite it: Go 1.26, SQLite via modernc.org/sqlite, GitHub Actions for CI."
 - **Expected output:** `write_memory` with `filename: "stack"` and the full new content, replacing the old one.
 
+### Fix a wrong entry
+
+- **Expected parameters:** which entry (its date or what it says) and the correction.
+- **Example:**
+  > "Yesterday's progress entry says we moved to Postgres, but we stayed on SQLite. Fix that entry."
+- **Expected output:** `read_memory` with `filename: "progress"` and `with_ids: true` to find the entry's id, then `edit_entry` with `action: "replace"` and the corrected text. Only that entry changes; the rest of the log stays as it was.
+
+### Record that a decision changed
+
+- **Expected parameters:** the old decision and the new one.
+- **Example:**
+  > "We decided to drop the REST API in favor of gRPC. Mark the old REST decision as superseded."
+- **Expected output:** `edit_entry` with `action: "supersede"` on the old decision's id and the new decision as `content`. The new decision is added as an entry, and the old one gets a `> Superseded by entry N on YYYY-MM-DD.` line, so both stay in the history.
+
+### Remove a duplicated entry
+
+- **Expected parameters:** which entry is the duplicate.
+- **Example:**
+  > "The last two progress entries are the same — delete the duplicate."
+- **Expected output:** after you confirm, `edit_entry` with `action: "delete"` and `confirm: true` on one of the two ids.
+
 ---
 
 ## 🔍 Analysis and Search Prompts
@@ -130,7 +164,7 @@ Requests you can type to your AI agent, in plain language, to make it use sync82
 - **Expected parameters:** what to look for.
 - **Example:**
   > "Show me every decision we've made about authentication."
-- **Expected output:** `search_memory` with a query such as `"auth"`, scoped to the current project and its subprojects. Each hit is labeled `project/file:line` (`project/file[YYYY-MM-DD]:line` for a dated entry).
+- **Expected output:** `search_memory` with `kinds: ["decisions"]` and a query such as `"auth*"` (a prefix, so it also finds "authentication" and "authorization"), scoped to the current project and its subprojects. The best matches come first; each hit is labeled `project/file:line` (`project/file[YYYY-MM-DD]:line` for a dated entry).
 
 ### Search the whole vault
 
@@ -138,6 +172,27 @@ Requests you can type to your AI agent, in plain language, to make it use sync82
 - **Example:**
   > "Search everywhere in the vault for how we've handled database migrations before — I don't remember which project it was in."
 - **Expected output:** `search_memory` without `project`, which deliberately covers every project in the vault.
+
+### Search without remembering the exact words
+
+- **Expected parameters:** a few words of what you remember, in any order, with or without accents.
+- **Example:**
+  > "Find where we wrote about the decisao on the config path for the installer."
+- **Expected output:** `search_memory` with words such as `"decisao config installer"` (the default `words` mode): every document or entry holding all of them, in any order, with `decisão`/`Decisão` matched by `decisao`, best matches first.
+
+### Search for an exact phrase or a literal string
+
+- **Expected parameters:** the phrase, or the literal text (a path, an identifier, a version).
+- **Example:**
+  > "Find the exact phrase 'one connection per vault'." / "Search for the literal string `SetMaxOpenConns(1)`."
+- **Expected output:** `search_memory` with `match: "phrase"` for the phrase (the words in that order), or `match: "exact"` for a literal string with punctuation.
+
+### Search one period of history
+
+- **Expected parameters:** what to look for; the period.
+- **Example:**
+  > "What did we decide about the release workflow in September 2026?"
+- **Expected output:** `search_memory` with `kinds: ["decisions"]`, `since: "2026-09-01"` and `until: "2026-09-30"`. Only dated entries in that range are searched.
 
 ### Search with surrounding lines, page by page
 
@@ -212,6 +267,13 @@ Requests you can type to your AI agent, in plain language, to make it use sync82
   > "Is this project's memory healthy? Are all the standard files there?"
 - **Expected output:** `check_project_health` lists the six standard files and whether each exists. An unhealthy project is returned as an error result — a deliberate signal for the agent to fill the missing files, not a crash.
 
+### Check whether the memory is up to date
+
+- **Expected parameters:** none (the current project); optionally how many days count as old.
+- **Example:**
+  > "Is this project's memory up to date? Anything that looks stale or never filled in?"
+- **Expected output:** `check_project_health` (with `stale_days` if you gave a number of days). Its `Warnings:` list names current-state files older than the newest progress/decisions entries, files still empty or holding the blank template, undated log entries and logs long enough to archive. The agent can then offer to update each file, for example by rewriting `architecture` from what the recent decisions say.
+
 ### Confirm the connection after installing
 
 - **Expected parameters:** none.
@@ -236,6 +298,13 @@ Requests you can type to your AI agent, in plain language, to make it use sync82
 - **Example:**
   > "Archive progress entries older than 6 months, we don't need them cluttering the context anymore."
 - **Expected output:** `archive_memory` with `filename: "progress"` and `keep_days: 180`. Undated entries are never archived. The project must be named or come from the workspace, not only from the last session.
+
+### Archive old entries and keep a summary
+
+- **Expected parameters:** which log and how many days to keep (or a date).
+- **Example:**
+  > "Archive the decisions older than 90 days, but keep a short summary of them so we don't lose the context."
+- **Expected output:** `archive_memory` with `dry_run: true` to list the entries that would go, `read_memory` to read them, then `archive_memory` again with `summary` set to the summary the agent wrote. The old entries are archived and the summary is added as one entry dated today, headed with how many entries it covers and their date range — both in one step.
 
 ### Delete a custom file
 

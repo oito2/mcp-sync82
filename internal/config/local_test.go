@@ -150,3 +150,28 @@ func TestWriteLocalConfig_WritesAtWorkspaceRootNotWalkedUp(t *testing.T) {
 		t.Fatalf("expected .sync82.json at the given workspace root: %v", err)
 	}
 }
+
+// TestLocalConfig_RefusesSymlink verifies that a .sync82.json symlink is
+// refused on read and on write, and that the file it points to is never
+// changed.
+func TestLocalConfig_RefusesSymlink(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(t.TempDir(), "claude_desktop_config.json")
+	original := `{"mcpServers":{"other":{"command":"x"}}}`
+	if err := os.WriteFile(victim, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(dir, localConfigFileName)); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if _, err := ReadLocalConfig(dir, false); err == nil {
+		t.Error("ReadLocalConfig should refuse a symlinked .sync82.json")
+	}
+	if err := WriteLocalConfig(dir, LocalConfig{Project: "demo"}); err == nil {
+		t.Error("WriteLocalConfig should refuse a symlinked .sync82.json")
+	}
+	if data, _ := os.ReadFile(victim); string(data) != original {
+		t.Fatalf("the symlink target was changed to %q", data)
+	}
+}

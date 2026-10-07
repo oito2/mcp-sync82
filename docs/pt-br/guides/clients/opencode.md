@@ -52,7 +52,7 @@ Inicialize a memória deste projeto. Analise o código automaticamente.
 
 ## 💡 Fluxos de Trabalho Recomendados
 
-As mesmas 18 tools, os mesmos prompts que qualquer outro cliente — veja [Exemplos de Uso](../workflows/examples.md) para cenários completos de ponta a ponta.
+As mesmas 19 tools, os mesmos prompts que qualquer outro cliente — veja [Exemplos de Uso](../workflows/examples.md) para cenários completos de ponta a ponta.
 
 Como o registro fica na config global do OpenCode, o sync82 fica disponível em todo projeto; o escopo por projeto vem de `init_project_memory workspace_root=<raiz do projeto>` escrevendo `.sync82.json` na raiz do projeto, de modo que toda sessão naquele diretório resolve automaticamente sem repetir `project`.
 

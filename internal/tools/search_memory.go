@@ -21,12 +21,15 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/oito2/mcp-sync82/internal/store"
 )
 
-// SearchMemoryTool implements search_memory: case-insensitive substring
-// search. Scope rule: no project → search everything; project only → that
+// SearchMemoryTool implements search_memory: full-text search by words or
+// phrase (case and Latin accents ignored, ranked by relevance), or a
+// literal case-insensitive substring search in exact mode. Scope rule: no project → search everything; project only → that
 // project's own documents/entries plus all its subprojects; project +
 // subproject → that subproject only.
 type SearchMemoryTool struct {
@@ -37,24 +40,57 @@ type SearchMemoryTool struct {
 // searchMemoryArgs holds the decoded arguments of the search_memory tool;
 // its JSON tags match the property names declared in InputSchema.
 type searchMemoryArgs struct {
-	Query            string `json:"query"`
-	Project          string `json:"project,omitempty"`
-	Subproject       string `json:"subproject,omitempty"`
-	Limit            int    `json:"limit,omitempty"`
-	Offset           int    `json:"offset,omitempty"`
-	ContextLines     int    `json:"context_lines,omitempty"`
-	Format           string `json:"format,omitempty"`
-	Path             string `json:"path,omitempty"`
-	WorkspaceRoot    string `json:"workspace_root,omitempty"`
-	SearchParentDirs bool   `json:"search_parent_dirs,omitempty"`
+	Query            string   `json:"query"`
+	Match            string   `json:"match,omitempty"`
+	Kinds            []string `json:"kinds,omitempty"`
+	Since            string   `json:"since,omitempty"`
+	Until            string   `json:"until,omitempty"`
+	Project          string   `json:"project,omitempty"`
+	Subproject       string   `json:"subproject,omitempty"`
+	Limit            int      `json:"limit,omitempty"`
+	Offset           int      `json:"offset,omitempty"`
+	ContextLines     int      `json:"context_lines,omitempty"`
+	Format           string   `json:"format,omitempty"`
+	Path             string   `json:"path,omitempty"`
+	WorkspaceRoot    string   `json:"workspace_root,omitempty"`
+	SearchParentDirs bool     `json:"search_parent_dirs,omitempty"`
 }
 
-// Bounds on a search's output: the maximum context lines per match, and
-// the maximum size in bytes of the whole response text.
+// Bounds on a search's output: the maximum context lines per match, the
+// maximum size in bytes of the whole response text, and the maximum size
+// of one matching or context line, so a single huge line (content may be
+// up to maxContentSize) cannot exceed the response size on its own.
 const (
 	maxSearchContextLines = 20
 	maxSearchResponseSize = 1 << 20
+	maxSearchLineBytes    = 4 << 10
 )
+
+// clipLine returns line unchanged when it fits in maxSearchLineBytes;
+// otherwise it cuts it at a UTF-8 character boundary within that size and
+// appends "…".
+func clipLine(line string) string {
+	if len(line) <= maxSearchLineBytes {
+		return line
+	}
+	cut := maxSearchLineBytes
+	for cut > 0 && !utf8.RuneStart(line[cut]) {
+		cut--
+	}
+	return line[:cut] + "…"
+}
+
+// clipLines returns lines with clipLine applied to each, or nil for none.
+func clipLines(lines []string) []string {
+	if len(lines) == 0 {
+		return nil
+	}
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = clipLine(l)
+	}
+	return out
+}
 
 // Name returns the MCP tool name, "search_memory".
 func (t *SearchMemoryTool) Name() string { return "search_memory" }
@@ -62,7 +98,7 @@ func (t *SearchMemoryTool) Name() string { return "search_memory" }
 // Description returns the text shown to the calling agent that explains what
 // the tool does and how to use it.
 func (t *SearchMemoryTool) Description() string {
-	return "Case-insensitive substring search across memory files (accents included: \"decisão\" finds \"DECISÃO\"). No project given searches the whole vault; project only searches that project and all its subprojects; project+subproject searches just that subproject. Each match is labeled project/file:line, or project/file[YYYY-MM-DD]:line for an entry of a dated log (line counted within that entry)."
+	return "Search memory files. By default (match \"words\") finds the documents and entries holding every word of the query, in any order, ignoring case and accents (\"decisao\" finds \"Decisão\"), best matches first; a word ending in \"*\" matches as a prefix (\"instal*\"). match \"phrase\" needs the words in that order; match \"exact\" finds a literal case-insensitive substring, for paths or identifiers with punctuation. kinds limits the search to some files; since/until to dated entries in a date range. No project given searches the whole vault; project only searches that project and all its subprojects; project+subproject searches just that subproject. Each match is labeled project/file:line, or project/file[YYYY-MM-DD]:line for an entry of a dated log (line counted within that entry)."
 }
 
 // InputSchema returns the JSON Schema of the tool's arguments: an object
@@ -72,7 +108,11 @@ func (t *SearchMemoryTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"query":              map[string]any{"type": "string", "description": "Substring to search for (case-insensitive, literal — not a pattern, single line)."},
+			"query":              map[string]any{"type": "string", "description": "What to search for, on a single line: words (match \"words\", the default), a phrase (match \"phrase\") or a literal substring (match \"exact\")."},
+			"match":              map[string]any{"type": "string", "enum": []string{string(store.SearchWords), string(store.SearchPhrase), string(store.SearchExact)}, "description": "\"words\" (default): every word, any order, accents and case ignored, ranked by relevance, \"word*\" for a prefix. \"phrase\": the words in that order. \"exact\": a literal case-insensitive substring, in file order."},
+			"kinds":              map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Only search these files/kinds (e.g. [\"decisions\"])."},
+			"since":              map[string]any{"type": "string", "description": "Only search dated entries on or after this date (\"YYYY-MM-DD\"); documents and undated entries are left out."},
+			"until":              map[string]any{"type": "string", "description": "Only search dated entries on or before this date (\"YYYY-MM-DD\"); documents and undated entries are left out."},
 			"project":            map[string]any{"type": "string", "description": "Limit the search to this project (and its subprojects, unless subproject is also given)."},
 			"subproject":         map[string]any{"type": "string", "description": "Limit the search to this specific subproject (requires project or workspace_root)."},
 			"limit":              map[string]any{"type": "integer", "description": "Maximum number of results to return (1-1000, default 100)."},
@@ -88,9 +128,12 @@ func (t *SearchMemoryTool) InputSchema() map[string]any {
 }
 
 // Validate decodes raw into searchMemoryArgs and applies the defaults (Limit
-// 100, text format). It returns the arguments, or an error listing every
-// problem: an empty or multi-line query, a subproject without a project, or
-// an out-of-range limit, offset or context_lines.
+// 100, words match, text format), lower-casing the kinds. It returns the
+// arguments, or an error listing every problem: an empty or multi-line
+// query, a words or phrase query with no letter or number, an unknown
+// match, an invalid kind, since or until date, since after until, a
+// subproject without a project, or an out-of-range limit, offset or
+// context_lines.
 func (t *SearchMemoryTool) Validate(raw json.RawMessage) (any, error) {
 	var args searchMemoryArgs
 	if err := decodeArgs(raw, &args); err != nil {
@@ -102,6 +145,35 @@ func (t *SearchMemoryTool) Validate(raw json.RawMessage) (any, error) {
 		problems = append(problems, `"query" is required and must not be empty`)
 	} else if strings.ContainsAny(args.Query, "\r\n") {
 		problems = append(problems, `"query" must be a single line: matches are found line by line`)
+	}
+	switch store.SearchMode(args.Match) {
+	case "":
+		args.Match = string(store.SearchWords)
+	case store.SearchWords, store.SearchPhrase, store.SearchExact:
+	default:
+		problems = append(problems, fmt.Sprintf(`"match" must be %q, %q or %q, got %q`, store.SearchWords, store.SearchPhrase, store.SearchExact, args.Match))
+	}
+	if args.Query != "" && args.Match != string(store.SearchExact) && !store.HasSearchTerms(args.Query) {
+		problems = append(problems, `"query" has no letter or number to search for; use match "exact" to search for punctuation`)
+	}
+	for i, k := range args.Kinds {
+		kind, err := validateKind(k)
+		if err != nil {
+			problems = append(problems, err.Error())
+			continue
+		}
+		args.Kinds[i] = kind
+	}
+	for _, d := range []struct{ name, value string }{{"since", args.Since}, {"until", args.Until}} {
+		if d.value == "" {
+			continue
+		}
+		if _, err := time.Parse("2006-01-02", d.value); err != nil {
+			problems = append(problems, fmt.Sprintf(`%q must be a valid date in the format "YYYY-MM-DD", got %q`, d.name, d.value))
+		}
+	}
+	if args.Since != "" && args.Until != "" && args.Since > args.Until {
+		problems = append(problems, `"since" must not be after "until"`)
 	}
 	if strings.TrimSpace(args.Subproject) != "" && strings.TrimSpace(args.Project) == "" && strings.TrimSpace(args.WorkspaceRoot) == "" {
 		problems = append(problems, `"subproject" requires "project" or "workspace_root"`)
@@ -152,7 +224,12 @@ func (t *SearchMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult
 		t.Resolver.RememberIfExists(ctx, s, rctx)
 	}
 
-	results, scanTruncated, err := s.SearchText(ctx, args.Query, store.SearchScope{Project: project, Subproject: subproject}, args.Offset, args.Limit, args.ContextLines)
+	results, scanTruncated, err := s.SearchText(ctx, store.SearchOptions{
+		Query: args.Query, Mode: store.SearchMode(args.Match),
+		Scope: store.SearchScope{Project: project, Subproject: subproject},
+		Kinds: args.Kinds, Since: args.Since, Until: args.Until,
+		Offset: args.Offset, Limit: args.Limit, ContextLines: args.ContextLines,
+	})
 	if err != nil {
 		return ToolResult{}, wrapNotFound(err, FormatLabel(project, subproject))
 	}
@@ -173,6 +250,7 @@ func (t *SearchMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult
 	lines := make([]string, 0, len(results)+2)
 	size := 0
 	for i, r := range results {
+		r.Line, r.ContextBefore, r.ContextAfter = clipLine(r.Line), clipLines(r.ContextBefore), clipLines(r.ContextAfter)
 		location := FormatLabel(r.Project, r.Subproject) + "/" + r.Kind
 		if r.EntryDate != "" {
 			location += "[" + r.EntryDate + "]"
@@ -197,7 +275,7 @@ func (t *SearchMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult
 		size += len(line) + 1
 		lines = append(lines, line)
 		report.Results = append(report.Results, searchHit{
-			Project: r.Project, Subproject: r.Subproject, File: r.Kind, EntryDate: r.EntryDate,
+			Project: r.Project, Subproject: r.Subproject, File: r.Kind, EntryID: r.EntryID, EntryDate: r.EntryDate,
 			Line: r.LineNumber, Text: r.Line, ContextBefore: r.ContextBefore, ContextAfter: r.ContextAfter,
 		})
 	}
@@ -223,13 +301,20 @@ func (t *SearchMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult
 // config's last-used project: with neither project nor workspace_root,
 // the scope stays empty (search everything) rather than narrowing to the
 // project last used, and a workspace_root without a .sync82.json searches
-// the whole vault. The returned context always carries the vault path; OK
-// is true only when a project scope was resolved, and Problem is set when
-// the workspace's .sync82.json cannot be read or names an invalid project.
+// the whole vault — unless a subproject was given, which then has no
+// project to belong to. The returned context always carries the vault
+// path; OK is true only when a project scope was resolved, and Problem is
+// set when the workspace's .sync82.json cannot be read or names an invalid
+// project, or a subproject was given without any project.
 func (t *SearchMemoryTool) resolveScope(args searchMemoryArgs) ResolvedContext {
 	if strings.TrimSpace(args.Project) == "" && args.WorkspaceRoot != "" {
 		rctx := t.Resolver.Resolve(ContextArgs{WorkspaceRoot: args.WorkspaceRoot, Subproject: args.Subproject, Path: args.Path, SearchParentDirs: args.SearchParentDirs})
 		if !rctx.OK {
+			if rctx.Problem == "" && strings.TrimSpace(args.Subproject) != "" {
+				// Without a project the subproject can't narrow anything;
+				// searching the whole vault instead would mix projects.
+				rctx.Problem = fmt.Sprintf(`"subproject" was given, but no .sync82.json was found at workspace_root %s to tell which project it belongs to; pass "project" too`, args.WorkspaceRoot)
+			}
 			rctx.DBPath = t.Resolver.DBPathOrDefault(args.Path)
 		}
 		return rctx
@@ -260,6 +345,7 @@ type searchHit struct {
 	Project       string   `json:"project"`
 	Subproject    string   `json:"subproject,omitempty"`
 	File          string   `json:"file"`
+	EntryID       int64    `json:"entry_id,omitempty"`
 	EntryDate     string   `json:"entry_date,omitempty"`
 	Line          int      `json:"line"`
 	Text          string   `json:"text"`

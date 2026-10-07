@@ -10,7 +10,7 @@ O `sync82` dá ao seu assistente de IA uma memória persistente e estruturada pa
 
 ## O pipeline
 
-O fluxo tem três estágios: a **resolução de contexto** determina a qual projeto (e qual vault) uma chamada de tool se refere, o **Store** lê/escreve no SQLite, e o **servidor MCP** expõe tudo isso ao cliente de IA como 18 tools via stdio.
+O fluxo tem três estágios: a **resolução de contexto** determina a qual projeto (e qual vault) uma chamada de tool se refere, o **Store** lê/escreve no SQLite, e o **servidor MCP** expõe tudo isso ao cliente de IA como 19 tools via stdio.
 
 ```
 Cliente de IA chama uma tool (ex. update_project_memory)
@@ -35,7 +35,7 @@ Cliente de IA chama uma tool (ex. update_project_memory)
 | Etapa | Tools |
 | --- | --- |
 | **Gerenciamento de projeto** | `list_projects`, `create_project`, `delete_project`, `rename_project`, `get_vault_config` |
-| **Leitura e escrita de memória** | `list_files`, `read_memory`, `write_memory`, `append_memory`, `delete_memory`, `archive_memory`, `search_memory` |
+| **Leitura e escrita de memória** | `list_files`, `read_memory`, `write_memory`, `append_memory`, `delete_memory`, `edit_entry`, `archive_memory`, `search_memory` |
 | **Fluxo de sessão** | `load_project_context`, `check_project_health`, `init_project_memory`, `update_project_memory` |
 | **Exportação e importação** | `export_memory`, `import_memory` |
 

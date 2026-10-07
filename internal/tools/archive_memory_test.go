@@ -18,12 +18,15 @@ package tools
 import (
 	"context"
 	"math"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/oito2/mcp-sync82/internal/config"
+	"github.com/oito2/mcp-sync82/internal/store"
 )
 
 // TestArchiveMemoryTool_Validate_RejectsBadFilename verifies that validation
@@ -232,5 +235,164 @@ func TestArchiveMemoryTool_RejectsUnknownArgument(t *testing.T) {
 	_, err := tool.Validate(mustJSON(t, map[string]any{"project": "acme", "filename": "progress", "keepDays": 365}))
 	if err == nil || !strings.Contains(err.Error(), "keepDays") {
 		t.Fatalf("err = %v, want it to name the unknown argument", err)
+	}
+}
+
+// seedOldLog creates project acme in the default vault of r with two
+// progress entries a year old and one from today, and returns the store.
+func seedOldLog(t *testing.T, r *Resolver, mgr *store.Manager) (*store.Store, string, string) {
+	t.Helper()
+	ctx := context.Background()
+	s, err := mgr.Get(ctx, r.DefaultDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	old1, old2 := now.AddDate(-1, 0, 0).Format("2006-01-02"), now.AddDate(-1, 0, 1).Format("2006-01-02")
+	today := now.Format("2006-01-02")
+	for _, e := range [][2]string{{old1, "first old step"}, {old2, "second old step"}, {today, "today's step"}} {
+		if err := s.AppendEntry(ctx, "acme", "", "progress", e[0], "## "+e[0]+"\n- "+e[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return s, old1, old2
+}
+
+// TestArchiveMemoryTool_DryRunChangesNothing verifies that a dry run lists
+// the entries it would archive and leaves them active.
+func TestArchiveMemoryTool_DryRunChangesNothing(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	s, old1, old2 := seedOldLog(t, r, mgr)
+	tool := &ArchiveMemoryTool{Resolver: r, Stores: mgr}
+
+	text := runTool(t, tool, map[string]any{"project": "acme", "filename": "progress", "dry_run": true, "summary": "x"}).Text
+	for _, want := range []string{
+		"Dry run — nothing was changed. Would archive 2 entries from acme/progress",
+		"(from " + old1 + " to " + old2 + ")",
+		"] entry 1: - first old step",
+		"] entry 2: - second old step",
+		"would be added as a new active entry dated today",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("dry run report lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "today's step") {
+		t.Errorf("a recent entry was listed: %s", text)
+	}
+	if active, err := s.ReadEntries(context.Background(), "acme", "", "progress", false); err != nil || len(active) != 3 {
+		t.Fatalf("after a dry run, active entries = %d, %v; want 3", len(active), err)
+	}
+}
+
+// TestArchiveMemoryTool_DryRunDoesNotCreateVault verifies that a dry run on
+// a missing vault returns the missing-vault result without creating it.
+func TestArchiveMemoryTool_DryRunDoesNotCreateVault(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	vault := filepath.Join(t.TempDir(), "missing.db")
+	result := runTool(t, &ArchiveMemoryTool{Resolver: r, Stores: mgr}, map[string]any{"project": "acme", "filename": "progress", "dry_run": true, "path": vault})
+	if !result.IsError || !strings.Contains(result.Text, "No vault exists") {
+		t.Fatalf("result = %+v, want the missing-vault result", result)
+	}
+	if _, err := os.Stat(vault); !os.IsNotExist(err) {
+		t.Fatalf("the dry run created the vault: %v", err)
+	}
+}
+
+// TestArchiveMemoryTool_SummaryWithoutHeaderGetsOne verifies that a summary
+// without a date header is added under a generated header dated today and
+// naming the archived range, and that a second archive keeps it active.
+func TestArchiveMemoryTool_SummaryWithoutHeaderGetsOne(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	s, old1, old2 := seedOldLog(t, r, mgr)
+
+	text := runTool(t, &ArchiveMemoryTool{Resolver: r, Stores: mgr}, map[string]any{"project": "acme", "filename": "progress", "summary": "- Two old steps, both done."}).Text
+	if !strings.Contains(text, "Archived 2 entries") || !strings.Contains(text, "→ summary added as entry") {
+		t.Fatalf("result = %s", text)
+	}
+	active, err := s.ReadEntries(context.Background(), "acme", "", "progress", false)
+	if err != nil || len(active) != 2 {
+		t.Fatalf("active entries = %+v, %v", active, err)
+	}
+	today := time.Now().UTC().Format("2006-01-02")
+	want := "## " + today + " — Summary of 2 archived entries (from " + old1 + " to " + old2 + ")\n- Two old steps, both done."
+	if active[1].EntryDate != today || active[1].Body != want {
+		t.Fatalf("summary entry = %+v, want body %q dated %s", active[1], want, today)
+	}
+
+	text = runTool(t, &ArchiveMemoryTool{Resolver: r, Stores: mgr}, map[string]any{"project": "acme", "filename": "progress"}).Text
+	if !strings.Contains(text, "Nothing to archive") {
+		t.Fatalf("the summary was archived again: %s", text)
+	}
+}
+
+// TestArchiveMemoryTool_SummaryWithHeaderKeepsIt verifies that a summary
+// with its own date header is stored as given, dated by that header, and
+// that a header older than the cutoff is rejected.
+func TestArchiveMemoryTool_SummaryWithHeaderKeepsIt(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	s, _, _ := seedOldLog(t, r, mgr)
+	tool := &ArchiveMemoryTool{Resolver: r, Stores: mgr}
+	if _, err := tool.Validate(mustJSON(t, map[string]any{"project": "acme", "filename": "progress", "summary": "## 2020-12-31\n- too old"})); err == nil || !strings.Contains(err.Error(), "older than the archive cutoff") {
+		t.Fatalf("a summary dated before the cutoff: err = %v", err)
+	}
+
+	date := archiveCutoff(90)
+	summary := "## " + date + "\n- The year in one line."
+	runTool(t, tool, map[string]any{"project": "acme", "filename": "progress", "summary": summary})
+	active, err := s.ReadEntries(context.Background(), "acme", "", "progress", false)
+	if err != nil || len(active) != 2 || active[0].EntryDate != date || active[0].Body != summary {
+		t.Fatalf("active entries = %+v, %v", active, err)
+	}
+}
+
+// TestArchiveMemoryTool_SummaryNotWrittenWhenNothingIsArchived verifies
+// that a summary is dropped, and the result says so, when no entry is old
+// enough, and that a blank summary is rejected.
+func TestArchiveMemoryTool_SummaryNotWrittenWhenNothingIsArchived(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	s, _, _ := seedOldLog(t, r, mgr)
+	tool := &ArchiveMemoryTool{Resolver: r, Stores: mgr}
+
+	text := runTool(t, tool, map[string]any{"project": "acme", "filename": "progress", "keep_days": 1000, "summary": "- nothing"}).Text
+	if !strings.Contains(text, "Nothing to archive") || !strings.Contains(text, "The summary was not written.") {
+		t.Fatalf("result = %s", text)
+	}
+	if active, err := s.ReadEntries(context.Background(), "acme", "", "progress", false); err != nil || len(active) != 3 {
+		t.Fatalf("active entries = %d, %v; want 3", len(active), err)
+	}
+	if _, err := tool.Validate(mustJSON(t, map[string]any{"project": "acme", "filename": "progress", "summary": "  \n<!-- entry:4 -->\n"})); err == nil {
+		t.Fatal("a blank summary should be rejected")
+	}
+}
+
+// TestFormatArchiveDryRun_Bounds verifies the dry-run report for nothing to
+// archive, the cap on listed entries, the cut of long first lines and an
+// entry with only its header.
+func TestFormatArchiveDryRun_Bounds(t *testing.T) {
+	if got := formatArchiveDryRun(nil, "acme/progress", 90, true); !strings.Contains(got, "nothing would be archived") || !strings.Contains(got, "summary would not be written") {
+		t.Errorf("empty report = %q", got)
+	}
+
+	entries := make([]store.Entry, maxDryRunEntries+5)
+	for i := range entries {
+		entries[i] = store.Entry{ID: int64(i + 1), EntryDate: "2026-01-01", Body: "## 2026-01-01\n- " + strings.Repeat("x", maxDryRunLineRunes+10)}
+	}
+	entries[0].Body = "## 2026-01-01\n\n"
+	got := formatArchiveDryRun(entries, "acme/progress", 90, false)
+	if !strings.Contains(got, "- [2026-01-01] entry 1: (empty)") {
+		t.Errorf("an entry with only its header should show (empty):\n%s", got)
+	}
+	if !strings.Contains(got, "- "+strings.Repeat("x", maxDryRunLineRunes-2)+"…") {
+		t.Errorf("long first lines should be cut with an ellipsis")
+	}
+	if !strings.Contains(got, "- … and 5 more; read them with read_memory") || strings.Contains(got, "entry 201:") {
+		t.Errorf("the listing should stop at %d entries", maxDryRunEntries)
+	}
+	if !strings.HasSuffix(got, "pass a summary when archiving.") {
+		t.Errorf("without a summary the report should suggest one")
 	}
 }

@@ -50,16 +50,50 @@ type SearchScope struct {
 	Subproject string
 }
 
+// SearchMode selects how SearchText matches a query.
+type SearchMode string
+
+// The search modes. SearchWords finds rows holding every word of the query
+// and SearchPhrase rows holding the words in that order, both through the
+// full-text indexes, ignoring case and Latin diacritics, ranked by
+// relevance. SearchExact finds rows holding the query as a literal,
+// case-insensitive substring, in reading order.
+const (
+	SearchWords  SearchMode = "words"
+	SearchPhrase SearchMode = "phrase"
+	SearchExact  SearchMode = "exact"
+)
+
+// SearchOptions describes a SearchText call. Mode defaults to SearchWords
+// when empty. Kinds, when not empty, limits the search to those kinds
+// (normalized names). Since and Until ("YYYY-MM-DD", inclusive), when set,
+// limit the search to dated entries in that range; documents and undated
+// entries are then left out. Offset and Limit select the page of matching
+// lines; ContextLines, when positive, adds that many lines before and after
+// each match.
+type SearchOptions struct {
+	Query        string
+	Mode         SearchMode
+	Scope        SearchScope
+	Kinds        []string
+	Since        string
+	Until        string
+	Offset       int
+	Limit        int
+	ContextLines int
+}
+
 // SearchResult is a single matching line within a document or entry. Project
 // is the top-level project name and Subproject the subproject name (empty for
-// a top-level project). For an entry, EntryDate is its date ("" if undated);
-// LineNumber is the 1-based line within the document or entry body. Line is
+// a top-level project). For an entry, EntryID is its id (0 for a document)
+// and EntryDate its date ("" if undated); LineNumber is the 1-based line within the document or entry body. Line is
 // the matching line, and ContextBefore and ContextAfter hold the surrounding
 // lines when context was requested.
 type SearchResult struct {
 	Project       string
 	Subproject    string
 	Kind          string
+	EntryID       int64
 	EntryDate     string
 	LineNumber    int
 	Line          string
@@ -68,12 +102,13 @@ type SearchResult struct {
 }
 
 // searchRow is one document or entry row read by a search: the owning project
-// and subproject names, the kind, the entry date (empty for documents and
-// undated entries) and the text content.
+// and subproject names, the kind, the entry id (0 for documents), the entry
+// date (empty for documents and undated entries) and the text content.
 type searchRow struct {
 	project    string
 	subproject string
 	kind       string
+	entryID    int64
 	entryDate  string
 	content    string
 }
@@ -88,27 +123,53 @@ const (
 	maxScannedBytes = 64 << 20
 )
 
-// SearchText performs a case-insensitive substring search over every document
-// and non-archived entries row in scope, matching query literally (no
-// tokenization or wildcards). Case folding is Unicode-aware ("DECISÃO"
-// matches "decisão"). contextLines, when positive, adds that many lines
-// before and after each match.
+// SearchText searches the documents and non-archived entries in scope
+// and returns their matching lines. In SearchWords and SearchPhrase modes
+// the full-text indexes select the rows, ordered by relevance (bm25), then
+// by project, subproject, kind and reading order; a line matches when it
+// holds one of the query's words (words mode) or the whole phrase (phrase
+// mode), and a row whose phrase spans several lines reports the lines
+// holding any of its words. In SearchExact mode the query is a literal,
+// case-insensitive substring (Unicode-aware: "DECISÃO" matches "decisão")
+// and matches are ordered by project, subproject, kind, then reading order.
 //
-// It returns the matching lines skipping the first offset, up to limit+1 of
-// them: the extra one lets the caller detect that more results exist. The
-// boolean reports whether the scan stopped at maxScannedRows or
-// maxScannedBytes, in which case later matches are missing. Matches are
-// ordered by project, subproject, kind, then row reading order (entries in
-// reading order), then line number, so pagination is stable. It returns an
-// error wrapping ErrNotFound when the scoped project or subproject does not
-// exist, or a database error.
-func (s *Store) SearchText(ctx context.Context, query string, scope SearchScope, offset, limit, contextLines int) ([]SearchResult, bool, error) {
-	projectIDs, err := s.resolveScopeProjectIDs(ctx, scope)
+// It returns the matching lines skipping the first opts.Offset, up to
+// opts.Limit+1 of them: the extra one lets the caller detect that more
+// results exist. The boolean reports whether the scan stopped at
+// maxScannedRows or maxScannedBytes, in which case later matches are
+// missing. It returns an error wrapping ErrNotFound when the scoped
+// project or subproject does not exist, an error wrapping ErrNoSearchTerms
+// when a words or phrase query has no letter or number, or a database
+// error.
+func (s *Store) SearchText(ctx context.Context, opts SearchOptions) ([]SearchResult, bool, error) {
+	if opts.Mode == "" {
+		opts.Mode = SearchWords
+	}
+	var terms []searchTerm
+	if opts.Mode != SearchExact {
+		terms = parseSearchTerms(opts.Query)
+		if len(terms) == 0 {
+			return nil, false, fmt.Errorf("search %q: %w", opts.Query, ErrNoSearchTerms)
+		}
+	}
+	kinds := make([]string, len(opts.Kinds))
+	for i, k := range opts.Kinds {
+		kinds[i] = normalizeName(k)
+	}
+	opts.Kinds = kinds
+
+	projectIDs, err := s.resolveScopeProjectIDs(ctx, opts.Scope)
 	if err != nil {
 		return nil, false, err
 	}
 
-	rows, truncated, err := s.fetchMatchingRows(ctx, query, projectIDs)
+	var rows []searchRow
+	var truncated bool
+	if opts.Mode == SearchExact {
+		rows, truncated, err = s.fetchMatchingRows(ctx, opts, projectIDs)
+	} else {
+		rows, truncated, err = s.fetchRankedRows(ctx, ftsQuery(terms, opts.Mode), opts, projectIDs)
+	}
 	if err != nil {
 		return nil, false, err
 	}
@@ -117,59 +178,84 @@ func (s *Store) SearchText(ctx context.Context, query string, scope SearchScope,
 		SearchResult
 		row int
 	}
-	needle := strings.ToLower(query)
 	var all []match
 	for rowIndex, r := range rows {
 		lines := strings.Split(r.content, "\n")
-		for i, line := range lines {
-			if !strings.Contains(strings.ToLower(line), needle) {
-				continue
-			}
+		for _, i := range matchingLines(lines, opts.Mode, opts.Query, terms) {
 			res := SearchResult{
 				Project:    r.project,
 				Subproject: r.subproject,
 				Kind:       r.kind,
+				EntryID:    r.entryID,
 				EntryDate:  r.entryDate,
 				LineNumber: i + 1,
-				Line:       line,
+				Line:       lines[i],
 			}
-			if contextLines > 0 {
-				res.ContextBefore = contextSlice(lines, i, -contextLines)
-				res.ContextAfter = contextSlice(lines, i, contextLines)
+			if opts.ContextLines > 0 {
+				res.ContextBefore = contextSlice(lines, i, -opts.ContextLines)
+				res.ContextAfter = contextSlice(lines, i, opts.ContextLines)
 			}
 			all = append(all, match{res, rowIndex})
 		}
 	}
 
-	sort.SliceStable(all, func(i, j int) bool {
-		a, b := all[i], all[j]
-		if a.Project != b.Project {
-			return a.Project < b.Project
-		}
-		if a.Subproject != b.Subproject {
-			return a.Subproject < b.Subproject
-		}
-		if a.Kind != b.Kind {
-			return a.Kind < b.Kind
-		}
-		if a.row != b.row {
-			return a.row < b.row
-		}
-		return a.LineNumber < b.LineNumber
-	})
+	if opts.Mode == SearchExact {
+		sort.SliceStable(all, func(i, j int) bool {
+			a, b := all[i], all[j]
+			if a.Project != b.Project {
+				return a.Project < b.Project
+			}
+			if a.Subproject != b.Subproject {
+				return a.Subproject < b.Subproject
+			}
+			if a.Kind != b.Kind {
+				return a.Kind < b.Kind
+			}
+			if a.row != b.row {
+				return a.row < b.row
+			}
+			return a.LineNumber < b.LineNumber
+		})
+	}
 
-	if offset >= len(all) {
+	if opts.Offset >= len(all) {
 		return []SearchResult{}, truncated, nil
 	}
-	end := offset + limit + 1
+	end := opts.Offset + opts.Limit + 1
 	if end > len(all) {
 		end = len(all)
 	}
-	out := make([]SearchResult, 0, end-offset)
-	for _, m := range all[offset:end] {
+	out := make([]SearchResult, 0, end-opts.Offset)
+	for _, m := range all[opts.Offset:end] {
 		out = append(out, m.SearchResult)
 	}
 	return out, truncated, nil
+}
+
+// matchingLines returns the indexes of the lines of one matched row that
+// count as hits for mode: lines holding query as a case-insensitive
+// substring (SearchExact), the whole phrase of terms (SearchPhrase) or any
+// of terms (SearchWords). When no single line holds the phrase, because
+// it spans lines, the lines holding any of its terms are returned instead.
+func matchingLines(lines []string, mode SearchMode, query string, terms []searchTerm) []int {
+	needle := strings.ToLower(query)
+	hit := func(line string) bool { return lineHasAnyTerm(line, terms) }
+	switch mode {
+	case SearchExact:
+		hit = func(line string) bool { return strings.Contains(strings.ToLower(line), needle) }
+	case SearchPhrase:
+		hit = func(line string) bool { return lineHasPhrase(line, terms) }
+	}
+	var out []int
+	for i, line := range lines {
+		if hit(line) {
+			out = append(out, i)
+		}
+	}
+	if len(out) == 0 && mode == SearchPhrase {
+		return matchingLines(lines, SearchWords, query, terms)
+	}
+	return out
 }
 
 // contextSlice returns the |delta| lines before (delta < 0) or after
@@ -230,46 +316,51 @@ func (s *Store) resolveScopeProjectIDs(ctx context.Context, scope SearchScope) (
 	return ids, nil
 }
 
-// fetchMatchingRows runs the case-insensitive LIKE query against documents
-// and then entries (archived entries excluded), optionally scoped to
-// projectIDs (nil means no scope), each in a fixed order. It returns the
-// matching rows, at most maxScannedRows per query and about maxScannedBytes of
-// content in total. truncated reports whether either bound cut the result
-// short. It returns a database error on failure.
-func (s *Store) fetchMatchingRows(ctx context.Context, query string, projectIDs []int64) (rows []searchRow, truncated bool, err error) {
-	like := "%" + escapeLike(strings.ToLower(query)) + "%"
+// fetchMatchingRows runs the case-insensitive LIKE query of a SearchExact
+// search against documents and then entries (archived entries excluded),
+// scoped to projectIDs (nil means no scope) and filtered by opts.Kinds,
+// opts.Since and opts.Until, each in a fixed order. Documents are skipped
+// when a date filter is set. It returns the matching rows, at most
+// maxScannedRows per query and about maxScannedBytes of content in total.
+// truncated reports whether either bound cut the result short. It returns a
+// database error on failure.
+func (s *Store) fetchMatchingRows(ctx context.Context, opts SearchOptions, projectIDs []int64) (rows []searchRow, truncated bool, err error) {
+	like := "%" + escapeLike(strings.ToLower(opts.Query)) + "%"
+
+	type query struct {
+		what string
+		sql  string
+		args []any
+	}
+	var queries []query
 
 	// The first two columns resolve to the top-level project name and the
 	// subproject name respectively, whether the matched row belongs to a
 	// subproject (p has a parent) or a top-level project (p has none).
-	docClause, docScopeArgs := scopeClause("d.project_id", projectIDs)
-	docSQL := `
-		SELECT COALESCE(parent.name, p.name), CASE WHEN parent.id IS NOT NULL THEN p.name ELSE '' END, d.kind, '', d.content
+	if opts.Since == "" && opts.Until == "" {
+		docFilter, docArgs := searchFilters("d", false, opts, projectIDs)
+		queries = append(queries, query{"documents", `
+		SELECT COALESCE(parent.name, p.name), CASE WHEN parent.id IS NOT NULL THEN p.name ELSE '' END, d.kind, 0, '', d.content
 		FROM documents d
 		JOIN projects p ON p.id = d.project_id
 		LEFT JOIN projects parent ON parent.id = p.parent_id
-		WHERE ` + lowerFunc + `(d.content) LIKE ? ESCAPE '\'` + docClause + `
+		WHERE ` + lowerFunc + `(d.content) LIKE ? ESCAPE '\'` + docFilter + `
 		ORDER BY d.project_id, d.kind
-		LIMIT ?`
-	docArgs := append([]any{like}, append(docScopeArgs, maxScannedRows+1)...)
+		LIMIT ?`, append(append([]any{like}, docArgs...), maxScannedRows+1)})
+	}
 
-	entryClause, entryScopeArgs := scopeClause("e.project_id", projectIDs)
-	entrySQL := `
-		SELECT COALESCE(parent.name, p.name), CASE WHEN parent.id IS NOT NULL THEN p.name ELSE '' END, e.kind, COALESCE(e.entry_date, ''), e.body
+	entryFilter, entryArgs := searchFilters("e", true, opts, projectIDs)
+	queries = append(queries, query{"entries", `
+		SELECT COALESCE(parent.name, p.name), CASE WHEN parent.id IS NOT NULL THEN p.name ELSE '' END, e.kind, e.id, COALESCE(e.entry_date, ''), e.body
 		FROM entries e
 		JOIN projects p ON p.id = e.project_id
 		LEFT JOIN projects parent ON parent.id = p.parent_id
-		WHERE e.archived = 0 AND ` + lowerFunc + `(e.body) LIKE ? ESCAPE '\'` + entryClause + `
+		WHERE e.archived = 0 AND ` + lowerFunc + `(e.body) LIKE ? ESCAPE '\'` + entryFilter + `
 		ORDER BY e.project_id, e.kind, (e.entry_date IS NULL AND e.position >= 0), e.entry_date, e.position
-		LIMIT ?`
-	entryArgs := append([]any{like}, append(entryScopeArgs, maxScannedRows+1)...)
+		LIMIT ?`, append(append([]any{like}, entryArgs...), maxScannedRows+1)})
 
 	var total int
-	for _, q := range []struct {
-		what string
-		sql  string
-		args []any
-	}{{"documents", docSQL, docArgs}, {"entries", entrySQL, entryArgs}} {
+	for _, q := range queries {
 		n, cut, err := s.readSearchRows(ctx, q.sql, q.args, &rows, &total)
 		if err != nil {
 			return nil, false, fmt.Errorf("search %s: %w", q.what, err)
@@ -282,6 +373,85 @@ func (s *Store) fetchMatchingRows(ctx context.Context, query string, projectIDs 
 		}
 	}
 	return rows, truncated, nil
+}
+
+// fetchRankedRows runs the full-text query match (an FTS5 expression built
+// by ftsQuery) of a SearchWords or SearchPhrase search against
+// documents_fts and entries_fts in one query, scoped and filtered like
+// fetchMatchingRows. Rows come in relevance order (bm25, best first), ties
+// broken by project, subproject, kind and reading order, so the order is
+// the same on every call. It returns at most maxScannedRows rows and about
+// maxScannedBytes of content; truncated reports whether either bound cut
+// the result short. It returns a database error on failure.
+func (s *Store) fetchRankedRows(ctx context.Context, match string, opts SearchOptions, projectIDs []int64) (rows []searchRow, truncated bool, err error) {
+	var branches []string
+	var args []any
+	if opts.Since == "" && opts.Until == "" {
+		docFilter, docArgs := searchFilters("d", false, opts, projectIDs)
+		branches = append(branches, `
+		SELECT COALESCE(parent.name, p.name) AS project, CASE WHEN parent.id IS NOT NULL THEN p.name ELSE '' END AS subproject,
+			d.kind AS kind, 0 AS entry_id, '' AS entry_date, d.content AS content,
+			bm25(documents_fts) AS score, 0 AS undated, 0 AS position, d.id AS row_id
+		FROM documents_fts
+		JOIN documents d ON d.id = documents_fts.rowid
+		JOIN projects p ON p.id = d.project_id
+		LEFT JOIN projects parent ON parent.id = p.parent_id
+		WHERE documents_fts MATCH ?`+docFilter)
+		args = append(append(args, match), docArgs...)
+	}
+	entryFilter, entryArgs := searchFilters("e", true, opts, projectIDs)
+	branches = append(branches, `
+		SELECT COALESCE(parent.name, p.name) AS project, CASE WHEN parent.id IS NOT NULL THEN p.name ELSE '' END AS subproject,
+			e.kind AS kind, e.id AS entry_id, COALESCE(e.entry_date, '') AS entry_date, e.body AS content,
+			bm25(entries_fts) AS score, (e.entry_date IS NULL AND e.position >= 0) AS undated, e.position AS position, e.id AS row_id
+		FROM entries_fts
+		JOIN entries e ON e.id = entries_fts.rowid
+		JOIN projects p ON p.id = e.project_id
+		LEFT JOIN projects parent ON parent.id = p.parent_id
+		WHERE entries_fts MATCH ? AND e.archived = 0`+entryFilter)
+	args = append(append(args, match), entryArgs...)
+
+	query := `SELECT project, subproject, kind, entry_id, entry_date, content FROM (` +
+		strings.Join(branches, "\n\t\tUNION ALL") + `)
+		ORDER BY score, project, subproject, kind, undated, entry_date, position, row_id
+		LIMIT ?`
+	args = append(args, maxScannedRows+1)
+
+	var total int
+	n, cut, err := s.readSearchRows(ctx, query, args, &rows, &total)
+	if err != nil {
+		return nil, false, fmt.Errorf("search: %w", err)
+	}
+	return rows, cut || n > maxScannedRows, nil
+}
+
+// searchFilters builds the extra WHERE conditions, each starting with
+// " AND ", and their arguments for a search over the table aliased alias
+// ("d" for documents, "e" for entries): the project scope (projectIDs, nil
+// for none), opts.Kinds and, for entries (dated true), opts.Since and
+// opts.Until, which also exclude undated entries. alias is interpolated
+// into the SQL and must be a trusted constant.
+func searchFilters(alias string, dated bool, opts SearchOptions, projectIDs []int64) (string, []any) {
+	clause, args := scopeClause(alias+".project_id", projectIDs)
+	if len(opts.Kinds) > 0 {
+		placeholders := make([]string, len(opts.Kinds))
+		for i, k := range opts.Kinds {
+			placeholders[i] = "?"
+			args = append(args, k)
+		}
+		clause += fmt.Sprintf(" AND %s.kind IN (%s)", alias, strings.Join(placeholders, ","))
+	}
+	if dated {
+		if opts.Since != "" {
+			clause += fmt.Sprintf(" AND %s.entry_date >= ?", alias)
+			args = append(args, opts.Since)
+		}
+		if opts.Until != "" {
+			clause += fmt.Sprintf(" AND %s.entry_date <= ?", alias)
+			args = append(args, opts.Until)
+		}
+	}
+	return clause, args
 }
 
 // readSearchRows runs one search query and appends its rows to *rows, at most
@@ -301,7 +471,7 @@ func (s *Store) readSearchRows(ctx context.Context, query string, args []any, ro
 			return n, false, nil
 		}
 		var r searchRow
-		if err := result.Scan(&r.project, &r.subproject, &r.kind, &r.entryDate, &r.content); err != nil {
+		if err := result.Scan(&r.project, &r.subproject, &r.kind, &r.entryID, &r.entryDate, &r.content); err != nil {
 			return n, false, fmt.Errorf("scan search row: %w", err)
 		}
 		*total += len(r.content)

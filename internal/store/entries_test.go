@@ -18,7 +18,9 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -160,7 +162,7 @@ func TestReadEntriesSince_ExcludesArchived(t *testing.T) {
 	if err := s.AppendEntry(ctx, "acme", "", "progress", "2020-01-01", "## 2020-01-01\n- old"); err != nil {
 		t.Fatalf("AppendEntry: %v", err)
 	}
-	if _, err := s.ArchiveEntries(ctx, "acme", "", "progress", "2099-01-01"); err != nil {
+	if _, err := s.ArchiveEntries(ctx, "acme", "", "progress", "2099-01-01", nil); err != nil {
 		t.Fatalf("ArchiveEntries: %v", err)
 	}
 
@@ -192,7 +194,7 @@ func TestArchiveEntries_NeverArchivesUndated(t *testing.T) {
 		t.Fatalf("AppendEntry (recent): %v", err)
 	}
 
-	result, err := s.ArchiveEntries(ctx, "acme", "", "progress", "2025-01-01")
+	result, err := s.ArchiveEntries(ctx, "acme", "", "progress", "2025-01-01", nil)
 	if err != nil {
 		t.Fatalf("ArchiveEntries: %v", err)
 	}
@@ -325,5 +327,297 @@ func BenchmarkAppendEntry_LargeKind(b *testing.B) {
 		if err := s.AppendEntry(ctx, "acme", "", "progress", "2026-01-02", "## 2026-01-02\n- more"); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+// TestEntryStats_CountsOnlyActiveEntries verifies that EntryStats counts
+// active dated and undated entries apart, leaves out archived entries and a
+// preamble, reports the newest active date, returns zeros for a kind with
+// no entries, and reports a missing project as ErrNotFound.
+func TestEntryStats_CountsOnlyActiveEntries(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+
+	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
+		t.Fatalf("EnsureProject: %v", err)
+	}
+	sections := []EntrySection{
+		{Body: "# Progress", Preamble: true},
+		{Date: "2026-01-01", Body: "## 2026-01-01\n- old"},
+		{Date: "2026-03-01", Body: "## 2026-03-01\n- recent"},
+		{Date: "2026-02-01", Body: "## 2026-02-01\n- middle"},
+		{Body: "an undated note"},
+	}
+	if err := s.ReplaceAllEntries(ctx, "acme", "", "progress", sections); err != nil {
+		t.Fatalf("ReplaceAllEntries: %v", err)
+	}
+	if _, err := s.ArchiveEntries(ctx, "acme", "", "progress", "2026-01-15", nil); err != nil {
+		t.Fatalf("ArchiveEntries: %v", err)
+	}
+
+	st, err := s.EntryStats(ctx, "acme", "", "progress")
+	if err != nil {
+		t.Fatalf("EntryStats: %v", err)
+	}
+	if st != (EntryStats{Dated: 2, Undated: 1, LatestDate: "2026-03-01"}) {
+		t.Fatalf("EntryStats = %+v, want 2 dated, 1 undated, latest 2026-03-01", st)
+	}
+
+	st, err = s.EntryStats(ctx, "acme", "", "decisions")
+	if err != nil || st != (EntryStats{}) {
+		t.Fatalf("EntryStats on an empty kind = %+v, %v; want zeros, nil", st, err)
+	}
+
+	if _, err := s.EntryStats(ctx, "missing", "", "progress"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("EntryStats on a missing project: err = %v, want ErrNotFound", err)
+	}
+}
+
+// seedEntries creates project acme with subproject api and returns the ids
+// of three entries: two progress entries of acme and one progress entry of
+// acme/api.
+func seedEntries(t *testing.T, ctx context.Context, s *Store) (first, second, other int64) {
+	t.Helper()
+	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
+		t.Fatalf("EnsureProject: %v", err)
+	}
+	if _, _, err := s.EnsureProject(ctx, "acme", "api"); err != nil {
+		t.Fatalf("EnsureProject: %v", err)
+	}
+	for _, e := range []struct{ sub, date, body string }{
+		{"", "2026-01-01", "## 2026-01-01\n- first"},
+		{"", "2026-02-01", "## 2026-02-01\n- second"},
+		{"api", "2026-01-01", "## 2026-01-01\n- api entry"},
+	} {
+		if err := s.AppendEntry(ctx, "acme", e.sub, "progress", e.date, e.body); err != nil {
+			t.Fatalf("AppendEntry: %v", err)
+		}
+	}
+	main, err := s.ReadEntries(ctx, "acme", "", "progress", false)
+	if err != nil || len(main) != 2 {
+		t.Fatalf("ReadEntries = %+v, %v", main, err)
+	}
+	sub, err := s.ReadEntries(ctx, "acme", "api", "progress", false)
+	if err != nil || len(sub) != 1 {
+		t.Fatalf("ReadEntries = %+v, %v", sub, err)
+	}
+	if main[0].ID == 0 || main[1].ID == 0 || sub[0].ID == 0 {
+		t.Fatalf("ReadEntries returned entries without ids: %+v %+v", main, sub)
+	}
+	return main[0].ID, main[1].ID, sub[0].ID
+}
+
+// TestReadEntry_OnlyWithinProjectAndKind verifies that ReadEntry returns an
+// entry by id and reports ErrNotFound for an id of another subproject or
+// kind.
+func TestReadEntry_OnlyWithinProjectAndKind(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	first, _, other := seedEntries(t, ctx, s)
+
+	e, err := s.ReadEntry(ctx, "acme", "", "progress", first)
+	if err != nil {
+		t.Fatalf("ReadEntry: %v", err)
+	}
+	if e.ID != first || e.EntryDate != "2026-01-01" || e.Body != "## 2026-01-01\n- first" {
+		t.Fatalf("ReadEntry = %+v", e)
+	}
+	if _, err := s.ReadEntry(ctx, "acme", "", "progress", other); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ReadEntry of another subproject's entry: err = %v, want ErrNotFound", err)
+	}
+	if _, err := s.ReadEntry(ctx, "acme", "", "decisions", first); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ReadEntry with the wrong kind: err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestUpdateEntry_KeepsPositionAndOptionallyDate verifies that UpdateEntry
+// replaces only the body when no date is given, also moves the date when
+// one is, keeps the entry's position, and never touches another
+// project's entry.
+func TestUpdateEntry_KeepsPositionAndOptionallyDate(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	first, second, other := seedEntries(t, ctx, s)
+
+	if err := s.UpdateEntry(ctx, "acme", "", "progress", first, "## 2026-01-01\n- first, fixed", nil); err != nil {
+		t.Fatalf("UpdateEntry: %v", err)
+	}
+	e, err := s.ReadEntry(ctx, "acme", "", "progress", first)
+	if err != nil || e.Body != "## 2026-01-01\n- first, fixed" || e.EntryDate != "2026-01-01" {
+		t.Fatalf("after UpdateEntry: %+v, %v", e, err)
+	}
+
+	date := "2026-03-01"
+	if err := s.UpdateEntry(ctx, "acme", "", "progress", first, "## 2026-03-01\n- moved", &date); err != nil {
+		t.Fatalf("UpdateEntry with date: %v", err)
+	}
+	entries, err := s.ReadEntries(ctx, "acme", "", "progress", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 || entries[0].ID != second || entries[1].ID != first || entries[1].EntryDate != "2026-03-01" {
+		t.Fatalf("after moving the date, entries = %+v", entries)
+	}
+
+	if err := s.UpdateEntry(ctx, "acme", "", "progress", other, "hijack", nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("UpdateEntry of another subproject's entry: err = %v, want ErrNotFound", err)
+	}
+	e, err = s.ReadEntry(ctx, "acme", "api", "progress", other)
+	if err != nil || e.Body != "## 2026-01-01\n- api entry" {
+		t.Fatalf("the other subproject's entry changed: %+v, %v", e, err)
+	}
+}
+
+// TestDeleteEntry_RemovesOnlyThatEntry verifies that DeleteEntry removes
+// one entry and reports ErrNotFound for an id it does not own or that is
+// already gone.
+func TestDeleteEntry_RemovesOnlyThatEntry(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	first, second, other := seedEntries(t, ctx, s)
+
+	if err := s.DeleteEntry(ctx, "acme", "", "progress", other); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("DeleteEntry of another subproject's entry: err = %v, want ErrNotFound", err)
+	}
+	if err := s.DeleteEntry(ctx, "acme", "", "progress", first); err != nil {
+		t.Fatalf("DeleteEntry: %v", err)
+	}
+	entries, err := s.ReadEntries(ctx, "acme", "", "progress", true)
+	if err != nil || len(entries) != 1 || entries[0].ID != second {
+		t.Fatalf("after DeleteEntry, entries = %+v, %v", entries, err)
+	}
+	if err := s.DeleteEntry(ctx, "acme", "", "progress", first); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second DeleteEntry: err = %v, want ErrNotFound", err)
+	}
+	if _, err := s.ReadEntry(ctx, "acme", "api", "progress", other); err != nil {
+		t.Fatalf("the other subproject's entry is gone: %v", err)
+	}
+}
+
+// TestSupersedeEntry_AppendsAndMarksAtomically verifies that SupersedeEntry
+// appends the new entry after the others, rewrites the old body through
+// mark with the new id, and changes nothing when the id is not found.
+func TestSupersedeEntry_AppendsAndMarksAtomically(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	first, _, other := seedEntries(t, ctx, s)
+	mark := func(old string, newID int64) string { return fmt.Sprintf("%s\n(superseded by %d)", old, newID) }
+
+	newID, err := s.SupersedeEntry(ctx, "acme", "", "progress", first, "2026-02-01", "## 2026-02-01\n- replacement", mark)
+	if err != nil {
+		t.Fatalf("SupersedeEntry: %v", err)
+	}
+	old, err := s.ReadEntry(ctx, "acme", "", "progress", first)
+	if err != nil || old.Body != fmt.Sprintf("## 2026-01-01\n- first\n(superseded by %d)", newID) {
+		t.Fatalf("old entry = %+v, %v", old, err)
+	}
+	entries, err := s.ReadEntries(ctx, "acme", "", "progress", false)
+	if err != nil || len(entries) != 3 || entries[2].ID != newID || entries[2].Body != "## 2026-02-01\n- replacement" {
+		t.Fatalf("entries = %+v, %v; want the new entry last (same date, later position)", entries, err)
+	}
+
+	if _, err := s.SupersedeEntry(ctx, "acme", "", "progress", other, "", "x", mark); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SupersedeEntry of another subproject's entry: err = %v, want ErrNotFound", err)
+	}
+	entries, err = s.ReadEntries(ctx, "acme", "", "progress", false)
+	if err != nil || len(entries) != 3 {
+		t.Fatalf("a failed SupersedeEntry appended an entry: %+v, %v", entries, err)
+	}
+}
+
+// TestUpdateEntry_ConcurrentWithAppends verifies that editing an entry while
+// other goroutines append keeps every append, with distinct positions.
+func TestUpdateEntry_ConcurrentWithAppends(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	first, _, _ := seedEntries(t, ctx, s)
+
+	const appends = 50
+	var wg sync.WaitGroup
+	errs := make(chan error, appends*2)
+	for i := 0; i < appends; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			errs <- s.AppendEntry(ctx, "acme", "", "progress", "2026-04-01", fmt.Sprintf("## 2026-04-01\n- concurrent %d", i))
+		}(i)
+		go func(i int) {
+			defer wg.Done()
+			errs <- s.UpdateEntry(ctx, "acme", "", "progress", first, fmt.Sprintf("## 2026-01-01\n- edit %d", i), nil)
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent write: %v", err)
+		}
+	}
+
+	var n, positions int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*), COUNT(DISTINCT position) FROM entries WHERE kind = 'progress' AND project_id = (SELECT id FROM projects WHERE name = 'acme' AND parent_id IS NULL)`).Scan(&n, &positions); err != nil {
+		t.Fatal(err)
+	}
+	if n != appends+2 || positions != n {
+		t.Fatalf("got %d entries with %d distinct positions, want %d of each", n, positions, appends+2)
+	}
+}
+
+// TestArchiveEntries_WithSummary verifies that the summary entry is added
+// with the archived range, that a failing summary leaves every entry as it
+// was, that nothing is added when nothing is archived, and that
+// ListArchivable lists exactly what gets archived.
+func TestArchiveEntries_WithSummary(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+	sections := []EntrySection{
+		{Date: "2026-01-01", Body: "## 2026-01-01\n- a"},
+		{Date: "2026-02-01", Body: "## 2026-02-01\n- b"},
+		{Date: "2026-06-01", Body: "## 2026-06-01\n- recent"},
+		{Body: "undated"},
+	}
+	if err := s.ReplaceAllEntries(ctx, "acme", "", "progress", sections); err != nil {
+		t.Fatal(err)
+	}
+
+	listed, err := s.ListArchivable(ctx, "acme", "", "progress", "2026-03-01")
+	if err != nil || len(listed) != 2 || listed[0].EntryDate != "2026-01-01" || listed[1].EntryDate != "2026-02-01" {
+		t.Fatalf("ListArchivable = %+v, %v", listed, err)
+	}
+
+	failing := func(ArchiveResult) (string, string, error) { return "", "", errors.New("boom") }
+	if _, err := s.ArchiveEntries(ctx, "acme", "", "progress", "2026-03-01", failing); err == nil || err.Error() != "boom" {
+		t.Fatalf("ArchiveEntries with a failing summary: err = %v, want boom", err)
+	}
+	if active, err := s.ReadEntries(ctx, "acme", "", "progress", false); err != nil || len(active) != 4 {
+		t.Fatalf("after a failed archive, active entries = %d, %v; want all 4", len(active), err)
+	}
+
+	var seen ArchiveResult
+	summary := func(r ArchiveResult) (string, string, error) {
+		seen = r
+		return "2026-03-01", "## 2026-03-01\n- summary", nil
+	}
+	result, err := s.ArchiveEntries(ctx, "acme", "", "progress", "2026-03-01", summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seen.Archived != 2 || seen.OldestDate != "2026-01-01" || seen.NewestDate != "2026-02-01" {
+		t.Errorf("summary saw %+v", seen)
+	}
+	if result.Archived != 2 || result.Kept != 3 || result.NoDate != 1 || result.SummaryID == 0 {
+		t.Errorf("result = %+v", result)
+	}
+	active, err := s.ReadEntries(ctx, "acme", "", "progress", false)
+	if err != nil || len(active) != 3 || active[0].ID != result.SummaryID || active[0].EntryDate != "2026-03-01" {
+		t.Fatalf("active entries = %+v, %v; want the summary first", active, err)
+	}
+
+	result, err = s.ArchiveEntries(ctx, "acme", "", "progress", "2026-03-01", summary)
+	if err != nil || result.Archived != 0 || result.SummaryID != 0 {
+		t.Fatalf("second archive = %+v, %v; want nothing archived (the summary is not older than the cutoff) and no summary", result, err)
 	}
 }

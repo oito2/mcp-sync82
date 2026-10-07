@@ -52,7 +52,7 @@ Initialize memory for this project. Analyze the codebase automatically.
 
 ## 💡 Recommended Workflows
 
-Same 18 tools, same prompts as every other client — see [Usage Examples](../workflows/examples.md) for full end-to-end scenarios.
+Same 19 tools, same prompts as every other client — see [Usage Examples](../workflows/examples.md) for full end-to-end scenarios.
 
 Because the registration lives in OpenCode's global config, sync82 is available in every project; per-project scoping comes from `init_project_memory workspace_root=<project root>` writing `.sync82.json` at the project root, so every session in that directory auto-resolves without repeating `project`.
 

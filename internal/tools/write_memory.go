@@ -53,7 +53,7 @@ func (t *WriteMemoryTool) Name() string { return "write_memory" }
 // Description returns the text shown to the calling agent that explains what
 // the tool does and how to use it.
 func (t *WriteMemoryTool) Description() string {
-	return "Overwrite a memory file's entire content. Destructive: for append-only kinds (progress, decisions, or a custom kind created with append_memory), this replaces every non-archived entry, not just the latest one — use append_memory to add without losing prior entries. Archived entries are kept."
+	return "Overwrite a memory file's entire content. Destructive: for append-only kinds (progress, decisions, or a custom kind created with append_memory), this replaces every non-archived entry, not just the latest one — use append_memory to add without losing prior entries. Archived entries are kept. The project must be given via project or workspace_root, not taken from the last session."
 }
 
 // InputSchema returns the JSON Schema of the tool's arguments: an object
@@ -63,7 +63,7 @@ func (t *WriteMemoryTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"project":            map[string]any{"type": "string", "description": "Project name. If omitted, auto-discovered from workspace_root or the last used project."},
+			"project":            map[string]any{"type": "string", "description": "Project name. If omitted, auto-discovered from workspace_root; unlike other tools, the last used project is refused."},
 			"subproject":         map[string]any{"type": "string", "description": "Subproject name."},
 			"filename":           map[string]any{"type": "string", "description": "The file/kind to overwrite (e.g. \"memory\", \"progress\", or a custom name)."},
 			"content":            map[string]any{"type": "string", "description": "The new full content."},
@@ -92,9 +92,10 @@ func (t *WriteMemoryTool) Validate(raw json.RawMessage) (any, error) {
 }
 
 // Execute resolves the target project and replaces the kind's content
-// through writeMemoryCore. An unresolved project returns the instructional
-// result; store failures, including a missing project, are returned as
-// errors.
+// through writeMemoryCore. It refuses, with an error result, to overwrite
+// a project that was only taken from the last session. An unresolved
+// project returns the instructional result; store failures, including a
+// missing project, are returned as errors.
 func (t *WriteMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(writeMemoryArgs)
 	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, ContextArgs{
@@ -106,6 +107,9 @@ func (t *WriteMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult,
 	}
 	if err != nil {
 		return ToolResult{}, err
+	}
+	if refused := refuseRememberedTarget(rctx, "overwrite "+args.Filename); refused != nil {
+		return *refused, nil
 	}
 	if err := writeMemoryCore(ctx, s, rctx.Project, rctx.Subproject, args.Filename, args.Content); err != nil {
 		return ToolResult{}, err

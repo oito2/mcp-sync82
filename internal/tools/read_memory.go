@@ -26,7 +26,8 @@ import (
 
 // ReadMemoryTool implements read_memory: for an overwrite-style document,
 // return its content; for an append-only entries collection, concatenate
-// all non-archived entries in date order.
+// all non-archived entries in date order, each preceded by an entry id
+// marker line when with_ids is set.
 type ReadMemoryTool struct {
 	Resolver *Resolver
 	Stores   *store.Manager
@@ -41,6 +42,7 @@ type readMemoryArgs struct {
 	Path             string `json:"path,omitempty"`
 	WorkspaceRoot    string `json:"workspace_root,omitempty"`
 	SearchParentDirs bool   `json:"search_parent_dirs,omitempty"`
+	WithIDs          bool   `json:"with_ids,omitempty"`
 }
 
 // Name returns the MCP tool name, "read_memory".
@@ -49,7 +51,7 @@ func (t *ReadMemoryTool) Name() string { return "read_memory" }
 // Description returns the text shown to the calling agent that explains what
 // the tool does and how to use it.
 func (t *ReadMemoryTool) Description() string {
-	return "Read a memory file's content. For an append-only kind (progress, decisions, or a custom append kind), returns every non-archived entry concatenated in date order."
+	return `Read a memory file's content. For an append-only kind (progress, decisions, or a custom append kind), returns every non-archived entry concatenated in date order. With with_ids: true, each entry is preceded by a "<!-- entry:N -->" line giving the id that edit_entry takes; these lines are never stored if the content is written back.`
 }
 
 // InputSchema returns the JSON Schema of the tool's arguments: an object
@@ -64,6 +66,7 @@ func (t *ReadMemoryTool) InputSchema() map[string]any {
 			"filename":           map[string]any{"type": "string", "description": "The file/kind to read (e.g. \"memory\", \"progress\", or a custom name)."},
 			"workspace_root":     map[string]any{"type": "string", "description": "Path to your project folder, used to auto-discover the project via .sync82.json."},
 			"search_parent_dirs": map[string]any{"type": "boolean", "description": SearchParentDirsDescription},
+			"with_ids":           map[string]any{"type": "boolean", "description": "Put a \"<!-- entry:N -->\" line before each entry of an append-only kind, with the id edit_entry takes. No effect on overwrite-style files."},
 			"path":               map[string]any{"type": "string", "description": PathDescription},
 		},
 		"required": []string{"filename"},
@@ -88,7 +91,9 @@ func (t *ReadMemoryTool) Validate(raw json.RawMessage) (any, error) {
 
 // Execute resolves the target project and returns the kind's content with
 // surrounding whitespace trimmed, or "(file is empty)" when nothing remains.
-// It returns an error when the project or the kind does not exist.
+// With WithIDs, an entries-backed kind is returned entry by entry, each
+// preceded by its entryMarker line. It returns an error when the project or
+// the kind does not exist.
 func (t *ReadMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(readMemoryArgs)
 	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, ContextArgs{
@@ -101,7 +106,7 @@ func (t *ReadMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, 
 	if err != nil {
 		return ToolResult{}, err
 	}
-	content, ok, err := s.ReadContent(ctx, rctx.Project, rctx.Subproject, args.Filename)
+	content, ok, err := readMemoryContent(ctx, s, rctx.Project, rctx.Subproject, args.Filename, args.WithIDs)
 	if err != nil {
 		return ToolResult{}, wrapNotFound(err, rctx.Label())
 	}
@@ -114,4 +119,33 @@ func (t *ReadMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, 
 		trimmed = "(file is empty)"
 	}
 	return ToolResult{Text: trimmed}, nil
+}
+
+// readMemoryContent returns the readable content of kind like
+// store.ReadContent does. When withIDs is set and kind is stored as
+// entries, every entry body is preceded by its entryMarker line. ok is
+// false when the kind has no content. Store errors are returned unchanged.
+func readMemoryContent(ctx context.Context, s *store.Store, project, subproject, kind string, withIDs bool) (content string, ok bool, err error) {
+	if !withIDs {
+		return s.ReadContent(ctx, project, subproject, kind)
+	}
+	mode, err := s.KindMode(ctx, project, subproject, kind)
+	if err != nil {
+		return "", false, err
+	}
+	if mode != store.KindStorageEntries {
+		return s.ReadContent(ctx, project, subproject, kind)
+	}
+	entries, err := s.ReadEntries(ctx, project, subproject, kind, false)
+	if err != nil {
+		return "", false, err
+	}
+	if len(entries) == 0 {
+		return "", false, nil
+	}
+	parts := make([]string, len(entries))
+	for i, e := range entries {
+		parts[i] = entryMarker(e.ID) + "\n" + e.Body
+	}
+	return strings.Join(parts, "\n\n"), true, nil
 }

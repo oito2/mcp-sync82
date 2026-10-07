@@ -63,7 +63,20 @@ Pedidos que você pode digitar para o seu agente de IA, em linguagem natural, pa
 - **Parâmetros esperados:** nenhum (o workspace atual), ou o nome do projeto.
 - **Exemplo:**
   > "Carregue o contexto do projeto antes de começarmos."
-- **Resultado esperado:** `load_project_context` devolve todo arquivo de memória não vazio num único bloco: `memory`, `architecture`, `stack` e `next_steps` primeiro, depois os outros arquivos em ordem alfabética.
+- **Resultado esperado:** `load_project_context` devolve todo arquivo de memória não vazio num único bloco: `memory`, `architecture`, `stack` e `next_steps` primeiro e por inteiro, depois os outros arquivos em ordem alfabética. Logs como `progress` e `decisions` trazem só as 10 entradas datadas mais recentes; um rodapé diz quantas ficaram de fora.
+
+### Começar ou encerrar uma sessão com um atalho
+
+- **Parâmetros esperados:** opcionalmente o nome do projeto (e do subprojeto).
+- **Exemplo:** no Claude Code, digite `/mcp__sync82__start_session acme` no início e `/mcp__sync82__end_session acme` no fim; ou anexe `@sync82:sync82://projects/acme/context` a qualquer mensagem.
+- **Resultado esperado:** os [prompts MCP](./reference/mcp-prompts.md) mandam ao agente o mesmo pedido que "carregue o contexto do projeto" / "salve esta sessão", então ele chama `load_project_context` ou `update_project_memory`. O [resource](./reference/resources.md) anexa a memória do projeto à mensagem sem nenhuma chamada de tool.
+
+### Carregar o histórico inteiro
+
+- **Parâmetros esperados:** nenhum (o workspace atual), ou o nome do projeto.
+- **Exemplo:**
+  > "Carregue a memória completa deste projeto, com todo o histórico de progresso e decisões."
+- **Resultado esperado:** `load_project_context` com `mode: "full"`: todas as entradas de todos os logs, cortadas em 200 KB com um aviso se passar disso.
 
 ### Carregar só o histórico recente
 
@@ -121,6 +134,27 @@ Pedidos que você pode digitar para o seu agente de IA, em linguagem natural, pa
   > "O arquivo de stack está desatualizado — reescreva: Go 1.26, SQLite via modernc.org/sqlite, GitHub Actions para CI."
 - **Resultado esperado:** `write_memory` com `filename: "stack"` e o novo conteúdo completo, substituindo o antigo.
 
+### Corrigir uma entrada errada
+
+- **Parâmetros esperados:** qual entrada (a data ou o que ela diz) e a correção.
+- **Exemplo:**
+  > "A entrada de progresso de ontem diz que migramos para o Postgres, mas continuamos no SQLite. Corrija essa entrada."
+- **Resultado esperado:** `read_memory` com `filename: "progress"` e `with_ids: true` para achar o id da entrada, depois `edit_entry` com `action: "replace"` e o texto corrigido. Só essa entrada muda; o resto do log fica como estava.
+
+### Registrar que uma decisão mudou
+
+- **Parâmetros esperados:** a decisão antiga e a nova.
+- **Exemplo:**
+  > "Decidimos abandonar a API REST em favor de gRPC. Marque a decisão antiga sobre REST como superada."
+- **Resultado esperado:** `edit_entry` com `action: "supersede"` no id da decisão antiga e a nova decisão em `content`. A nova decisão entra como uma entrada, e a antiga ganha uma linha `> Superseded by entry N on YYYY-MM-DD.`, então as duas ficam no histórico.
+
+### Remover uma entrada duplicada
+
+- **Parâmetros esperados:** qual entrada é a duplicada.
+- **Exemplo:**
+  > "As duas últimas entradas de progresso são iguais — apague a duplicada."
+- **Resultado esperado:** depois da sua confirmação, `edit_entry` com `action: "delete"` e `confirm: true` num dos dois ids.
+
 ---
 
 ## 🔍 Prompts de Análise e Busca
@@ -130,7 +164,7 @@ Pedidos que você pode digitar para o seu agente de IA, em linguagem natural, pa
 - **Parâmetros esperados:** o que procurar.
 - **Exemplo:**
   > "Mostre todas as decisões que tomamos sobre autenticação."
-- **Resultado esperado:** `search_memory` com uma busca como `"auth"`, restrita ao projeto atual e seus subprojetos. Cada resultado vem rotulado `projeto/arquivo:linha` (`projeto/arquivo[AAAA-MM-DD]:linha` para uma entrada datada).
+- **Resultado esperado:** `search_memory` com `kinds: ["decisions"]` e uma busca como `"autentica*"` (um prefixo, então encontra também "autenticação" e "autenticar"), restrita ao projeto atual e seus subprojetos. Os melhores resultados vêm primeiro; cada resultado vem rotulado `projeto/arquivo:linha` (`projeto/arquivo[AAAA-MM-DD]:linha` para uma entrada datada).
 
 ### Buscar no vault inteiro
 
@@ -138,6 +172,27 @@ Pedidos que você pode digitar para o seu agente de IA, em linguagem natural, pa
 - **Exemplo:**
   > "Procure no vault inteiro como já lidamos com migrações de banco antes — não lembro em qual projeto foi."
 - **Resultado esperado:** `search_memory` sem `project`, que deliberadamente cobre todos os projetos do vault.
+
+### Buscar sem lembrar as palavras exatas
+
+- **Parâmetros esperados:** algumas palavras do que você lembra, em qualquer ordem, com ou sem acento.
+- **Exemplo:**
+  > "Ache onde escrevemos sobre a decisao do caminho de configuracao do instalador."
+- **Resultado esperado:** `search_memory` com palavras como `"decisao configuracao instalador"` (o modo padrão `words`): todo documento ou entrada que tenha todas elas, em qualquer ordem, com `decisão`/`Decisão` encontradas por `decisao`, melhores resultados primeiro.
+
+### Buscar uma frase exata ou um texto literal
+
+- **Parâmetros esperados:** a frase, ou o texto literal (um caminho, um identificador, uma versão).
+- **Exemplo:**
+  > "Ache a frase exata 'uma conexão por vault'." / "Procure o texto literal `SetMaxOpenConns(1)`."
+- **Resultado esperado:** `search_memory` com `match: "phrase"` para a frase (as palavras nessa ordem), ou `match: "exact"` para um texto literal com pontuação.
+
+### Buscar num período do histórico
+
+- **Parâmetros esperados:** o que procurar; o período.
+- **Exemplo:**
+  > "O que decidimos sobre o workflow de release em setembro de 2026?"
+- **Resultado esperado:** `search_memory` com `kinds: ["decisions"]`, `since: "2026-09-01"` e `until: "2026-09-30"`. Só entradas datadas nesse intervalo são buscadas.
 
 ### Buscar com linhas ao redor, página por página
 
@@ -212,6 +267,13 @@ Pedidos que você pode digitar para o seu agente de IA, em linguagem natural, pa
   > "A memória deste projeto está saudável? Todos os arquivos padrão estão lá?"
 - **Resultado esperado:** `check_project_health` lista os seis arquivos padrão e se cada um existe. Um projeto não saudável volta como resultado de erro — um sinal deliberado para o agente preencher os arquivos que faltam, não uma falha.
 
+### Conferir se a memória está atualizada
+
+- **Parâmetros esperados:** nenhum (o projeto atual); opcionalmente quantos dias contam como antigo.
+- **Exemplo:**
+  > "A memória deste projeto está em dia? Tem algo que parece desatualizado ou que nunca foi preenchido?"
+- **Resultado esperado:** `check_project_health` (com `stale_days` se você deu um número de dias). A lista `Warnings:` aponta arquivos de estado atual mais antigos que as entradas mais novas de progresso/decisões, arquivos ainda vazios ou com o template em branco, entradas de log sem data e logs grandes o bastante para arquivar. O agente pode então oferecer atualizar cada arquivo, por exemplo reescrevendo `architecture` a partir do que as decisões recentes dizem.
+
 ### Confirmar a conexão depois de instalar
 
 - **Parâmetros esperados:** nenhum.
@@ -236,6 +298,13 @@ Pedidos que você pode digitar para o seu agente de IA, em linguagem natural, pa
 - **Exemplo:**
   > "Arquive as entradas de progresso com mais de 6 meses, não precisamos mais delas poluindo o contexto."
 - **Resultado esperado:** `archive_memory` com `filename: "progress"` e `keep_days: 180`. Entradas sem data nunca são arquivadas. O projeto precisa ser nomeado ou vir do workspace, não só da última sessão.
+
+### Arquivar entradas antigas e guardar um resumo
+
+- **Parâmetros esperados:** qual log e quantos dias manter (ou uma data).
+- **Exemplo:**
+  > "Arquive as decisões com mais de 90 dias, mas guarde um resumo curto delas para não perdermos o contexto."
+- **Resultado esperado:** `archive_memory` com `dry_run: true` para listar as entradas que sairiam, `read_memory` para lê-las e então `archive_memory` de novo com `summary` contendo o resumo que o agente escreveu. As entradas antigas são arquivadas e o resumo entra como uma entrada datada de hoje, com um cabeçalho dizendo quantas entradas cobre e o período — tudo de uma vez.
 
 ### Apagar um arquivo customizado
 

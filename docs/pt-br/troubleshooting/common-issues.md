@@ -1,4 +1,4 @@
-🇺🇸 [Read in English](../../en/troubleshooting/common-issues.md) | **Português** | 🏠 [Índice](../index.md)
+🌐 [English](../../en/troubleshooting/common-issues.md) | **Português** | 🏠 [Índice](../index.md)
 
 ---
 
@@ -14,7 +14,7 @@ Antes de investigar qualquer problema específico, faça este passo primeiro —
 
 **Verifique se o servidor está conectado:**
 
-No chat do seu cliente de IA, rode o comando de status MCP dele (ex. `/mcp` no Claude Code). Se `sync82` aparecer conectado com 18 tools, o servidor está funcionando — o problema está na resolução de vault/projeto, não na conexão.
+No chat do seu cliente de IA, rode o comando de status MCP dele (ex. `/mcp` no Claude Code). Se `sync82` aparecer conectado com 19 tools, o servidor está funcionando — o problema está na resolução de vault/projeto, não na conexão.
 
 Se ele não aparecer, o problema está na configuração do servidor — veja [Erros de Conexão e PATH](#-erros-de-conexão-e-path) abaixo.
 
@@ -150,6 +150,14 @@ Ou aponte para um local com permissão de escrita:
 sync82 config set-vault /um/caminho/gravavel/vault.db
 ```
 
+### A versão do schema do vault é mais nova do que este sync82 suporta
+
+**Sintoma:** toda chamada de tool nesse vault falha. O sync82 1.0.0 responde `internal error: could not open the vault database`; as versões seguintes respondem `could not open the vault database: the vault's schema is newer than this sync82 supports; upgrade sync82`. O log do servidor (stderr, que aparece nos logs MCP do cliente) e comandos da CLI como o `sync82 export` mostram as versões envolvidas: `vault schema version 3 is newer than this sync82 supports (2)`.
+
+**Causa:** o vault foi aberto por um sync82 mais novo, que atualizou o schema dele — a versão 3, por exemplo, cria os índices da busca de texto completo — e agora está sendo aberto por um binário mais antigo. Vários clientes que compartilham um vault podem rodar binários diferentes do sync82. O binário mais antigo recusa o vault em vez de gravar nele, porque as gravações dele deixariam desatualizadas as partes mais novas do schema.
+
+**Solução:** atualize o binário do sync82 que cada cliente usa (`sync82 self-update`, ou `go install github.com/oito2/mcp-sync82/cmd/sync82@latest`) e reinicie os clientes. Confira o binário de cada cliente com `sync82 version` ou pelo caminho que a configuração MCP dele aponta. Uma atualização de schema não pode ser desfeita. Para voltar a um sync82 mais antigo, exporte os projetos com o mais novo (`sync82 export --all <dir>`) e importe com o mais antigo num vault novo (`sync82 import`, com `--path` apontando para o novo arquivo de vault).
+
 ---
 
 ## 🔄 Confusão de Projeto e Vault
@@ -223,6 +231,14 @@ Use a tool search_memory para encontrar menções a "autenticação".
 ```
 
 Nomear a tool explicitamente garante que a IA a use em vez de responder com conhecimento genérico.
+
+### O contexto carregado não traz progresso ou decisões antigas
+
+**Sintoma:** depois do `load_project_context`, a IA só conhece as últimas entradas de `progress`/`decisions`, e a resposta termina com `[older history omitted — ...]`.
+
+**Causa:** por padrão o `load_project_context` roda no modo `summary`: as 10 entradas datadas mais recentes de cada log, dentro de 40 KB, para a resposta caber nos limites de saída de tools dos clientes MCP. O Claude Code, por exemplo, salva em arquivo um resultado com mais de 50.000 caracteres em vez de mostrá-lo.
+
+**Solução:** peça o que precisa — uma data ("carregue as decisões desde 2026-09-01" → `since`), um número de entradas (`max_entries`) ou tudo (`mode: "full"`). Para achar uma entrada antiga específica, o `search_memory` sai mais barato que carregar o histórico inteiro.
 
 ---
 

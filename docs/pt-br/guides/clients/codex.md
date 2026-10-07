@@ -49,7 +49,7 @@ Inicialize a memória deste projeto. Analise o código automaticamente.
 
 ## 💡 Fluxos de Trabalho Recomendados
 
-As mesmas 18 tools, os mesmos prompts que qualquer outro cliente — veja [Exemplos de Uso](../workflows/examples.md) para cenários completos de ponta a ponta.
+As mesmas 19 tools, os mesmos prompts que qualquer outro cliente — veja [Exemplos de Uso](../workflows/examples.md) para cenários completos de ponta a ponta.
 
 ### Retomando uma sessão
 
@@ -60,6 +60,8 @@ codex resume --last
 ```
 
 Combine isso com a própria memória do sync82: o resume de sessão do Codex devolve a conversa bruta, `load_project_context` dá à IA o resumo estruturado e curado — peça os dois ao retomar uma tarefa.
+
+A documentação de MCP do Codex cobre só tools, não resources nem prompts MCP, então os [resources](../../reference/resources.md) e os [prompts MCP](../../reference/mcp-prompts.md) do sync82 não ficam disponíveis nele; peça as mesmas coisas em linguagem natural ("carregue a memória do projeto", "salve esta sessão") e o Codex chama as tools.
 
 ---
 

@@ -46,8 +46,10 @@ type parsedArgs struct {
 // flags in valueFlags (given as "--name value" or "--name=value") and the
 // positional arguments, in order. Flags may appear anywhere. Any other
 // argument starting with "-", a value flag without a value or with an
-// empty one, and a flag given twice are errors — so a typo is reported
-// instead of being taken as a project or directory name. It returns the
+// empty one, a "--name value" whose value starts with "-" (another flag,
+// most likely; "--name=-value" passes such a value on purpose), and a flag
+// given twice are errors — so a typo is reported instead of being taken as
+// a project, directory or vault name. It returns the
 // split command line, or the first such error found.
 func parseArgs(args []string, boolFlags, valueFlags []string) (parsedArgs, error) {
 	p := parsedArgs{flags: map[string]bool{}, values: map[string]string{}}
@@ -78,7 +80,7 @@ func parseArgs(args []string, boolFlags, valueFlags []string) (parsedArgs, error
 				return parsedArgs{}, fmt.Errorf("--%s given twice", name)
 			}
 			if !hasValue {
-				if i+1 >= len(args) {
+				if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
 					return parsedArgs{}, fmt.Errorf("--%s requires a value", name)
 				}
 				i++

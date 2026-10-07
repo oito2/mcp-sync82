@@ -23,6 +23,10 @@ import "errors"
 // including filesystem paths.
 var ErrNotFound = errors.New("not found")
 
+// ErrNoSearchTerms is returned by SearchText when a words or phrase query
+// holds no letter or number to search for.
+var ErrNoSearchTerms = errors.New("the query has no words to search for")
+
 // ErrAlreadyExists is wrapped when an operation would create a naming
 // collision, for example promoting a subproject to a name already used at
 // the vault root.
@@ -34,6 +38,11 @@ var ErrAlreadyExists = errors.New("already exists")
 // remote clients should detect it with errors.Is and substitute a generic
 // message.
 var ErrOpenFailed = errors.New("could not open vault")
+
+// ErrSchemaTooNew is wrapped, together with ErrOpenFailed, when the vault's
+// schema version is newer than the latest one this binary knows: a newer
+// sync82 has upgraded the vault, and this one refuses to read or write it.
+var ErrSchemaTooNew = errors.New("the vault's schema is newer than this sync82 supports; upgrade sync82")
 
 // ErrVaultNotFound is wrapped by Manager.GetExisting when no vault file
 // exists at the requested path.

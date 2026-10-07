@@ -37,7 +37,7 @@ func TestSearchText_UnderscoreAndBackslashAreLiteral(t *testing.T) {
 
 	// "_" is the LIKE wildcard for any single character; it must match only a
 	// literal underscore, not "fileXname.go".
-	results, _, err := s.SearchText(ctx, "file_name", SearchScope{Project: "acme"}, 0, 10, 0)
+	results, _, err := s.SearchText(ctx, SearchOptions{Query: "file_name", Mode: SearchExact, Scope: SearchScope{Project: "acme"}, Offset: 0, Limit: 10, ContextLines: 0})
 	if err != nil {
 		t.Fatalf("SearchText (underscore): %v", err)
 	}
@@ -46,7 +46,7 @@ func TestSearchText_UnderscoreAndBackslashAreLiteral(t *testing.T) {
 	}
 
 	// The escape character itself ("\") must also match literally.
-	backslashResults, _, err := s.SearchText(ctx, `back\slash`, SearchScope{Project: "acme"}, 0, 10, 0)
+	backslashResults, _, err := s.SearchText(ctx, SearchOptions{Query: `back\slash`, Mode: SearchExact, Scope: SearchScope{Project: "acme"}, Offset: 0, Limit: 10, ContextLines: 0})
 	if err != nil {
 		t.Fatalf("SearchText (backslash): %v", err)
 	}
@@ -71,7 +71,7 @@ func TestSearchText_Pagination(t *testing.T) {
 
 	// limit=1 with 2 total matches returns limit+1=2 results, which is how
 	// the caller detects that more results exist.
-	page1, _, err := s.SearchText(ctx, "needle", SearchScope{Project: "acme"}, 0, 1, 0)
+	page1, _, err := s.SearchText(ctx, SearchOptions{Query: "needle", Mode: SearchExact, Scope: SearchScope{Project: "acme"}, Offset: 0, Limit: 1, ContextLines: 0})
 	if err != nil {
 		t.Fatalf("SearchText (page1): %v", err)
 	}
@@ -80,7 +80,7 @@ func TestSearchText_Pagination(t *testing.T) {
 	}
 
 	// offset=1 with 2 total matches: only the last one remains.
-	page2, _, err := s.SearchText(ctx, "needle", SearchScope{Project: "acme"}, 1, 1, 0)
+	page2, _, err := s.SearchText(ctx, SearchOptions{Query: "needle", Mode: SearchExact, Scope: SearchScope{Project: "acme"}, Offset: 1, Limit: 1, ContextLines: 0})
 	if err != nil {
 		t.Fatalf("SearchText (page2): %v", err)
 	}
@@ -96,7 +96,7 @@ func TestSearchText_Pagination(t *testing.T) {
 	if err := s.WriteDocument(ctx, "acme", "", "stack", "100% done\nanything"); err != nil {
 		t.Fatalf("WriteDocument (percent): %v", err)
 	}
-	percentResults, _, err := s.SearchText(ctx, "100%", SearchScope{Project: "acme"}, 0, 10, 0)
+	percentResults, _, err := s.SearchText(ctx, SearchOptions{Query: "100%", Mode: SearchExact, Scope: SearchScope{Project: "acme"}, Offset: 0, Limit: 10, ContextLines: 0})
 	if err != nil {
 		t.Fatalf("SearchText (percent): %v", err)
 	}
@@ -106,7 +106,8 @@ func TestSearchText_Pagination(t *testing.T) {
 }
 
 // TestSearchText_CapsScannedRowsAtMaxScannedRows verifies that a search over
-// more than maxScannedRows matching rows reports itself as truncated.
+// more than maxScannedRows matching rows reports itself as truncated, in
+// exact mode and in the ranked words mode.
 func TestSearchText_CapsScannedRowsAtMaxScannedRows(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
@@ -125,7 +126,7 @@ func TestSearchText_CapsScannedRowsAtMaxScannedRows(t *testing.T) {
 		t.Fatalf("ReplaceAllEntries: %v", err)
 	}
 
-	results, truncated, err := s.SearchText(ctx, "cap-target", SearchScope{Project: "acme"}, 0, maxScannedRows*2, 0)
+	results, truncated, err := s.SearchText(ctx, SearchOptions{Query: "cap-target", Mode: SearchExact, Scope: SearchScope{Project: "acme"}, Offset: 0, Limit: maxScannedRows * 2, ContextLines: 0})
 	if err != nil {
 		t.Fatalf("SearchText: %v", err)
 	}
@@ -134,6 +135,14 @@ func TestSearchText_CapsScannedRowsAtMaxScannedRows(t *testing.T) {
 	}
 	if !truncated {
 		t.Fatal("truncated = false, want the cut reported")
+	}
+
+	results, truncated, err = s.SearchText(ctx, SearchOptions{Query: "cap target", Mode: SearchWords, Scope: SearchScope{Project: "acme"}, Limit: maxScannedRows * 2})
+	if err != nil {
+		t.Fatalf("SearchText (words): %v", err)
+	}
+	if len(results) != maxScannedRows || !truncated {
+		t.Fatalf("words mode: %d results, truncated %v; want %d and true", len(results), truncated, maxScannedRows)
 	}
 }
 
@@ -149,7 +158,7 @@ func TestSearchText_UnicodeCaseInsensitive(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, q := range []string{"decisão", "DECISÃO", "água", "ÁGUA"} {
-		results, truncated, err := s.SearchText(ctx, q, SearchScope{Project: "acme"}, 0, 10, 0)
+		results, truncated, err := s.SearchText(ctx, SearchOptions{Query: q, Mode: SearchExact, Scope: SearchScope{Project: "acme"}, Offset: 0, Limit: 10, ContextLines: 0})
 		if err != nil {
 			t.Fatalf("SearchText(%q): %v", q, err)
 		}
@@ -172,7 +181,7 @@ func TestSearchText_EntriesCarryTheirDateInReadingOrder(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	results, _, err := s.SearchText(ctx, "needle", SearchScope{Project: "acme"}, 0, 10, 0)
+	results, _, err := s.SearchText(ctx, SearchOptions{Query: "needle", Mode: SearchExact, Scope: SearchScope{Project: "acme"}, Offset: 0, Limit: 10, ContextLines: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +214,7 @@ func TestSearchText_ScopeFiltersBySubproject(t *testing.T) {
 		t.Fatalf("WriteDocument (perci): %v", err)
 	}
 
-	scoped, _, err := s.SearchText(ctx, "shared-term", SearchScope{Project: "oito2", Subproject: "sync82"}, 0, 10, 0)
+	scoped, _, err := s.SearchText(ctx, SearchOptions{Query: "shared-term", Mode: SearchExact, Scope: SearchScope{Project: "oito2", Subproject: "sync82"}, Offset: 0, Limit: 10, ContextLines: 0})
 	if err != nil {
 		t.Fatalf("SearchText (scoped): %v", err)
 	}
@@ -218,7 +227,7 @@ func TestSearchText_ScopeFiltersBySubproject(t *testing.T) {
 		t.Fatalf("got Project=%q Subproject=%q, want Project=oito2 Subproject=sync82", scoped[0].Project, scoped[0].Subproject)
 	}
 
-	unscoped, _, err := s.SearchText(ctx, "shared-term", SearchScope{Project: "oito2"}, 0, 10, 0)
+	unscoped, _, err := s.SearchText(ctx, SearchOptions{Query: "shared-term", Mode: SearchExact, Scope: SearchScope{Project: "oito2"}, Offset: 0, Limit: 10, ContextLines: 0})
 	if err != nil {
 		t.Fatalf("SearchText (project-wide): %v", err)
 	}
@@ -245,7 +254,7 @@ func TestSearchText_ReportsTopLevelProjectNameNotItsOwnRow(t *testing.T) {
 		t.Fatalf("WriteDocument: %v", err)
 	}
 
-	results, _, err := s.SearchText(ctx, "top-level-marker", SearchScope{}, 0, 10, 0)
+	results, _, err := s.SearchText(ctx, SearchOptions{Query: "top-level-marker", Mode: SearchExact, Scope: SearchScope{}, Offset: 0, Limit: 10, ContextLines: 0})
 	if err != nil {
 		t.Fatalf("SearchText: %v", err)
 	}
@@ -269,7 +278,7 @@ func TestSearchText_ContextLinesAreClampedToTheContent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, _, err := s.SearchText(ctx, "needle", SearchScope{Project: "acme"}, 0, 10, 5)
+	results, _, err := s.SearchText(ctx, SearchOptions{Query: "needle", Mode: SearchExact, Scope: SearchScope{Project: "acme"}, Offset: 0, Limit: 10, ContextLines: 5})
 	if err != nil {
 		t.Fatalf("SearchText: %v", err)
 	}
@@ -279,5 +288,42 @@ func TestSearchText_ContextLinesAreClampedToTheContent(t *testing.T) {
 	r := results[0]
 	if !slices.Equal(r.ContextBefore, []string{"one", "two"}) || !slices.Equal(r.ContextAfter, []string{"four"}) {
 		t.Fatalf("context = %q / %q, want the lines around the match, clamped to the document", r.ContextBefore, r.ContextAfter)
+	}
+}
+
+// TestSearchText_EntryHitsCarryTheEntryID verifies that a match in an entry
+// carries that entry's id and a match in a document carries 0.
+func TestSearchText_EntryHitsCarryTheEntryID(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteDocument(ctx, "acme", "", "memory", "needle in memory"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendEntry(ctx, "acme", "", "progress", "2026-01-01", "## 2026-01-01\n- needle"); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := s.ReadEntries(ctx, "acme", "", "progress", false)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("ReadEntries = %+v, %v", entries, err)
+	}
+
+	results, _, err := s.SearchText(ctx, SearchOptions{Query: "needle", Mode: SearchExact, Scope: SearchScope{Project: "acme"}, Offset: 0, Limit: 10, ContextLines: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %+v, want 2", results)
+	}
+	for _, r := range results {
+		want := int64(0)
+		if r.Kind == "progress" {
+			want = entries[0].ID
+		}
+		if r.EntryID != want {
+			t.Errorf("%s hit has EntryID %d, want %d", r.Kind, r.EntryID, want)
+		}
 	}
 }

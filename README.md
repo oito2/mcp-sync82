@@ -31,7 +31,7 @@ Memory is stored in an embedded SQLite database and ships as a single self-conta
 
 - **Six standard memory files per project**, plus any custom file, for projects and their subprojects (monorepos, plugin ecosystems).
 - **Automatic project discovery** — a `.sync82.json` in the workspace means the agent never has to name the project again.
-- **18 MCP tools** — load a whole project's context in one call, save a session in one call, search the whole vault, archive old history, export/import plain Markdown.
+- **19 MCP tools** — load a whole project's context in one call, save a session in one call, search the whole vault, archive old history, export/import plain Markdown — plus read-only MCP resources with each project's memory and `start_session`/`end_session` prompts.
 - **One-step client setup** — `sync82 install` registers sync82 in Claude Code, Claude Desktop, Antigravity, Codex, OpenCode, Cursor, Zed and Cline; `sync82 uninstall` removes it.
 - **Local and private** — stdio transport only, no network service, one SQLite file per vault.
 - **Verifiable releases** — SHA-256 checksums, a Sigstore signature and GitHub build provenance attestations; a Claude Desktop extension (`sync82.mcpb`) and an [MCP Registry](https://registry.modelcontextprotocol.io/) entry.
@@ -45,7 +45,7 @@ Memory is stored in an embedded SQLite database and ships as a single self-conta
 | `progress` | append-only, dated | Work completed, session by session |
 | `next_steps` | overwrite | What to do next |
 
-### Tools (18)
+### Tools (19)
 
 The AI agent calls these over MCP — it never touches the database directly. Full parameter reference in [Tools Reference](docs/en/reference/tools.md).
 
@@ -61,16 +61,17 @@ The AI agent calls these over MCP — it never touches the database directly. Fu
 | `write_memory` | Overwrite a memory file's entire content |
 | `append_memory` | Append a dated entry to `progress`, `decisions`, or a custom append kind |
 | `delete_memory` | Delete a custom memory file (the six standard files are protected) |
-| `archive_memory` | Archive old dated entries, keeping only the last N days active |
-| `search_memory` | Case-insensitive substring search across memory files |
-| `load_project_context` | Load a project's entire memory into one context block |
-| `check_project_health` | Report which of the six standard files exist |
+| `edit_entry` | Replace, supersede or delete one entry of `progress`, `decisions`, or a custom append kind |
+| `archive_memory` | Archive old dated entries, keeping only the last N days active, optionally with a summary of them |
+| `search_memory` | Search memory files by words (accents and case ignored, best matches first), phrase or exact text |
+| `load_project_context` | Load a project's memory (current state plus recent history) into one context block |
+| `check_project_health` | Report which of the six standard files exist, and warn about files that look out of date |
 | `init_project_memory` | Guided initialization, with optional auto-detection from the codebase |
 | `update_project_memory` | Save a session's work (progress, decisions, next steps, etc.) in one call |
 | `export_memory` | Export a project's memory to plain `.md` files on disk |
 | `import_memory` | Import a project's memory from plain `.md` files — the inverse of `export_memory` |
 
-`list_projects`, `list_files`, `check_project_health` and `search_memory` also return JSON (`format: "json"`). Not sure what to type to your agent? See [Example Prompts](docs/en/prompts.md).
+`list_projects`, `list_files`, `check_project_health` and `search_memory` also return JSON (`format: "json"`). Besides tools, sync82 serves each project's memory as [MCP resources](docs/en/reference/resources.md) (`sync82://projects/<project>/context`) and two [MCP prompts](docs/en/reference/mcp-prompts.md), `start_session` and `end_session`. Not sure what to type to your agent? See [Example Prompts](docs/en/prompts.md).
 
 ### CLI commands
 
@@ -187,7 +188,7 @@ sync82 self-update           # download, verify (SHA-256) and install the latest
 sync82 self-update --rollback   # restore the previous version, kept as <binary>.bak
 ```
 
-`self-update` works on a release binary or a `go install .../sync82@vX.Y.Z` build. If you installed with `go install`, update with `go install github.com/oito2/mcp-sync82/cmd/sync82@latest` instead — don't mix the two. The Claude Desktop extension is updated by installing a newer `sync82.mcpb`.
+`self-update` works on a release binary or a `go install .../sync82@vX.Y.Z` build. If you installed with `go install`, update with `go install github.com/oito2/mcp-sync82/cmd/sync82@latest` instead — don't mix the two. The Claude Desktop extension is updated by installing a newer `sync82.mcpb`. A release can upgrade the vault schema (1.1.0 does); once the new version has opened a vault, the previous binary — including one restored by `--rollback` — refuses that vault, so update every client that shares it and don't roll back past such a release (see [Troubleshooting](docs/en/troubleshooting/common-issues.md#vault-schema-version-is-newer-than-this-sync82-supports)).
 
 To remove sync82 from every detected client, run `sync82 uninstall` (add `--purge` to also delete the default vault and config in `~/.sync82`) — see [Uninstallation](docs/en/getting-started/uninstallation.md) for the complete removal, binary included.
 
@@ -197,9 +198,9 @@ The [documentation site](docs/en/index.md) has the full detail (also in [Portugu
 
 - [Installation](docs/en/getting-started/installation.md) · [Quickstart](docs/en/getting-started/quickstart.md) · [Uninstallation](docs/en/getting-started/uninstallation.md)
 - [Concepts — Architecture](docs/en/concepts/architecture.md) and [internals](docs/en/architecture/context-resolution.md)
-- Reference: [Tools](docs/en/reference/tools.md) · [CLI](docs/en/reference/cli.md) · [Configuration](docs/en/reference/configuration.md)
+- Reference: [Tools](docs/en/reference/tools.md) · [Resources](docs/en/reference/resources.md) · [MCP Prompts](docs/en/reference/mcp-prompts.md) · [CLI](docs/en/reference/cli.md) · [Configuration](docs/en/reference/configuration.md)
 - [Example Prompts](docs/en/prompts.md) · [Usage Examples](docs/en/guides/workflows/examples.md)
-- [Troubleshooting](docs/en/troubleshooting/common-issues.md)
+- [Troubleshooting](docs/en/troubleshooting/common-issues.md) · [Changelog](CHANGELOG.md)
 
 **Contributing:** see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development workflow, the checks CI runs (`go build ./...`, `go vet ./...`, `gofmt -l .`, golangci-lint, `go test ./... -race`, `govulncheck`), and how releases are published. Everyone participating is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 

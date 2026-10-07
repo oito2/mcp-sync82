@@ -197,7 +197,7 @@ sync82 self-update --check   # reporta se existe uma release mais nova, sem inst
 sync82 self-update           # baixa, verifica e instala a última release
 ```
 
-Os downloads são verificados por checksum contra o `checksums.txt` da release antes de o binário em execução ser substituído; a versão anterior é guardada como `<binário>.bak`, e `sync82 self-update --rollback` a restaura. O `self-update` funciona em um binário de release ou em um compilado com `go install .../sync82@vX.Y.Z`; só um build local a partir de um checkout do código-fonte (versão `dev`) recusa rodar — nesse caso, rode `go install .../sync82@latest` novamente.
+Os downloads são verificados por checksum contra o `checksums.txt` da release antes de o binário em execução ser substituído; a versão anterior é guardada como `<binário>.bak`, e `sync82 self-update --rollback` a restaura. O `self-update` funciona em um binário de release ou em um compilado com `go install .../sync82@vX.Y.Z`; só um build local a partir de um checkout do código-fonte ou um `go install` de um commit sem tag (versão `dev`) recusa rodar — nesse caso, rode `go install .../sync82@latest` novamente.
 
 > **Escolha um mecanismo de atualização e mantenha-o** — os dois caminhos não têm consciência um do outro. Veja [Referência da CLI — self-update](../reference/cli.md#self-update) para detalhes.
 

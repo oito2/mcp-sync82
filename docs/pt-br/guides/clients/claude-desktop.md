@@ -73,6 +73,8 @@ Inicialize a memória do projeto em /home/eu/code/acme. Analise o código automa
 
 O Claude Desktop não tem a noção de "diretório atual", então informe explicitamente ao agente o caminho do projeto (ou o nome dele).
 
+O sync82 também expõe [resources](../../reference/resources.md) (a memória de cada projeto, legível sem chamar uma tool) e dois [prompts MCP](../../reference/mcp-prompts.md) (`start_session`, `end_session`). O Claude Desktop oferece resources e prompts MCP pelo menu da caixa de mensagem; os rótulos exatos mudam entre versões, então procure o servidor sync82 ali. A lista de projetos vem do seu vault padrão; informe o `project` nos prompts, já que o Claude Desktop não tem um workspace de onde tirá-lo.
+
 ---
 
 ## 🗑️ Removendo

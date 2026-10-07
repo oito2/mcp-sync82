@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/oito2/mcp-sync82/internal/config"
 )
@@ -202,7 +203,7 @@ func TestSearchMemoryTool_LiteralPercentNotWildcard(t *testing.T) {
 	}
 
 	tool := &SearchMemoryTool{Resolver: r, Stores: mgr}
-	parsed, err := tool.Validate(mustJSON(t, map[string]string{"query": "100%", "project": "acme"}))
+	parsed, err := tool.Validate(mustJSON(t, map[string]string{"query": "100%", "project": "acme", "match": "exact"}))
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
@@ -457,5 +458,127 @@ func TestSearchMemoryTool_LabelsEntriesWithTheirDate(t *testing.T) {
 	}
 	if !strings.Contains(result.Text, "acme/progress[2026-01-01]:2  - shipped") {
 		t.Fatalf("Text = %q, want the entry date in the label", result.Text)
+	}
+}
+
+// TestSearchMemoryTool_WordsModeByDefault verifies that the default match
+// finds every word in any order with accents ignored, and that kinds and
+// since narrow the search.
+func TestSearchMemoryTool_WordsModeByDefault(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	ctx := context.Background()
+	s, err := mgr.Get(ctx, r.DefaultDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteDocument(ctx, "acme", "", "memory", "Instalador grava a configuração"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendEntry(ctx, "acme", "", "decisions", "2026-01-05", "## 2026-01-05\n- Decisão: configuração no XDG"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendEntry(ctx, "acme", "", "decisions", "2026-03-05", "## 2026-03-05\n- Decisão: configuração por workspace"); err != nil {
+		t.Fatal(err)
+	}
+	tool := &SearchMemoryTool{Resolver: r, Stores: mgr}
+
+	text := runTool(t, tool, map[string]any{"project": "acme", "query": "configuracao instal*"}).Text
+	if !strings.Contains(text, "acme/memory:1  Instalador grava a configuração") || strings.Contains(text, "decisions") {
+		t.Errorf("words search = %q", text)
+	}
+	text = runTool(t, tool, map[string]any{"project": "acme", "query": "decisao configuracao", "kinds": []string{"Decisions"}, "since": "2026-02-01"}).Text
+	if !strings.Contains(text, "workspace") || strings.Contains(text, "XDG") || strings.Contains(text, "memory") {
+		t.Errorf("kinds + since search = %q", text)
+	}
+	text = runTool(t, tool, map[string]any{"project": "acme", "query": "configuração no", "match": "phrase"}).Text
+	if !strings.Contains(text, "XDG") || strings.Contains(text, "workspace") {
+		t.Errorf("phrase search = %q", text)
+	}
+}
+
+// TestSearchMemoryTool_ValidateSearchOptions verifies the validation of
+// match, kinds, since and until, and of a query with no words.
+func TestSearchMemoryTool_ValidateSearchOptions(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	tool := &SearchMemoryTool{Resolver: r, Stores: mgr}
+	for name, args := range map[string]map[string]any{
+		"unknown match":      {"query": "x", "match": "fuzzy"},
+		"no words":           {"query": "%%%"},
+		"no words in phrase": {"query": "-- --", "match": "phrase"},
+		"invalid kind":       {"query": "x", "kinds": []string{"../etc"}},
+		"invalid since":      {"query": "x", "since": "2026-13-01"},
+		"invalid until":      {"query": "x", "until": "yesterday"},
+		"since after until":  {"query": "x", "since": "2026-02-01", "until": "2026-01-01"},
+	} {
+		if _, err := tool.Validate(mustJSON(t, args)); err == nil {
+			t.Errorf("%s: Validate(%v) = nil error, want a rejection", name, args)
+		}
+	}
+	parsed, err := tool.Validate(mustJSON(t, map[string]any{"query": "%%%", "match": "exact"}))
+	if err != nil {
+		t.Fatalf("exact mode should accept punctuation: %v", err)
+	}
+	if got := parsed.(searchMemoryArgs).Match; got != "exact" {
+		t.Errorf("Match = %q", got)
+	}
+	parsed, err = tool.Validate(mustJSON(t, map[string]any{"query": "x"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := parsed.(searchMemoryArgs).Match; got != "words" {
+		t.Errorf("default Match = %q, want words", got)
+	}
+}
+
+// TestSearchMemoryTool_ClipsLongLines verifies that a match on one huge line
+// is clipped, so the response stays far below maxSearchResponseSize, in
+// both formats.
+func TestSearchMemoryTool_ClipsLongLines(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	ctx := context.Background()
+	s, err := mgr.Get(ctx, r.DefaultDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteDocument(ctx, "acme", "", "memory", "needle "+strings.Repeat("ã", 1<<20)); err != nil {
+		t.Fatal(err)
+	}
+	tool := &SearchMemoryTool{Resolver: r, Stores: mgr}
+	for _, format := range []string{"text", "json"} {
+		text := runTool(t, tool, map[string]any{"project": "acme", "query": "needle", "format": format}).Text
+		if len(text) > 2*maxSearchLineBytes {
+			t.Errorf("%s response is %d bytes, want the line clipped near %d", format, len(text), maxSearchLineBytes)
+		}
+		if !strings.Contains(text, "…") || !utf8.ValidString(text) {
+			t.Errorf("%s response should end the clipped line with … on a character boundary", format)
+		}
+	}
+}
+
+// TestSearchMemoryTool_SubprojectWithoutProjectIsReported verifies that a
+// subproject given with a workspace that has no .sync82.json is an error
+// result instead of a search of the whole vault.
+func TestSearchMemoryTool_SubprojectWithoutProjectIsReported(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	ctx := context.Background()
+	s, err := mgr.Get(ctx, r.DefaultDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteDocument(ctx, "acme", "", "memory", "needle"); err != nil {
+		t.Fatal(err)
+	}
+	result := runTool(t, &SearchMemoryTool{Resolver: r, Stores: mgr}, map[string]any{"query": "needle", "workspace_root": t.TempDir(), "subproject": "api"})
+	if !result.IsError || !strings.Contains(result.Text, `"subproject" was given`) {
+		t.Fatalf("result = %+v, want an error result instead of a vault-wide search", result)
 	}
 }

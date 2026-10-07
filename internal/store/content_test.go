@@ -67,7 +67,7 @@ func TestMetadata_ArchivedOnlyKind(t *testing.T) {
 	if err := s.AppendEntry(ctx, "acme", "", "progress", "2020-01-01", "## 2020-01-01\nold"); err != nil {
 		t.Fatalf("AppendEntry: %v", err)
 	}
-	if _, err := s.ArchiveEntries(ctx, "acme", "", "progress", "2021-01-01"); err != nil {
+	if _, err := s.ArchiveEntries(ctx, "acme", "", "progress", "2021-01-01", nil); err != nil {
 		t.Fatalf("ArchiveEntries: %v", err)
 	}
 	if exists, err := s.KindExists(ctx, "acme", "", "progress"); err != nil || !exists {
@@ -99,7 +99,7 @@ func TestStore_ArchiveAwareKindQueries(t *testing.T) {
 	if err := s.AppendEntry(ctx, "acme", "", "progress", "2020-01-01", "## 2020-01-01\n- old"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ArchiveEntries(ctx, "acme", "", "progress", "2021-01-01"); err != nil {
+	if _, err := s.ArchiveEntries(ctx, "acme", "", "progress", "2021-01-01", nil); err != nil {
 		t.Fatal(err)
 	}
 

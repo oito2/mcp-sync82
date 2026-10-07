@@ -21,15 +21,29 @@ projects           — the project/subproject tree
 documents          — overwrite-style memory files (memory, architecture, stack, next_steps, custom)
 entries            — append-only memory entries (progress, decisions, custom)
 schema_migrations  — tracks which versioned schema migrations have run
+documents_fts      — full-text index over documents.content
+entries_fts        — full-text index over entries.body
 ```
 
 **`projects`** — a project is a row with `parent_id NULL`; a subproject is a row whose `parent_id` points at its parent. Only one level of nesting is supported (a subproject can't itself have subprojects). Two partial unique indexes enforce that top-level project names are unique among themselves, and subproject names are unique within their parent — SQL's `NULL != NULL` means a single naive `UNIQUE(parent_id, name)` constraint wouldn't actually prevent two top-level projects sharing a name.
 
 **`documents`** — one row per `(project_id, kind)` for the four overwrite-style kinds (`memory`, `architecture`, `stack`, `next_steps`) plus any custom kind written with `write_memory` in overwrite mode. A write replaces `content` and `updated_at` in place; no revision history is kept — an earlier version of the schema archived every previous version of a document, but nothing ever read it back, so it was removed.
 
-**`entries`** — one row per dated (or undated) entry for the two append-only kinds (`progress`, `decisions`) plus any custom append kind. `entry_date` is `NULL` for undated content — those entries sort last and are never picked up by `archive_memory`. `position` gives stable ordering among entries sharing the same date.
+**`entries`** — one row per dated (or undated) entry for the two append-only kinds (`progress`, `decisions`) plus any custom append kind. `entry_date` is `NULL` for undated content — those entries sort last and are never picked up by `archive_memory`. `position` gives stable ordering among entries sharing the same date. The row's `id` is the entry id that `read_memory` (`with_ids: true`), `search_memory` (JSON `entry_id`) and `edit_entry` use: unique within the vault and unchanged while the row exists, but not stable across a rewrite of the whole kind (`write_memory`, `update_project_memory`) or an `import_memory`, which delete the rows and insert new ones. `edit_entry` only changes a row whose `project_id` and `kind` match the call, so an id from another project or file is reported as not found.
 
-**`schema_migrations`** — every schema version applied to this vault, each recorded once. Version 1 creates the tables above; version 2 lower-cases the project, subproject and kind names already stored (see [Names](#names) below). The migration framework lets a schema change ship safely to vaults that already exist, without re-running non-idempotent statements against them.
+**`schema_migrations`** — every schema version applied to this vault, each recorded once. Version 1 creates the tables above; version 2 lower-cases the project, subproject and kind names already stored (see [Names](#names) below); version 3 adds the full-text indexes and indexes the existing rows (see [Full-text search](#full-text-search) below). The migration framework lets a schema change ship safely to vaults that already exist, without re-running non-idempotent statements against them.
+
+**`documents_fts`, `entries_fts`** — FTS5 full-text indexes with external content: they hold only the index, keyed by the `id` of the `documents`/`entries` row, and read the text from that row. Both use the `unicode61 remove_diacritics 2` tokenizer, so case and the accents of Latin letters are ignored. See [Full-text search](#full-text-search).
+
+## Full-text search
+
+`search_memory` in `words` and `phrase` mode queries `documents_fts` and `entries_fts` in one SQL statement, ordered by `bm25()` relevance and then by project, kind and reading order, so the order is the same on every call. Archived entries stay indexed and are filtered out by the query. `exact` mode doesn't use the indexes: it reads rows with a case-insensitive `LIKE`, as before version 3.
+
+Triggers keep the indexes in sync with every change to their table: `AFTER INSERT`, `AFTER DELETE` (deletes cascaded from a deleted project included) and `AFTER UPDATE OF content`/`body`. Archiving an entry changes only `archived`, so it doesn't touch the index.
+
+The query typed by the user is never passed to FTS5 as is. sync82 splits it into words the way the tokenizer splits text (letters and numbers; everything else separates words), quotes each word, and keeps only a trailing `*` as a prefix marker, so FTS5 operators can't be injected. Line hits are then computed in Go with a folding function (Unicode decomposition from `golang.org/x/text`) that produces the same tokens as the tokenizer; a test compares the two letter by letter over the Latin, Greek and Cyrillic blocks.
+
+Migration 3 builds the indexes when an existing vault is first opened by a sync82 that has them. An older sync82 refuses to open a vault whose schema version is newer than it supports, rather than writing to it without keeping the indexes in sync — see [Troubleshooting](../troubleshooting/common-issues.md#vault-schema-version-is-newer-than-this-sync82-supports).
 
 ## Names
 

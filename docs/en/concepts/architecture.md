@@ -19,9 +19,9 @@ mcp-sync82/
 ├── scripts/release/      ← the release builder: `go run ./scripts/release vX.Y.Z` writes dist/
 ├── cmd/sync82/          ← main.go — CLI dispatch: serve (default), install, uninstall, config, self-update, export, import
 └── internal/
-    ├── server/           ← MCP server construction, tool registration, server icon, JSON-RPC error handling
-    ├── tools/            ← one file per tool — the 18 tools documented in reference/tools.md; registry.go lists them (tools.Registered)
-    ├── store/            ← SQLite persistence: projects, documents, entries, schema_migrations
+    ├── server/           ← MCP server construction, tool, resource and prompt registration, server icon, JSON-RPC error handling
+    ├── tools/            ← one file per tool — the 19 tools documented in reference/tools.md; registry.go lists them (tools.Registered)
+    ├── store/            ← SQLite persistence: projects, documents, entries, schema_migrations, full-text indexes
     ├── config/           ← global config (~/.sync82/config.json) and local config (.sync82.json) discovery
     ├── analyzer/         ← stack/description auto-detection, used by init_project_memory's auto_detect
     ├── installer/        ← the 8-target MCP client installer and uninstaller (incl. --purge)
@@ -54,16 +54,17 @@ mcp-sync82/
 3. internal/server wraps the result
    └─ a Validate() failure becomes isError:true (agent sees a
       helpful message, connection stays healthy)
-   └─ an Execute() failure becomes a JSON-RPC protocol error,
-      with internal details (e.g. filesystem paths) stripped
-      before it reaches the agent — logged server-side instead
+   └─ an Execute() failure (or a panic) becomes isError:true too;
+      only a vault-open failure has its low-level detail
+      (paths, SQLite errors) replaced by a generic message —
+      the full error is logged server-side
 
 4. Result returned to the AI client over stdio
    └─ listing tools called with format: "json" also return
       the same data as structuredContent
 ```
 
-The server's tool list is a single function, `tools.Registered` in `internal/tools/registry.go`: `sync82` (serve) passes it to `internal/server`, and the release builder starts an in-memory server from the same list to write the tools into the `.mcpb` manifest — so the bundle never lists a tool the binary doesn't have.
+The server's tool list is a single function, `tools.Registered` in `internal/tools/registry.go`: `sync82` (serve) passes it to `internal/server`, and the release builder starts an in-memory server from the same list to write the tools into the `.mcpb` manifest — so the bundle never lists a tool the binary doesn't have. The [resources](../reference/resources.md) (`tools.ResourceTemplates`, read through `tools.Resources`) and the [MCP prompts](../reference/mcp-prompts.md) (`tools.Prompts`) are defined in `internal/tools` too, without depending on the MCP SDK; `internal/server` only adapts them to it. Resources read the default vault directly, without the project resolution of the tools, and never write. The tools' MCP annotations (read-only, destructive, idempotent) come from one table, `internal/tools/hints.go`, checked by a test against the registered tools.
 
 ---
 

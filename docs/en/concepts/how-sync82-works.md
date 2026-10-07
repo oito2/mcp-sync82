@@ -10,7 +10,7 @@
 
 ## The pipeline
 
-The flow has three stages: **Context resolution** figures out which project (and which vault) a tool call refers to, the **Store** reads/writes SQLite, and the **MCP Server** exposes it all to the AI client as 18 tools over stdio.
+The flow has three stages: **Context resolution** figures out which project (and which vault) a tool call refers to, the **Store** reads/writes SQLite, and the **MCP Server** exposes it all to the AI client as 19 tools over stdio.
 
 ```
 AI client calls a tool (e.g. update_project_memory)
@@ -35,7 +35,7 @@ AI client calls a tool (e.g. update_project_memory)
 | Stage | Tools |
 | --- | --- |
 | **Project management** | `list_projects`, `create_project`, `delete_project`, `rename_project`, `get_vault_config` |
-| **Reading & writing memory** | `list_files`, `read_memory`, `write_memory`, `append_memory`, `delete_memory`, `archive_memory`, `search_memory` |
+| **Reading & writing memory** | `list_files`, `read_memory`, `write_memory`, `append_memory`, `delete_memory`, `edit_entry`, `archive_memory`, `search_memory` |
 | **Session workflow** | `load_project_context`, `check_project_health`, `init_project_memory`, `update_project_memory` |
 | **Export & import** | `export_memory`, `import_memory` |
 

@@ -34,13 +34,13 @@ Cliente de IA (Claude Code, Codex, OpenCode...)
   Seu vault de memória (~/.sync82/knowledge.db)
 ```
 
-Um servidor MCP pode expor três tipos de capacidades — **Tools**, **Resources** e **Prompts**. O sync82 expõe apenas **Tools**: 16 funções que a IA chama explicitamente (`init_project_memory`, `search_memory`, `update_project_memory`, ...). Ele não registra nenhum Resource ou Prompt do MCP.
+Um servidor MCP pode expor três tipos de capacidades — **Tools**, **Resources** e **Prompts**. O sync82 expõe os três: 19 **Tools** que a IA chama explicitamente (`init_project_memory`, `search_memory`, `update_project_memory`, ...), **Resources** somente leitura com a memória de cada projeto e dois **Prompts** que começam e encerram uma sessão.
 
 | Capacidade | Descrição | Usado pelo sync82? |
 | --- | --- | --- |
-| **Tools** | Funções que a IA pode chamar | ✅ Sim — todas as 16 |
-| **Resources** | URIs que expõem dados, lidos passivamente | ❌ Não |
-| **Prompts** | Templates de prompt pré-construídos | ❌ Não |
+| **Tools** | Funções que a IA pode chamar | ✅ Sim — todas as 19 ([referência](../reference/tools.md)) |
+| **Resources** | URIs que expõem dados, lidos passivamente | ✅ Sim — `sync82://projects/...` ([referência](../reference/resources.md)) |
+| **Prompts** | Templates de prompt prontos | ✅ Sim — `start_session`, `end_session` ([referência](../reference/mcp-prompts.md)) |
 
 ---
 

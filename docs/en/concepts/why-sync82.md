@@ -54,7 +54,7 @@ No runtime, no `node_modules`, no version manager — download it, or `go instal
 
 | Situation | Without sync82 | With sync82 |
 | --- | --- | --- |
-| New session | You re-explain the project from scratch | `load_project_context` restores everything |
+| New session | You re-explain the project from scratch | `load_project_context` restores the current state and recent history |
 | A past decision | You try to remember, or search old chat logs | `search_memory` finds it, with the original reasoning |
 | Switching AI clients | Context doesn't transfer | Same vault, any MCP client |
 | Monorepo / plugin project | You describe each component every time | `project`/`subproject` tracks each independently |

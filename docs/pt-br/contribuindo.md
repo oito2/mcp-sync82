@@ -8,7 +8,7 @@ Ao participar deste projeto, você concorda em seguir o [Código de Conduta](cod
 
 ## Antes de começar
 
-Para qualquer coisa além de uma correção pequena (novas tools, novos comandos de CLI, mudanças de schema, adição de dependências), abra uma issue primeiro para discutir a abordagem. Este projeto tem uma filosofia de **dependências mínimas e justificadas** — veja [Conceitos — Arquitetura](concepts/architecture.md) e o bloco `require` em [`go.mod`](../../go.mod) para a base atual (`go-sdk`, `modernc.org/sqlite`, ambas puro Go, sem cgo). Um PR que adiciona uma nova dependência sem discussão prévia provavelmente será solicitado a removê-la.
+Para qualquer coisa além de uma correção pequena (novas tools, novos comandos de CLI, mudanças de schema, adição de dependências), abra uma issue primeiro para discutir a abordagem. Este projeto tem uma filosofia de **dependências mínimas e justificadas** — veja [Conceitos — Arquitetura](concepts/architecture.md) e o bloco `require` em [`go.mod`](../../go.mod) para a base atual (`go-sdk`, `modernc.org/sqlite` e `golang.org/x/text`, para a normalização Unicode da busca de texto completo, todas puro Go, sem cgo). Um PR que adiciona uma nova dependência sem discussão prévia provavelmente será solicitado a removê-la.
 
 ## Configurando o ambiente
 
@@ -50,6 +50,8 @@ Escreva uma linha de resumo concisa explicando *por que* a mudança foi feita, n
 
 Documentos de nível raiz neste repositório (README, CONTRIBUTING, CODE_OF_CONDUCT) são publicados em inglês (canônico, na raiz) e português (mesmo nome em minúsculo e traduzido, dentro de [`docs/pt-br/`](.) — `leiame.md`, `contribuindo.md`, `codigo-de-conduta.md` —, mantido sincronizado); o site de referência em `docs/` é dividido em árvores paralelas [`docs/en/`](../en/) e [`docs/pt-br/`](.) do mesmo jeito. Se sua mudança afeta comportamento descrito na [Referência de Tools](reference/tools.md), [Referência da CLI](reference/cli.md), [Guia de Instalação](getting-started/installation.md), [Arquitetura](concepts/architecture.md), ou no README, atualize as duas versões de idioma no mesmo PR — um PR que atualiza só uma será solicitado a adicionar a outra.
 
+Adicione uma entrada em `[Unreleased]` no [`CHANGELOG.md`](../../CHANGELOG.md) para toda mudança visível ao usuário (refatorações internas e mudanças só de testes não precisam). O changelog segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e é mantido só em inglês.
+
 ## Pull requests
 
 - Descreva o que mudou e por quê na descrição do PR; vincule a issue relacionada, se existir.
@@ -68,7 +70,7 @@ go run ./scripts/release v1.2.3
 
 O `dist/` passa a ter os 6 binários (`sync82_{linux,darwin,windows}_{amd64,arm64}`, `.exe` no Windows), o `sync82.mcpb` (o bundle do Claude Desktop), o `checksums.txt` e o `server.json` (a entrada do MCP Registry). A versão precisa ser `vMAJOR.MINOR.PATCH`; `-allow-prerelease` aceita também um sufixo como `v0.0.0-ci` (é assim que a CI o roda).
 
-**Publicando** — faça push de uma tag `vMAJOR.MINOR.PATCH` para disparar o workflow:
+**Publicando** — primeiro, no `CHANGELOG.md`, renomeie `[Unreleased]` para `[X.Y.Z] - AAAA-MM-DD`, adicione um `[Unreleased]` vazio acima dele, atualize os links de comparação no fim do arquivo e faça o commit. Depois faça push de uma tag `vMAJOR.MINOR.PATCH` para disparar o workflow:
 
 ```bash
 git tag v1.2.3

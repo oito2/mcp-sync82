@@ -4,7 +4,7 @@
 
 # Referência de Tools
 
-O sync82 expõe 18 tools via MCP. Toda tool que opera sobre um projeto específico aceita os mesmos argumentos de contexto — `project`, `subproject`, `workspace_root`, `search_parent_dirs` — resolvidos pelo mesmo modelo de [resolução de contexto em 4 camadas](../architecture/context-resolution.md), então eles são documentados uma vez aqui em vez de repetidos em cada tabela abaixo.
+O sync82 expõe 19 tools via MCP. Toda tool que opera sobre um projeto específico aceita os mesmos argumentos de contexto — `project`, `subproject`, `workspace_root`, `search_parent_dirs` — resolvidos pelo mesmo modelo de [resolução de contexto em 4 camadas](../architecture/context-resolution.md), então eles são documentados uma vez aqui em vez de repetidos em cada tabela abaixo.
 
 **Argumentos de contexto comuns** (todos opcionais, presentes em toda tool com escopo de projeto):
 
@@ -119,13 +119,16 @@ Lê o conteúdo de um arquivo de memória. Para um kind só-anexa (`progress`, `
 |---|---|---|---|
 | `project`, `subproject`, `workspace_root`, `search_parent_dirs` | — | ❌ | Argumentos de contexto padrão. |
 | `filename` | string | ✅ | O arquivo/kind a ler (ex. `"memory"`, `"progress"`, ou um nome customizado). |
+| `with_ids` | boolean | ❌ | Coloca uma linha `<!-- entry:N -->` antes de cada entrada de um kind só-anexa, com o id que o [`edit_entry`](#edit_entry) recebe. Não muda nada em arquivos de sobrescrita. |
 | `path` | string | ❌ | Override do caminho do vault. |
+
+As linhas `<!-- entry:N -->` nunca são gravadas: `write_memory`, `append_memory`, `update_project_memory`, `edit_entry` e `import_memory` removem linhas inteiras nesse formato do conteúdo que recebem, então um conteúdo lido com ids pode ser gravado de volta como está.
 
 ---
 
 ### `write_memory`
 
-Sobrescreve o conteúdo inteiro de um arquivo de memória. **Destrutivo**: para kinds só-anexa (`progress`, `decisions`, ou um kind customizado criado com `append_memory`), isso substitui toda entrada não-arquivada, não só a última — use `append_memory` para adicionar sem perder entradas anteriores. Entradas arquivadas são mantidas. Um kind mantém o armazenamento que já tem: um kind customizado criado com `append_memory` continua sendo um log de entradas datadas. Para um kind assim, o conteúdo é dividido em entradas nos cabeçalhos de data (veja [Cabeçalhos de data](#date-headers) abaixo).
+Sobrescreve o conteúdo inteiro de um arquivo de memória. **Destrutivo**: para kinds só-anexa (`progress`, `decisions`, ou um kind customizado criado com `append_memory`), isso substitui toda entrada não-arquivada, não só a última — use `append_memory` para adicionar sem perder entradas anteriores. Entradas arquivadas são mantidas. O projeto precisa vir de `project` ou `workspace_root`: um projeto tirado só da sessão anterior é recusado. Um kind mantém o armazenamento que já tem: um kind customizado criado com `append_memory` continua sendo um log de entradas datadas. Para um kind assim, o conteúdo é dividido em entradas nos cabeçalhos de data (veja [Cabeçalhos de data](#date-headers) abaixo).
 
 | Argumento | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
@@ -164,6 +167,30 @@ Apaga permanentemente um arquivo de memória customizado. Os seis arquivos padr�
 
 ---
 
+### `edit_entry`
+
+Altera uma entrada de um arquivo de memória só-anexa (`progress`, `decisions`, ou um kind customizado de anexação) sem reescrever o resto. A entrada é identificada pelo id: leia com [`read_memory`](#read_memory) e `with_ids: true`, ou pegue o `entry_id` da saída JSON do [`search_memory`](#search_memory). O projeto precisa vir de `project` ou `workspace_root`: um projeto tirado só da sessão anterior é recusado.
+
+| Argumento | Tipo | Obrigatório | Descrição |
+|---|---|---|---|
+| `project`, `subproject`, `workspace_root`, `search_parent_dirs` | — | ❌ | Argumentos de contexto padrão. |
+| `filename` | string | ✅ | O arquivo/kind só-anexa da entrada. Arquivos de sobrescrita são recusados — use `write_memory` para eles. |
+| `entry_id` | integer | ✅ | O id da entrada (≥ 1). Precisa pertencer a este projeto, subprojeto e arquivo; qualquer outro id é reportado como não encontrado. |
+| `action` | string (`replace` \| `supersede` \| `delete`) | ✅ | O que fazer com a entrada — veja abaixo. |
+| `content` | string | para `replace` e `supersede` | O novo texto da entrada. Para `progress`/`decisions`, precisa ter um cabeçalho `## YYYY-MM-DD`, como no `append_memory`. Não é aceito com `delete`. |
+| `confirm` | boolean | para `delete` | Precisa ser `true` para apagar. Pergunte ao usuário antes de definir. |
+| `path` | string | ❌ | Override do caminho do vault. |
+
+| Ação | Efeito |
+|---|---|
+| `replace` | Reescreve a entrada no lugar, mantendo a posição dela entre as entradas da mesma data. Para `progress`/`decisions`, a data da entrada passa a ser a do novo cabeçalho, então corrigir uma data errada move a entrada; para um kind customizado a data é mantida. |
+| `supersede` | Anexa `content` como uma nova entrada e acrescenta uma linha `> Superseded by entry N on YYYY-MM-DD.` à antiga, numa única transação. O texto antigo continua no histórico, marcado. Prefira quando uma decisão mudou, e não quando foi registrada errada. |
+| `delete` | Remove a entrada permanentemente. |
+
+Os ids de entrada são únicos dentro de um vault e não mudam enquanto a entrada existir. Reescrever um arquivo inteiro (`write_memory`, `update_project_memory`) ou importá-lo (`import_memory`) cria entradas novas, com ids novos, então leia os ids de novo depois disso. Entradas arquivadas também podem ser editadas, mas o `read_memory` não as mostra.
+
+---
+
 ### `archive_memory`
 
 Arquiva entradas datadas antigas de `progress` ou `decisions`, mantendo ativos só os últimos N dias. Entradas sem cabeçalho de data **nunca** são arquivadas. O projeto precisa vir de `project` ou `workspace_root`: um projeto tirado só da sessão anterior é recusado.
@@ -173,19 +200,33 @@ Arquiva entradas datadas antigas de `progress` ou `decisions`, mantendo ativos s
 | `project`, `subproject`, `workspace_root`, `search_parent_dirs` | — | ❌ | Argumentos de contexto padrão. |
 | `filename` | string (`progress` \| `decisions`) | ✅ | Qual arquivo só-anexa arquivar. |
 | `keep_days` | integer | ❌ | Entradas mais antigas que esse número de dias são arquivadas (padrão 90, de 1 a 36500). |
+| `summary` | string | ❌ | Um resumo das entradas que estão sendo arquivadas, escrito pelo agente. É adicionado como uma nova entrada ativa na mesma transação que as arquiva. |
+| `dry_run` | boolean | ❌ | Quando `true`, lista as entradas que seriam arquivadas — data, id da entrada e primeira linha, até 200 — sem mudar nada. |
 | `path` | string | ❌ | Override do caminho do vault. |
+
+Entradas arquivadas saem do `read_memory` e do `load_project_context`, então o que elas diziam deixa de estar no contexto do agente. O sync82 nunca escreve um resumo por conta própria (não faz chamadas a LLM), mas pode guardar um escrito pelo agente:
+
+1. Chame com `dry_run: true` para ver quais entradas sairiam.
+2. Leia essas entradas (`read_memory`) e escreva um resumo.
+3. Chame de novo com o mesmo `keep_days` e o `summary`.
+
+O resumo é gravado como veio quando tem um cabeçalho `## YYYY-MM-DD` próprio, que não pode ser anterior ao corte (hoje menos `keep_days`) — senão o próximo arquivamento o arquivaria também. Sem cabeçalho, ele ganha um datado de hoje que diz o que cobre: `## 2026-10-07 — Summary of 42 archived entries (from 2026-01-02 to 2026-07-08)`. Por estar datado de hoje, fica ativo por mais `keep_days` dias e aparece entre as entradas recentes. Quando nada é antigo o bastante para arquivar, o resumo não é gravado e o resultado avisa.
 
 ---
 
 ### `search_memory`
 
-Busca por substring, sem diferenciar maiúsculas/minúsculas, nos arquivos de memória — inclusive letras acentuadas e outras letras Unicode (`decisão` encontra `DECISÃO`). Sem `project` busca o vault inteiro; `project` sozinho busca aquele projeto e todos os subprojetos; `project`+`subproject` busca só aquele subprojeto.
+Busca nos arquivos de memória. Por padrão encontra os documentos e entradas que têm todas as palavras da consulta, em qualquer ordem, ignorando maiúsculas/minúsculas e acentos (`decisao` encontra `Decisão`), com os melhores resultados primeiro. Sem `project` busca o vault inteiro; `project` sozinho busca aquele projeto e todos os subprojetos; `project`+`subproject` busca só aquele subprojeto.
 
 | Argumento | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
-| `query` | string | ✅ | Substring a buscar (sem diferenciar maiúsculas/minúsculas, literal — não é um padrão). Precisa ser uma única linha. |
+| `query` | string | ✅ | O que buscar: palavras, uma frase ou uma substring literal, conforme `match`. Precisa ser uma única linha. |
+| `match` | string (`words` \| `phrase` \| `exact`) | ❌ | Como a consulta casa — veja a tabela abaixo (padrão `words`). |
+| `kinds` | array de strings | ❌ | Busca só nesses arquivos/kinds (ex. `["decisions"]`). |
+| `since` | string (`YYYY-MM-DD`) | ❌ | Busca só entradas datadas nessa data ou depois. Documentos e entradas sem data ficam de fora. |
+| `until` | string (`YYYY-MM-DD`) | ❌ | Busca só entradas datadas nessa data ou antes. Documentos e entradas sem data ficam de fora. |
 | `project` | string | ❌ | Limita a busca a esse projeto (e seus subprojetos, a menos que `subproject` também seja dado). |
-| `subproject` | string | ❌ | Limita a busca a esse subprojeto específico. Exige `project` ou `workspace_root`. |
+| `subproject` | string | ❌ | Limita a busca a esse subprojeto específico. Exige `project`, ou um `workspace_root` cujo `.sync82.json` informe o projeto — senão a chamada é um resultado de erro, e não uma busca no vault inteiro. |
 | `workspace_root` | string | ❌ | Usado para auto-descobrir o projeto **só se** `project` não for dado diretamente — veja a nota abaixo. |
 | `search_parent_dirs` | boolean | ❌ | Veja [Argumentos de contexto comuns](#referência-de-tools) acima. |
 | `limit` | integer | ❌ | Número máximo de resultados a retornar (1–1000, padrão 100). |
@@ -194,7 +235,15 @@ Busca por substring, sem diferenciar maiúsculas/minúsculas, nos arquivos de me
 | `path` | string | ❌ | Override do caminho do vault. |
 | `format` | string (`text` \| `json`) | ❌ | `text` (padrão) para texto legível; `json` para um documento JSON com a mesma informação, devolvido como texto e como conteúdo estruturado — veja [Saída JSON](#saída-json). |
 
-Cada resultado é rotulado `project/file:line`, ou `project/file[YYYY-MM-DD]:line` para uma entrada de um log datado (a linha é contada dentro daquela entrada). Os resultados vêm numa ordem estável, com as entradas de um log em ordem de leitura, então as páginas de `offset` são consistentes. A resposta é limitada a cerca de 1 MB; passando disso, ela termina com uma nota dizendo para continuar com `offset`. Num vault muito grande, a varredura para depois de 5000 linhas por tabela ou 64 MB de conteúdo, e o resultado avisa.
+| `match` | Encontra | Ordem |
+|---|---|---|
+| `words` (padrão) | Documentos e entradas que têm **todas** as palavras da consulta, em qualquer lugar e em qualquer ordem. Maiúsculas/minúsculas e os acentos de letras latinas são ignorados (`sessao` encontra `Sessão`). Uma palavra terminada em `*` casa como prefixo (`instal*` encontra `instalador`). Pontuação só separa palavras: `edit_entry` busca `edit` e `entry`, e `"`, `NEAR`, `OR`, `:` ou `-` não têm significado especial. | Relevância (melhores primeiro) |
+| `phrase` | Documentos e entradas que têm as palavras **nessa ordem**, com as mesmas regras do `words` (`sobre o instal*` funciona). | Relevância (melhores primeiro) |
+| `exact` | Linhas que têm a consulta como substring literal, sem diferenciar maiúsculas/minúsculas mas diferenciando acentos (`decisão` encontra `DECISÃO`, não `decisao`). Use para caminhos, identificadores ou pontuação (`100%`, `foo_bar`, `v1.0`). | Ordem do arquivo |
+
+No modo `words`, cada linha que tem uma das palavras é reportada, então um documento com as palavras em linhas diferentes mostra cada uma dessas linhas. Uma frase que continua na linha seguinte é reportada pelas linhas que têm as palavras dela. Uma consulta sem letras nem números é recusada nos modos `words` e `phrase` — use `exact` para ela.
+
+Cada resultado é rotulado `project/file:line`, ou `project/file[YYYY-MM-DD]:line` para uma entrada de um log datado (a linha é contada dentro daquela entrada). Os resultados vêm numa ordem estável — por relevância nos modos `words`/`phrase`, com empates resolvidos por projeto, arquivo e ordem de leitura; por projeto, arquivo e ordem de leitura no modo `exact` —, então as páginas de `offset` são consistentes. Cada linha encontrada ou de contexto é cortada em 4 KB, terminando em `…`. A resposta é limitada a cerca de 1 MB; passando disso, ela termina com uma nota dizendo para continuar com `offset`. Num vault muito grande, a varredura para depois de 5000 linhas (por tabela no modo `exact`) ou 64 MB de conteúdo, e o resultado avisa.
 
 > `search_memory` deliberadamente nunca cai sozinha no "último projeto usado" como as outras tools fazem — uma busca sem escopo deve buscar o vault inteiro, não adivinhar um projeto silenciosamente. Com `workspace_root` e sem `project`, um workspace sem `.sync82.json` também busca o vault inteiro, enquanto um `.sync82.json` que não pode ser lido ou que nomeia um projeto inválido dá um resultado de erro em vez de uma busca.
 
@@ -204,30 +253,51 @@ Cada resultado é rotulado `project/file:line`, ou `project/file[YYYY-MM-DD]:lin
 
 ### `load_project_context`
 
-Carrega toda a memória de um projeto (todo arquivo não-vazio) concatenada num único bloco de contexto, pronto pra colar numa nova sessão.
+Carrega a memória de um projeto (todo arquivo não-vazio) concatenada num único bloco de contexto, pronto pra colar numa nova sessão. Por padrão carrega o estado atual por completo e só o histórico recente, num tamanho que cabe nos limites de saída de tools dos clientes MCP.
 
 | Argumento | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
 | `project`, `subproject`, `workspace_root`, `search_parent_dirs` | — | ❌ | Argumentos de contexto padrão. |
 | `files` | array de strings | ❌ | Carrega só esses arquivos/kinds específicos, em vez de tudo. |
-| `since` | string (`YYYY-MM-DD`) | ❌ | Inclui só entradas datadas (`progress`, `decisions`, ou um kind customizado de anexação) nessa data ou depois. Entradas sem data são sempre incluídas. Arquivos de sobrescrita não são afetados. |
-| `max_entries` | integer | ❌ | Inclui só as N entradas datadas mais recentes por kind append-only. Entradas sem data (como um título antes da primeira entrada datada) são sempre incluídas e não contam para N. Arquivos de sobrescrita não são afetados. |
-| `max_bytes` | integer | ❌ | Tamanho máximo da resposta, em bytes (padrão 204800 = 200 KB, de 1024 a 52428800). |
+| `mode` | string (`summary` \| `full`) | ❌ | `summary` (padrão): as 10 entradas datadas mais recentes por kind append-only, resposta cortada em 40 KB. `full`: todas as entradas, resposta cortada em 200 KB. `since`, `max_entries` e `max_bytes` substituem esses padrões. |
+| `since` | string (`YYYY-MM-DD`) | ❌ | Inclui só entradas datadas (`progress`, `decisions`, ou um kind customizado de anexação) nessa data ou depois. Entradas sem data são sempre incluídas. Arquivos de sobrescrita não são afetados. No modo `summary`, informar `since` remove o limite padrão de 10 entradas. |
+| `max_entries` | integer | ❌ | Inclui só as N entradas datadas mais recentes por kind append-only (padrão 10 no modo `summary`). Entradas sem data (como um título antes da primeira entrada datada) são sempre incluídas e não contam para N. Arquivos de sobrescrita não são afetados. |
+| `max_bytes` | integer | ❌ | Tamanho máximo da resposta, em bytes (padrão 40960 = 40 KB no modo `summary`, 204800 = 200 KB no modo `full`; de 1024 a 52428800). |
 | `path` | string | ❌ | Override do caminho do vault. |
 
-Para um projeto de longa duração, `progress`/`decisions` crescem sem limite — `since`/`max_entries` restringem o contexto carregado ao histórico recente em vez do log de sessões inteiro toda vez. `memory`, `architecture`, `stack` e `next_steps` sempre carregam por completo: eles representam estado atual, não histórico, então não há nada datado pra filtrar. Eles vêm primeiro, seguidos dos outros arquivos em ordem alfabética. Uma resposta maior que `max_bytes` é cortada numa quebra de linha antes desse tamanho e termina com `[context truncated at N of M bytes — narrow it with "since", "max_entries" or "files", or raise "max_bytes"]`.
+Para um projeto de longa duração, `progress`/`decisions` crescem sem limite, então o modo `summary` — o padrão — carrega só o histórico recente: as 10 entradas datadas mais recentes de cada log, dentro de 40 KB. Isso fica abaixo do limite de 50.000 caracteres a partir do qual o Claude Code salva o resultado de uma tool em arquivo em vez de mostrá-lo. `since`/`max_entries` escolhem outro recorte do histórico, e `mode: "full"` carrega todas as entradas. `memory`, `architecture`, `stack` e `next_steps` sempre carregam por completo: eles representam estado atual, não histórico, então não há nada datado pra filtrar. Eles vêm primeiro, seguidos dos outros arquivos em ordem alfabética.
+
+Quando entradas datadas ficam de fora — pelo padrão do `summary`, por `since` ou por `max_entries` — a resposta termina com um rodapé por kind, por exemplo:
+
+```text
+[older history omitted — progress: 10 of 142 dated entries shown (oldest shown 2026-09-15); load more with "max_entries" or "since", or set "mode" to "full"]
+```
+
+Uma resposta nunca passa de `max_bytes`, contando as notas. Quando passaria, o conteúdo é cortado — numa quebra de linha quando há uma perto o bastante, senão no meio da linha, sem partir um caractere — deixando espaço para o rodapé, que nunca é cortado (um rodapé que ocuparia mais de um quarto do `max_bytes` só conta os arquivos). Depois do corte vem `[context truncated at N of M bytes; cut short: <kinds>; left out: <kinds> — narrow it with "since", "max_entries" or "files", or raise "max_bytes"]`, com os arquivos que foram cortados ou que não couberam.
 
 ---
 
 ### `check_project_health`
 
-Reporta quais dos seis arquivos de memória padrão existem para um projeto. Retorna um resultado de erro (`isError: true`) quando o projeto está não-saudável — um sinal deliberado pro agente chamador agir, não uma falha. Isso vale também para `format: "json"`.
+Reporta quais dos seis arquivos de memória padrão existem para um projeto, além de avisos sobre memória que pode estar desatualizada (veja abaixo). Retorna um resultado de erro (`isError: true`) quando o projeto está não-saudável — um sinal deliberado pro agente chamador agir, não uma falha. Isso vale também para `format: "json"`.
 
 | Argumento | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
 | `project`, `subproject`, `workspace_root`, `search_parent_dirs` | — | ❌ | Argumentos de contexto padrão. |
 | `path` | string | ❌ | Override do caminho do vault. |
 | `format` | string (`text` \| `json`) | ❌ | `text` (padrão) para texto legível; `json` para um documento JSON com a mesma informação, devolvido como texto e como conteúdo estruturado — veja [Saída JSON](#saída-json). |
+| `stale_days` | integer | ❌ | Dias depois dos quais um arquivo de estado atual mais antigo que a entrada mais nova de `progress`/`decisions` é reportado como possivelmente desatualizado (≥ 1, padrão 30). |
+
+Também reporta **avisos** — memória que pode estar desatualizada. Avisos nunca deixam o projeto não-saudável e nunca definem `isError`:
+
+| Verificação (`check` no JSON) | Reportada quando |
+|---|---|
+| `stale` | Um arquivo de estado atual (`memory`, `architecture`, `stack`, `next_steps`) foi atualizado pela última vez há mais de `stale_days` dias **e** `progress` ou `decisions` tem uma entrada datada depois desse dia — o histórico andou e o arquivo pode não bater mais com ele. |
+| `template` | Um arquivo de estado atual está vazio, ou ainda igual ao template em branco que o `init_project_memory` grava quando nenhuma resposta é dada (a data da linha `Last updated` não conta). |
+| `undated_entries` | `progress` ou `decisions` tem entradas sem data — um título antes da primeira entrada datada não conta. O `archive_memory` nunca as arquiva; o `edit_entry` pode dar a elas um cabeçalho `## YYYY-MM-DD`. |
+| `large_history` | `progress` ou `decisions` tem mais de 200 entradas datadas ativas — o `archive_memory` mantém pequeno o contexto carregado. |
+
+No relatório em texto, os avisos vêm depois da lista de arquivos, sob `Warnings:`, uma linha `- <arquivo>: <mensagem>` cada.
 
 ---
 
@@ -258,7 +328,7 @@ Os campos de resposta, somados, podem ter no máximo 10 MB.
 
 ### `update_project_memory`
 
-Salva o trabalho de uma sessão no vault do projeto numa única chamada — a tool que a maioria dos agentes deve usar ao final de uma sessão de trabalho. Analisa o que mudou e escreve só os campos que de fato mudaram.
+Salva o trabalho de uma sessão no vault do projeto numa única chamada — a tool que a maioria dos agentes deve usar ao final de uma sessão de trabalho. Analisa o que mudou e escreve só os campos que de fato mudaram. Quando algum campo sobrescreve (`next_steps`, `memory`, `architecture`, `stack`, ou um item de `custom` com `mode: "write"`), o projeto precisa vir de `project` ou `workspace_root`: um projeto tirado só da sessão anterior é recusado, e nada é gravado. Uma chamada que só anexa pode usá-lo.
 
 | Argumento | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
@@ -312,6 +382,36 @@ A importação é tudo ou nada: todo arquivo é lido e verificado primeiro, depo
 
 ---
 
+## Anotações das tools
+
+Toda tool declara anotações MCP — dicas que os clientes usam para decidir quando pedir confirmação antes de rodar uma tool e como rotulá-la. Todas as tools definem `openWorldHint: false` (só mexem no vault local e, no export/import, em arquivos locais), e `destructiveHint` é sempre definido explicitamente, porque o protocolo assume `true` quando ele falta.
+
+| Tool | `title` | `readOnlyHint` | `destructiveHint` | `idempotentHint` |
+|---|---|---|---|---|
+| `list_projects` | List projects | ✅ | — | ✅ |
+| `create_project` | Create a project | — | — | ✅ |
+| `delete_project` | Delete a project | — | ✅ | ✅ |
+| `rename_project` | Rename a project | — | — | — |
+| `get_vault_config` | Show the vault configuration | ✅ | — | ✅ |
+| `list_files` | List memory files | ✅ | — | ✅ |
+| `read_memory` | Read a memory file | ✅ | — | ✅ |
+| `write_memory` | Overwrite a memory file | — | ✅ | ✅ |
+| `append_memory` | Append a memory entry | — | — | — |
+| `delete_memory` | Delete a memory file | — | ✅ | ✅ |
+| `edit_entry` | Edit a memory entry | — | ✅ | — |
+| `archive_memory` | Archive old entries | — | — | — |
+| `search_memory` | Search memory | ✅ | — | ✅ |
+| `load_project_context` | Load the project context | ✅ | — | ✅ |
+| `check_project_health` | Check the project memory | ✅ | — | ✅ |
+| `init_project_memory` | Initialize project memory | — | — | ✅ |
+| `update_project_memory` | Save the session to memory | — | ✅ | — |
+| `export_memory` | Export memory to Markdown files | — | ✅ | ✅ |
+| `import_memory` | Import memory from Markdown files | — | ✅ | ✅ |
+
+As tools "somente leitura" ainda registram o último projeto usado em `~/.sync82/config.json`; isso é controle interno, não uma mudança na memória. `destructiveHint` marca as tools que podem sobrescrever ou apagar memória existente (ou, no `export_memory` com `overwrite`, arquivos existentes); as demais só acrescentam. O arquivamento mantém as entradas arquivadas, então o `archive_memory` não é destrutivo.
+
+---
+
 ## Saída JSON
 
 `list_projects`, `list_files`, `check_project_health` e `search_memory` aceitam `format: "json"`. O texto do resultado passa a ser um documento JSON indentado, e o mesmo objeto é devolvido como o `structuredContent` do resultado MCP. Qualquer outro valor de `format` é rejeitado com um resultado de erro. Notas de contexto (`[project: ..., from ..., vault: ...]`) não são adicionadas no modo JSON — o campo `vault` traz o caminho resolvido. Um resultado vazio é um array vazio (`[]`), nunca uma frase de "nada encontrado". Mensagens que não são resultados — um pedido de `project`, um vault ausente (exceto no `list_projects`), um argumento inválido — continuam em texto simples.
@@ -345,6 +445,7 @@ A importação é tudo ou nada: todo arquivo é lido e verificado primeiro, depo
 | `vault` | string | Caminho do vault resolvido. |
 | `healthy` | boolean | `true` quando os seis arquivos padrão existem (caso contrário o resultado é marcado como `isError`). |
 | `files` | object | Um boolean por arquivo padrão: `memory`, `architecture`, `stack`, `decisions`, `progress`, `next_steps`. |
+| `warnings` | array | Um objeto por aviso, com `file`, `check` (`stale`, `template`, `undated_entries`, `large_history`) e `message` — omitido quando não há nenhum. |
 
 **`search_memory`**
 
@@ -355,6 +456,7 @@ A importação é tudo ou nada: todo arquivo é lido e verificado primeiro, depo
 | `results[].project` | string | Projeto do resultado. |
 | `results[].subproject` | string | Subprojeto do resultado — omitido para um projeto de nível superior. |
 | `results[].file` | string | Arquivo (kind) do resultado. |
+| `results[].entry_id` | integer | Id da entrada que contém o resultado, para o [`edit_entry`](#edit_entry) — omitido para um resultado num arquivo de sobrescrita. |
 | `results[].entry_date` | string | `AAAA-MM-DD` da entrada datada que contém o resultado — omitido para conteúdo sem data. |
 | `results[].line` | integer | Número da linha (dentro da entrada, para uma entrada datada). |
 | `results[].text` | string | A linha encontrada. |

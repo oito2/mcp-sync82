@@ -21,15 +21,29 @@ projects           — a árvore de projeto/subprojeto
 documents          — arquivos de memória de sobrescrita (memory, architecture, stack, next_steps, customizados)
 entries            — entradas de memória só-anexa (progress, decisions, customizadas)
 schema_migrations  — rastreia quais migrations versionadas de schema já rodaram
+documents_fts      — índice de texto completo sobre documents.content
+entries_fts        — índice de texto completo sobre entries.body
 ```
 
 **`projects`** — um projeto é uma linha com `parent_id NULL`; um subprojeto é uma linha cujo `parent_id` aponta pro seu pai. Só um nível de aninhamento é suportado (um subprojeto não pode ter subprojetos próprios). Dois índices únicos parciais garantem que nomes de projetos de nível superior são únicos entre si, e nomes de subprojetos são únicos dentro do seu pai — `NULL != NULL` em SQL significa que uma única constraint ingênua `UNIQUE(parent_id, name)` não impediria de fato dois projetos de nível superior compartilhando um nome.
 
 **`documents`** — uma linha por `(project_id, kind)` pros quatro kinds de sobrescrita (`memory`, `architecture`, `stack`, `next_steps`) mais qualquer kind customizado escrito com `write_memory` em modo de sobrescrita. Uma escrita substitui `content` e `updated_at` no lugar; nenhum histórico de revisão é mantido — uma versão anterior do schema arquivava cada versão prévia de um documento, mas nada jamais lia de volta, então foi removido.
 
-**`entries`** — uma linha por entrada datada (ou não-datada) pros dois kinds só-anexa (`progress`, `decisions`) mais qualquer kind customizado de anexação. `entry_date` é `NULL` pra conteúdo não-datado — essas entradas ordenam por último e nunca são pegas por `archive_memory`. `position` dá uma ordenação estável entre entradas que compartilham a mesma data.
+**`entries`** — uma linha por entrada datada (ou não-datada) pros dois kinds só-anexa (`progress`, `decisions`) mais qualquer kind customizado de anexação. `entry_date` é `NULL` pra conteúdo não-datado — essas entradas ordenam por último e nunca são pegas por `archive_memory`. `position` dá uma ordenação estável entre entradas que compartilham a mesma data. O `id` da linha é o id de entrada que `read_memory` (`with_ids: true`), `search_memory` (`entry_id` no JSON) e `edit_entry` usam: único dentro do vault e inalterado enquanto a linha existir, mas não estável depois de reescrever o kind inteiro (`write_memory`, `update_project_memory`) ou de um `import_memory`, que apagam as linhas e inserem novas. O `edit_entry` só altera uma linha cujo `project_id` e `kind` batem com a chamada, então um id de outro projeto ou arquivo é reportado como não encontrado.
 
-**`schema_migrations`** — toda versão de schema aplicada a esse vault, cada uma registrada uma vez. A versão 1 cria as tabelas acima; a versão 2 converte para minúsculas os nomes de projeto, subprojeto e kind já armazenados (veja [Nomes](#nomes) abaixo). O framework de migração permite que uma mudança de schema seja aplicada com segurança a vaults que já existem, sem re-executar declarações não-idempotentes contra eles.
+**`schema_migrations`** — toda versão de schema aplicada a esse vault, cada uma registrada uma vez. A versão 1 cria as tabelas acima; a versão 2 converte para minúsculas os nomes de projeto, subprojeto e kind já armazenados (veja [Nomes](#nomes) abaixo); a versão 3 cria os índices de texto completo e indexa as linhas que já existem (veja [Busca de texto completo](#busca-de-texto-completo) abaixo). O framework de migração permite que uma mudança de schema seja aplicada com segurança a vaults que já existem, sem re-executar declarações não-idempotentes contra eles.
+
+**`documents_fts`, `entries_fts`** — índices de texto completo FTS5 com conteúdo externo: guardam só o índice, chaveado pelo `id` da linha de `documents`/`entries`, e leem o texto dessa linha. Os dois usam o tokenizer `unicode61 remove_diacritics 2`, então maiúsculas/minúsculas e os acentos de letras latinas são ignorados. Veja [Busca de texto completo](#busca-de-texto-completo).
+
+## Busca de texto completo
+
+O `search_memory` nos modos `words` e `phrase` consulta `documents_fts` e `entries_fts` numa única instrução SQL, ordenada pela relevância do `bm25()` e depois por projeto, kind e ordem de leitura, então a ordem é a mesma em toda chamada. Entradas arquivadas continuam indexadas e são filtradas pela consulta. O modo `exact` não usa os índices: lê as linhas com um `LIKE` sem diferenciar maiúsculas/minúsculas, como antes da versão 3.
+
+Gatilhos mantêm os índices em sincronia com toda mudança na tabela deles: `AFTER INSERT`, `AFTER DELETE` (inclusive as exclusões em cascata de um projeto apagado) e `AFTER UPDATE OF content`/`body`. Arquivar uma entrada muda só `archived`, então não mexe no índice.
+
+A consulta digitada pelo usuário nunca é passada ao FTS5 como está. O sync82 a divide em palavras do jeito que o tokenizer divide o texto (letras e números; todo o resto separa palavras), põe cada palavra entre aspas e só mantém um `*` no final como marcador de prefixo, então operadores do FTS5 não podem ser injetados. As linhas encontradas são calculadas em Go com uma função de normalização (decomposição Unicode do `golang.org/x/text`) que produz os mesmos tokens que o tokenizer; um teste compara os dois letra por letra nos blocos latino, grego e cirílico.
+
+A migração 3 cria os índices quando um vault existente é aberto pela primeira vez por um sync82 que os tem. Um sync82 mais antigo se recusa a abrir um vault cuja versão de schema é mais nova do que ele suporta, em vez de gravar nele sem manter os índices em sincronia — veja [Solução de Problemas](../troubleshooting/common-issues.md#a-versão-do-schema-do-vault-é-mais-nova-do-que-este-sync82-suporta).
 
 ## Nomes
 

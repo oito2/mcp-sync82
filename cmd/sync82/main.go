@@ -197,7 +197,7 @@ func runServe(ctx context.Context, logger *slog.Logger) error {
 
 	resolver := tools.NewResolver(config.DefaultVaultPath(), logger)
 
-	s := server.New(serverName, version.Get(), logger, tools.Registered(resolver, stores))
+	s := server.New(serverName, version.Get(), logger, tools.Registered(resolver, stores), &tools.Resources{Resolver: resolver, Stores: stores})
 	if err := s.Run(ctx, &mcp.StdioTransport{MaxLineLength: maxFrameBytes}); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}

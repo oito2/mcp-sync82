@@ -31,7 +31,7 @@ A memória é armazenada num banco SQLite embutido e o projeto é distribuído c
 
 - **Seis arquivos de memória padrão por projeto**, mais qualquer arquivo customizado, para projetos e seus subprojetos (monorepos, ecossistemas de plugins).
 - **Descoberta automática do projeto** — um `.sync82.json` no workspace faz com que o agente nunca mais precise dizer o nome do projeto.
-- **18 tools MCP** — carregue o contexto inteiro de um projeto numa chamada, salve uma sessão numa chamada, busque no vault inteiro, arquive histórico antigo, exporte/importe Markdown puro.
+- **19 tools MCP** — carregue o contexto inteiro de um projeto numa chamada, salve uma sessão numa chamada, busque no vault inteiro, arquive histórico antigo, exporte/importe Markdown puro — além de resources MCP somente leitura com a memória de cada projeto e os prompts `start_session`/`end_session`.
 - **Configuração de clientes em um passo** — `sync82 install` registra o sync82 no Claude Code, Claude Desktop, Antigravity, Codex, OpenCode, Cursor, Zed e Cline; `sync82 uninstall` o remove.
 - **Local e privado** — só transporte stdio, nenhum serviço de rede, um arquivo SQLite por vault.
 - **Releases verificáveis** — checksums SHA-256, uma assinatura Sigstore e atestações de proveniência de build do GitHub; uma extensão do Claude Desktop (`sync82.mcpb`) e uma entrada no [MCP Registry](https://registry.modelcontextprotocol.io/).
@@ -45,7 +45,7 @@ A memória é armazenada num banco SQLite embutido e o projeto é distribuído c
 | `progress` | só-anexa, datado | Trabalho concluído, sessão por sessão |
 | `next_steps` | sobrescrita | O que fazer a seguir |
 
-### Tools (18)
+### Tools (19)
 
 O agente de IA chama essas tools via MCP — ele nunca toca o banco de dados diretamente. Referência completa de parâmetros em [Referência de Tools](reference/tools.md).
 
@@ -61,16 +61,17 @@ O agente de IA chama essas tools via MCP — ele nunca toca o banco de dados dir
 | `write_memory` | Sobrescreve o conteúdo inteiro de um arquivo de memória |
 | `append_memory` | Anexa uma entrada datada a `progress`, `decisions`, ou um kind customizado de anexação |
 | `delete_memory` | Apaga um arquivo de memória customizado (os seis arquivos padrão são protegidos) |
-| `archive_memory` | Arquiva entradas datadas antigas, mantendo ativos só os últimos N dias |
-| `search_memory` | Busca por substring, sem diferenciar maiúsculas/minúsculas, nos arquivos de memória |
-| `load_project_context` | Carrega toda a memória de um projeto num único bloco de contexto |
-| `check_project_health` | Reporta quais dos seis arquivos padrão existem |
+| `edit_entry` | Substitui, marca como superada ou apaga uma entrada de `progress`, `decisions` ou de um kind customizado de anexação |
+| `archive_memory` | Arquiva entradas datadas antigas, mantendo ativos só os últimos N dias, opcionalmente com um resumo delas |
+| `search_memory` | Busca nos arquivos de memória por palavras (ignorando acentos e maiúsculas, melhores primeiro), frase ou texto exato |
+| `load_project_context` | Carrega a memória de um projeto (estado atual mais o histórico recente) num único bloco de contexto |
+| `check_project_health` | Reporta quais dos seis arquivos padrão existem e avisa sobre arquivos que parecem desatualizados |
 | `init_project_memory` | Inicialização guiada, com auto-detecção opcional a partir do código |
 | `update_project_memory` | Salva o trabalho de uma sessão (progresso, decisões, próximos passos etc.) numa única chamada |
 | `export_memory` | Exporta a memória de um projeto para arquivos `.md` em disco |
 | `import_memory` | Importa a memória de um projeto a partir de arquivos `.md` — o inverso de `export_memory` |
 
-`list_projects`, `list_files`, `check_project_health` e `search_memory` também devolvem JSON (`format: "json"`). Não sabe bem o que digitar pro seu agente? Veja os [Prompts de Exemplo](prompts.md).
+`list_projects`, `list_files`, `check_project_health` e `search_memory` também devolvem JSON (`format: "json"`). Além das tools, o sync82 serve a memória de cada projeto como [resources MCP](reference/resources.md) (`sync82://projects/<projeto>/context`) e dois [prompts MCP](reference/mcp-prompts.md), `start_session` e `end_session`. Não sabe bem o que digitar pro seu agente? Veja os [Prompts de Exemplo](prompts.md).
 
 ### Comandos de CLI
 
@@ -187,7 +188,7 @@ sync82 self-update              # baixa, verifica (SHA-256) e instala a release 
 sync82 self-update --rollback   # restaura a versão anterior, guardada como <binário>.bak
 ```
 
-O `self-update` funciona num binário de release ou num build `go install .../sync82@vX.Y.Z`. Se você instalou com `go install`, atualize com `go install github.com/oito2/mcp-sync82/cmd/sync82@latest` — não misture os dois. A extensão do Claude Desktop é atualizada instalando um `sync82.mcpb` mais novo.
+O `self-update` funciona num binário de release ou num build `go install .../sync82@vX.Y.Z`. Se você instalou com `go install`, atualize com `go install github.com/oito2/mcp-sync82/cmd/sync82@latest` — não misture os dois. A extensão do Claude Desktop é atualizada instalando um `sync82.mcpb` mais novo. Uma release pode atualizar o schema do vault (a 1.1.0 atualiza); depois que a versão nova abre um vault, o binário anterior — inclusive um restaurado pelo `--rollback` — recusa esse vault, então atualize todos os clientes que o compartilham e não volte para antes de uma release assim (veja [Solução de Problemas](troubleshooting/common-issues.md#a-versão-do-schema-do-vault-é-mais-nova-do-que-este-sync82-suporta)).
 
 Para remover o sync82 de todos os clientes detectados, rode `sync82 uninstall` (acrescente `--purge` para também apagar o vault padrão e a config em `~/.sync82`) — veja [Desinstalação](getting-started/uninstallation.md) para a remoção completa, binário incluído.
 
@@ -197,9 +198,9 @@ O [site de documentação](index.md) tem todos os detalhes (também em [inglês]
 
 - [Instalação](getting-started/installation.md) · [Início Rápido](getting-started/quickstart.md) · [Desinstalação](getting-started/uninstallation.md)
 - [Conceitos — Arquitetura](concepts/architecture.md) e [detalhes internos](architecture/context-resolution.md)
-- Referência: [Tools](reference/tools.md) · [CLI](reference/cli.md) · [Configuração](reference/configuration.md)
+- Referência: [Tools](reference/tools.md) · [Resources](reference/resources.md) · [Prompts MCP](reference/mcp-prompts.md) · [CLI](reference/cli.md) · [Configuração](reference/configuration.md)
 - [Prompts de Exemplo](prompts.md) · [Exemplos de Uso](guides/workflows/examples.md)
-- [Solução de Problemas](troubleshooting/common-issues.md)
+- [Solução de Problemas](troubleshooting/common-issues.md) · [Changelog](../../CHANGELOG.md) (em inglês)
 
 **Contribuindo:** veja [`contribuindo.md`](contribuindo.md) para o fluxo de desenvolvimento, as checagens que a CI roda (`go build ./...`, `go vet ./...`, `gofmt -l .`, golangci-lint, `go test ./... -race`, `govulncheck`) e como as releases são publicadas. Espera-se que todo participante siga o [Código de Conduta](codigo-de-conduta.md).
 

@@ -49,7 +49,7 @@ Initialize memory for this project. Analyze the codebase automatically.
 
 ## 💡 Recommended Workflows
 
-Same 18 tools, same prompts as every other client — see [Usage Examples](../workflows/examples.md) for full end-to-end scenarios.
+Same 19 tools, same prompts as every other client — see [Usage Examples](../workflows/examples.md) for full end-to-end scenarios.
 
 ### Resuming a session
 
@@ -60,6 +60,8 @@ codex resume --last
 ```
 
 Pair this with sync82's own memory: Codex's session resume gives you back the raw conversation, `load_project_context` gives the AI the structured, curated summary — ask for both when starting back up on a task.
+
+Codex's MCP documentation covers tools only, not MCP resources or prompts, so sync82's [resources](../../reference/resources.md) and [MCP prompts](../../reference/mcp-prompts.md) aren't available there; ask for the same things in plain language ("load the project memory", "save this session") and Codex calls the tools.
 
 ---
 

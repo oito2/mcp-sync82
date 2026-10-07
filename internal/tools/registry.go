@@ -32,6 +32,7 @@ func Registered(resolver *Resolver, stores *store.Manager) []Tool {
 		&WriteMemoryTool{Resolver: resolver, Stores: stores},
 		&AppendMemoryTool{Resolver: resolver, Stores: stores},
 		&DeleteMemoryTool{Resolver: resolver, Stores: stores},
+		&EditEntryTool{Resolver: resolver, Stores: stores},
 		&SearchMemoryTool{Resolver: resolver, Stores: stores},
 		&LoadProjectContextTool{Resolver: resolver, Stores: stores},
 		&CheckProjectHealthTool{Resolver: resolver, Stores: stores},

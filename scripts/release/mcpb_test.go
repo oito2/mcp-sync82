@@ -319,6 +319,9 @@ func TestWriteMCPB_BundleIsCompleteAndReproducible(t *testing.T) {
 	if got["version"] != "1.2.3" || got["manifest_version"] != "0.3" {
 		t.Errorf("unexpected version fields: version=%v manifest_version=%v", got["version"], got["manifest_version"])
 	}
+	if got["prompts_generated"] != true {
+		t.Errorf("prompts_generated = %v, want true: the server renders its prompts at runtime", got["prompts_generated"])
+	}
 
 	// Every path the manifest references must be inside the bundle.
 	cfg := manifest.Server.MCPConfig

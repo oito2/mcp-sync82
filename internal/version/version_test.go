@@ -34,3 +34,21 @@ func TestGet_DevBuildIsNotEmpty(t *testing.T) {
 		t.Fatal("Get() returned an empty version")
 	}
 }
+
+// TestReleaseVersion verifies which build-info versions name a release.
+func TestReleaseVersion(t *testing.T) {
+	for v, want := range map[string]string{
+		"v1.1.0":                               "v1.1.0",
+		"v1.2.0-rc.1":                          "v1.2.0-rc.1",
+		"":                                     "",
+		"(devel)":                              "",
+		"v1.0.0+dirty":                         "",
+		"v1.0.1-0.20261007120000-abcdef123456": "",
+		"v0.0.0-20261007120000-abcdef123456":   "",
+		"v1.2.0-rc.1.0.20261007120000-abcdef123456+dirty": "",
+	} {
+		if got := releaseVersion(v); got != want {
+			t.Errorf("releaseVersion(%q) = %q, want %q", v, got, want)
+		}
+	}
+}

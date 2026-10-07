@@ -482,3 +482,40 @@ func TestInitProjectMemoryTool_BoundsAnswers(t *testing.T) {
 		t.Fatal("expected an oversized description to be rejected")
 	}
 }
+
+// TestInitProjectMemoryTool_RefusesInvalidNameFromLocalConfig verifies that
+// a .sync82.json naming an invalid project is reported, and no project is
+// created.
+func TestInitProjectMemoryTool_RefusesInvalidNameFromLocalConfig(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, ".sync82.json"), []byte(`{"project":"bad name!"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result := runTool(t, &InitProjectMemoryTool{Resolver: r, Stores: mgr}, map[string]any{"workspace_root": workspace})
+	if !result.IsError || !strings.Contains(result.Text, "Cannot initialize the project") {
+		t.Fatalf("result = %+v, want an error result", result)
+	}
+	s, err := mgr.Get(context.Background(), r.DefaultDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projects, err := s.ListTopLevelProjects(context.Background()); err != nil || len(projects) != 0 {
+		t.Fatalf("projects = %+v, %v; want none", projects, err)
+	}
+}
+
+// TestInitProjectMemoryTool_LocalConfigNameIsCaseInsensitive verifies that a
+// .sync82.json naming the same project in another case is recognized as
+// pointing at it.
+func TestInitProjectMemoryTool_LocalConfigNameIsCaseInsensitive(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, ".sync82.json"), []byte(`{"project":"MyProj"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result := runTool(t, &InitProjectMemoryTool{Resolver: r, Stores: mgr}, map[string]any{"workspace_root": workspace})
+	if result.IsError || strings.Contains(result.Text, "left unchanged") || !strings.Contains(result.Text, `"myproj"`) {
+		t.Fatalf("result = %q, want myproj initialized without a mismatch warning", result.Text)
+	}
+}

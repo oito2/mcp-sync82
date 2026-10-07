@@ -17,8 +17,13 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/oito2/mcp-sync82/internal/store"
 )
 
 // TestCheckProjectHealthTool_Healthy verifies that a project with every
@@ -157,7 +162,7 @@ func TestCheckProjectHealthTool_FullyArchivedLogStaysHealthy(t *testing.T) {
 		if err := s.AppendEntry(ctx, "acme", "", k, "2020-01-01", "## 2020-01-01\n- old"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.ArchiveEntries(ctx, "acme", "", k, "2021-01-01"); err != nil {
+		if _, err := s.ArchiveEntries(ctx, "acme", "", k, "2021-01-01", nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -173,5 +178,185 @@ func TestCheckProjectHealthTool_FullyArchivedLogStaysHealthy(t *testing.T) {
 	}
 	if result.IsError || !strings.Contains(result.Text, "HEALTHY") || strings.Contains(result.Text, "UNHEALTHY") {
 		t.Fatalf("expected HEALTHY, got: %s", result.Text)
+	}
+}
+
+// seedHealthyProject creates project acme in the default vault of r with
+// the four current-state documents filled in and one dated entry in each
+// log, dated date, and returns the store.
+func seedHealthyProject(t *testing.T, r *Resolver, mgr *store.Manager, date string) *store.Store {
+	t.Helper()
+	ctx := context.Background()
+	s, err := mgr.Get(ctx, r.DefaultDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range currentStateKinds {
+		if err := s.WriteDocument(ctx, "acme", "", k, "# "+k+"\n\nreal content"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, k := range []string{"progress", "decisions"} {
+		if err := s.AppendEntry(ctx, "acme", "", k, date, "## "+date+"\n- done"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return s
+}
+
+// setHealthNow makes healthNow return now until the test ends.
+func setHealthNow(t *testing.T, now time.Time) {
+	t.Helper()
+	saved := healthNow
+	healthNow = func() time.Time { return now }
+	t.Cleanup(func() { healthNow = saved })
+}
+
+// TestCheckProjectHealthTool_NoWarningsKeepsTheOutput verifies that a
+// project without warnings gets exactly the report it got before warnings
+// existed.
+func TestCheckProjectHealthTool_NoWarningsKeepsTheOutput(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	seedHealthyProject(t, r, mgr, time.Now().UTC().Format("2006-01-02"))
+	result := runTool(t, &CheckProjectHealthTool{Resolver: r, Stores: mgr}, map[string]any{"project": "acme"})
+	want := "Status: HEALTHY ✅\n\nFiles:\n- memory: OK\n- architecture: OK\n- stack: OK\n- decisions: OK\n- progress: OK\n- next_steps: OK\n"
+	if result.IsError || !strings.HasPrefix(result.Text, "Health report for project: acme") || !strings.HasSuffix(result.Text, want) {
+		t.Fatalf("report = %q, want it to end with %q", result.Text, want)
+	}
+}
+
+// TestCheckProjectHealthTool_WarnsAboutStaleDocuments verifies that a
+// current-state document older than stale_days is reported once the logs
+// have a newer entry, and not when they don't or stale_days is larger.
+func TestCheckProjectHealthTool_WarnsAboutStaleDocuments(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	now := time.Now().UTC()
+	s := seedHealthyProject(t, r, mgr, now.Format("2006-01-02"))
+	tool := &CheckProjectHealthTool{Resolver: r, Stores: mgr}
+	setHealthNow(t, now.AddDate(0, 0, 40))
+
+	if text := runTool(t, tool, map[string]any{"project": "acme"}).Text; strings.Contains(text, "Warnings") {
+		t.Fatalf("no entry is newer than the documents, so no warning expected: %s", text)
+	}
+
+	later := now.AddDate(0, 0, 10).Format("2006-01-02")
+	if err := s.AppendEntry(context.Background(), "acme", "", "decisions", later, "## "+later+"\n- changed"); err != nil {
+		t.Fatal(err)
+	}
+	result := runTool(t, tool, map[string]any{"project": "acme"})
+	if result.IsError || !strings.Contains(result.Text, "Status: HEALTHY") {
+		t.Fatalf("warnings must not make the project unhealthy: %+v", result)
+	}
+	want := fmt.Sprintf("- architecture: last updated %s (40 days ago), but progress/decisions have entries up to %s;", now.Format("2006-01-02"), later)
+	if !strings.Contains(result.Text, "\nWarnings:\n") || !strings.Contains(result.Text, want) {
+		t.Fatalf("report = %s\nwant a line starting %q", result.Text, want)
+	}
+	if n := strings.Count(result.Text, "days ago"); n != 4 {
+		t.Errorf("got %d stale warnings, want one per current-state document", n)
+	}
+
+	if text := runTool(t, tool, map[string]any{"project": "acme", "stale_days": 60}).Text; strings.Contains(text, "Warnings") {
+		t.Errorf("stale_days 60 should not warn about 40-day-old documents: %s", text)
+	}
+}
+
+// TestCheckProjectHealthTool_WarnsAboutTemplates verifies that a blank
+// document and one still equal to the init_project_memory template, with
+// any date, are reported, and that a filled-in one is not.
+func TestCheckProjectHealthTool_WarnsAboutTemplates(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	s := seedHealthyProject(t, r, mgr, time.Now().UTC().Format("2006-01-02"))
+	ctx := context.Background()
+	memory := lastUpdatedLine.ReplaceAllString(renderMemoryTemplate(initAnswers{}, "acme"), "- Last updated: 2020-01-01")
+	for kind, content := range map[string]string{
+		"memory":       memory,
+		"stack":        "  \n",
+		"architecture": renderArchitectureTemplate(initAnswers{}, "acme") + "\n",
+	} {
+		if err := s.WriteDocument(ctx, "acme", "", kind, content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	text := runTool(t, &CheckProjectHealthTool{Resolver: r, Stores: mgr}, map[string]any{"project": "acme"}).Text
+	for _, kind := range []string{"memory", "architecture", "stack"} {
+		if !strings.Contains(text, "- "+kind+": still empty or holding the blank template") {
+			t.Errorf("no template warning for %s: %s", kind, text)
+		}
+	}
+	if strings.Contains(text, "- next_steps: still empty") {
+		t.Errorf("the filled-in next_steps was reported: %s", text)
+	}
+}
+
+// TestCheckProjectHealthTool_WarnsAboutLogs verifies the undated-entries
+// warning, which ignores a preamble, and the large-history warning.
+func TestCheckProjectHealthTool_WarnsAboutLogs(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	s := seedHealthyProject(t, r, mgr, time.Now().UTC().Format("2006-01-02"))
+	ctx := context.Background()
+	if err := s.ReplaceAllEntries(ctx, "acme", "", "decisions", []store.EntrySection{
+		{Body: "# Decisions", Preamble: true},
+		{Date: "2026-01-01", Body: "## 2026-01-01\n- a"},
+		{Body: "an undated decision"},
+		{Body: "another undated decision"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sections := make([]store.EntrySection, largeHistoryLength+1)
+	for i := range sections {
+		sections[i] = store.EntrySection{Date: "2026-01-01", Body: "## 2026-01-01\n- step"}
+	}
+	if err := s.ReplaceAllEntries(ctx, "acme", "", "progress", sections); err != nil {
+		t.Fatal(err)
+	}
+
+	text := runTool(t, &CheckProjectHealthTool{Resolver: r, Stores: mgr}, map[string]any{"project": "acme"}).Text
+	if !strings.Contains(text, "- decisions: 2 undated entries; archive_memory never archives them") {
+		t.Errorf("no undated warning for decisions: %s", text)
+	}
+	if !strings.Contains(text, fmt.Sprintf("- progress: %d active dated entries; archive the old ones with archive_memory", largeHistoryLength+1)) {
+		t.Errorf("no large-history warning for progress: %s", text)
+	}
+	if strings.Contains(text, "- progress: 0 undated") || strings.Contains(text, "- decisions: 3 undated") {
+		t.Errorf("the preamble or an empty count was reported: %s", text)
+	}
+}
+
+// TestCheckProjectHealthTool_JSONWarnings verifies that warnings appear in
+// the JSON report, with their check, and are omitted when there are none.
+func TestCheckProjectHealthTool_JSONWarnings(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	s := seedHealthyProject(t, r, mgr, time.Now().UTC().Format("2006-01-02"))
+	tool := &CheckProjectHealthTool{Resolver: r, Stores: mgr}
+
+	if text := runTool(t, tool, map[string]any{"project": "acme", "format": "json"}).Text; strings.Contains(text, "warnings") {
+		t.Fatalf("warnings should be omitted when there are none: %s", text)
+	}
+	if err := s.WriteDocument(context.Background(), "acme", "", "stack", ""); err != nil {
+		t.Fatal(err)
+	}
+	var report healthReport
+	if err := json.Unmarshal([]byte(runTool(t, tool, map[string]any{"project": "acme", "format": "json"}).Text), &report); err != nil {
+		t.Fatal(err)
+	}
+	if !report.Healthy || len(report.Warnings) != 1 || report.Warnings[0].File != "stack" || report.Warnings[0].Check != checkTemplate {
+		t.Fatalf("report = %+v, want healthy with one template warning for stack", report)
+	}
+}
+
+// TestCheckProjectHealthTool_ValidateStaleDays verifies the stale_days
+// default and that a negative value is rejected.
+func TestCheckProjectHealthTool_ValidateStaleDays(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	tool := &CheckProjectHealthTool{Resolver: r, Stores: mgr}
+	parsed, err := tool.Validate(mustJSON(t, map[string]any{"project": "acme"}))
+	if err != nil || parsed.(checkProjectHealthArgs).StaleDays != defaultStaleDays {
+		t.Fatalf("default stale_days: %+v, %v", parsed, err)
+	}
+	if _, err := tool.Validate(mustJSON(t, map[string]any{"project": "acme", "stale_days": -1})); err == nil {
+		t.Fatal("a negative stale_days should be rejected")
 	}
 }

@@ -44,6 +44,8 @@ Open **Customize** from Cursor's sidebar and check that `sync82` is listed among
 Initialize memory for this project. Analyze the codebase automatically.
 ```
 
+Cursor also supports MCP resources and prompts, so sync82's [resources](../../reference/resources.md) (each project's memory) and [MCP prompts](../../reference/mcp-prompts.md) (`start_session`, `end_session`) are available alongside the tools.
+
 ---
 
 ## 🗑️ Removing

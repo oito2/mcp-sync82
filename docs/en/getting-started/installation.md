@@ -197,7 +197,7 @@ sync82 self-update --check   # report whether a newer release exists, without in
 sync82 self-update           # download, verify, and install the latest release
 ```
 
-Downloads are checksum-verified against the release's `checksums.txt` before the running binary is ever replaced; the previous version is kept as `<binary>.bak`, and `sync82 self-update --rollback` restores it. `self-update` works on a release binary or one built with `go install .../sync82@vX.Y.Z`; only a local build from a source checkout (version `dev`) refuses to run it — re-run `go install .../sync82@latest` instead.
+Downloads are checksum-verified against the release's `checksums.txt` before the running binary is ever replaced; the previous version is kept as `<binary>.bak`, and `sync82 self-update --rollback` restores it. `self-update` works on a release binary or one built with `go install .../sync82@vX.Y.Z`; only a local build from a source checkout or a `go install` of an untagged commit (version `dev`) refuses to run it — re-run `go install .../sync82@latest` instead.
 
 > **Pick one update mechanism and stick with it** — the two paths have no awareness of each other. See [CLI Reference — self-update](../reference/cli.md#self-update) for details.
 
