@@ -18,6 +18,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -70,7 +71,8 @@ FORMAT GUIDANCE:
 - For appended fields (progress, decisions): the date header "## YYYY-MM-DD" is REQUIRED and enforced.
   Example: "## 2026-04-23\n- Implemented OAuth2 token validation\n- Files: auth/token.go"
   Without this header the write will be rejected with an error.
-- For overwritten fields: provide the complete updated content, not just the diff.`
+- For overwritten fields: provide the complete updated content, not just the diff.
+- The call is all or nothing: if any field is invalid, nothing is written and every problem is listed.`
 
 // UpdateProjectMemoryTool implements update_project_memory: save the work
 // of a whole session in one call, appending to progress and decisions and
@@ -155,9 +157,15 @@ func (t *UpdateProjectMemoryTool) InputSchema() map[string]any {
 const maxCustomItems = 50
 
 // Validate decodes raw into updateProjectMemoryArgs. It lower-cases and
-// checks the custom file names and returns the arguments, or an error when
-// there are too many custom items, the total content exceeds maxContentSize,
-// a custom item names a standard kind or has an unknown mode.
+// checks the custom file names, removes entry id marker lines from every
+// content field, and checks each provided field with the rules its write
+// will apply (validateAppendInput for the appended ones, including the
+// date header of progress and decisions; validateWriteInput for the
+// overwritten ones). It returns the arguments, or an error listing every
+// problem: too many custom items, total content over maxContentSize, a
+// custom item naming a standard kind or with an unknown mode, or a field
+// its write would reject — so a bad field never leaves the others
+// half-written.
 func (t *UpdateProjectMemoryTool) Validate(raw json.RawMessage) (any, error) {
 	var args updateProjectMemoryArgs
 	if err := decodeArgs(raw, &args); err != nil {
@@ -194,6 +202,34 @@ func (t *UpdateProjectMemoryTool) Validate(raw json.RawMessage) (any, error) {
 		}
 	}
 
+	var problems []string
+	check := func(name string, content *string, isAppend bool) {
+		if content == nil {
+			return
+		}
+		*content = stripEntryMarkers(*content)
+		var err error
+		if isAppend {
+			_, err = validateAppendInput(name, *content)
+		} else {
+			_, err = validateWriteInput(name, *content)
+		}
+		if err != nil {
+			problems = append(problems, name+": "+err.Error())
+		}
+	}
+	check("progress", args.Progress, true)
+	check("decisions", args.Decisions, true)
+	check("next_steps", args.NextSteps, false)
+	check("memory", args.Memory, false)
+	check("architecture", args.Architecture, false)
+	check("stack", args.Stack, false)
+	for i := range args.Custom {
+		check(args.Custom[i].Filename, &args.Custom[i].Content, args.Custom[i].Mode != "write")
+	}
+	if len(problems) > 0 {
+		return nil, fmt.Errorf("invalid arguments (nothing was written):\n- %s", strings.Join(problems, "\n- "))
+	}
 	return args, nil
 }
 
@@ -205,13 +241,14 @@ type memoryOp struct {
 	content  string
 }
 
-// Execute resolves the target project and applies every provided field as an
-// independent append or overwrite operation. When any field overwrites, it
-// refuses, with an error result and before writing anything, a project
-// that was only taken from the last session. A failing operation does not
-// stop or undo the others; the result lists what was appended, what was
-// overwritten and the errors, and has IsError set when any operation failed.
-// It returns a plain notice when no field was provided.
+// Execute resolves the target project and applies every provided field in
+// one transaction: all of them are written, or none is. When any field
+// overwrites, it refuses, with an error result, a project that was only
+// taken from the last session. A field the store state rejects (an append
+// to a custom kind stored as a document) makes the call an error result
+// listing every such field, with nothing written; a missing project yields
+// the error built by wrapNotFound. It returns a plain notice when no field
+// was provided.
 func (t *UpdateProjectMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(updateProjectMemoryArgs)
 
@@ -267,25 +304,38 @@ func (t *UpdateProjectMemoryTool) Execute(ctx context.Context, rawArgs any) (Too
 		}
 	}
 
-	// Every op runs independently — one failing must not block or roll
-	// back the others.
+	// Plan every write first, then apply them together: a field the store
+	// rejects must not leave the others written.
+	writes := make([]store.KindWrite, 0, len(ops))
 	var appended, written, errs []string
 	for _, op := range ops {
+		var w store.KindWrite
 		var opErr error
 		if op.isAppend {
-			opErr = appendMemoryCore(ctx, s, rctx.Project, rctx.Subproject, op.filename, op.content)
+			w, opErr = planAppend(ctx, s, rctx.Project, rctx.Subproject, op.filename, op.content)
 		} else {
-			opErr = writeMemoryCore(ctx, s, rctx.Project, rctx.Subproject, op.filename, op.content)
+			w, opErr = planWrite(ctx, s, rctx.Project, rctx.Subproject, op.filename, op.content)
 		}
 		if opErr != nil {
-			errs = append(errs, op.filename+": "+opErr.Error())
+			if !errors.Is(opErr, errAppendToDocumentKind) {
+				return ToolResult{}, opErr
+			}
+			errs = append(errs, "  - "+op.filename+": "+opErr.Error())
 			continue
 		}
+		writes = append(writes, w)
 		if op.isAppend {
 			appended = append(appended, op.filename)
 		} else {
 			written = append(written, op.filename)
 		}
+	}
+	if len(errs) > 0 {
+		return ToolResult{IsError: true, Text: fmt.Sprintf("Project: %s%s\nNothing was written; fix these fields and call again:\n%s",
+			rctx.Label(), ContextNote(rctx), strings.Join(errs, "\n"))}, nil
+	}
+	if err := s.WriteKinds(ctx, rctx.Project, rctx.Subproject, writes); err != nil {
+		return ToolResult{}, wrapNotFound(err, rctx.Label())
 	}
 
 	parts := []string{fmt.Sprintf("Project: %s%s", rctx.Label(), ContextNote(rctx))}
@@ -295,13 +345,5 @@ func (t *UpdateProjectMemoryTool) Execute(ctx context.Context, rawArgs any) (Too
 	if len(written) > 0 {
 		parts = append(parts, "Overwritten: "+strings.Join(written, ", "))
 	}
-	if len(errs) > 0 {
-		errLines := make([]string, len(errs))
-		for i, e := range errs {
-			errLines[i] = "  - " + e
-		}
-		parts = append(parts, "Errors:\n"+strings.Join(errLines, "\n"))
-	}
-
-	return ToolResult{Text: strings.Join(parts, "\n"), IsError: len(errs) > 0}, nil
+	return ToolResult{Text: strings.Join(parts, "\n")}, nil
 }

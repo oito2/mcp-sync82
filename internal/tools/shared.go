@@ -26,7 +26,7 @@ import (
 
 // PathDescription is the description text used on every tool schema's
 // optional "path" field.
-const PathDescription = `Base path where the memory is stored. If left blank, uses the default vault path. To use the default user directory, start the path with "HOME" (e.g., "HOME/custom-vault").`
+const PathDescription = `Base path where the memory is stored. If left blank, uses the default vault path. A leading "~", "HOME" or "$HOME" (e.g. "~/vaults/work.db", "HOME/custom-vault") is expanded to the user's home directory.`
 
 // SearchParentDirsDescription is the description text used on every tool
 // schema's optional "search_parent_dirs" field. Looking for .sync82.json

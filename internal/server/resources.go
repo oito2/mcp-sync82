@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -56,18 +57,18 @@ func addResources(s *mcp.Server, res *tools.Resources, logger *slog.Logger) (lis
 // Markdown, marked private (cacheScope "private"): it is the user's own
 // memory, which no shared cache may keep. Left unset, the SDK would mark
 // it public. An unknown or invalid URI is reported as an MCP resource-not-
-// found error; any other failure is logged in full and reported with a
-// generic message, since it may hold vault paths.
+// found error; any other failure, or a panic, as an internal error worded
+// like a tool's (internalError, recoverAsInternal).
 func readResourceHandler(res *tools.Resources, logger *slog.Logger) mcp.ResourceHandler {
-	return func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+	return func(ctx context.Context, req *mcp.ReadResourceRequest) (_ *mcp.ReadResourceResult, err error) {
+		defer recoverAsInternal(logger, "resources/read", &err)
 		uri := req.Params.URI
 		text, err := res.Read(ctx, uri)
 		if errors.Is(err, tools.ErrResourceNotFound) {
 			return nil, mcp.ResourceNotFoundError(uri)
 		}
 		if err != nil {
-			logger.Error("resource read failed", "uri", uri, "error", err)
-			return nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "internal error: could not read the resource"}
+			return nil, internalError(logger, "resources/read", err)
 		}
 		out := &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{URI: uri, MIMEType: tools.ResourceMIMEType, Text: text}}}
 		out.CacheScope = "private"
@@ -80,18 +81,22 @@ func readResourceHandler(res *tools.Resources, logger *slog.Logger) mcp.Resource
 // immediately stale (cacheScope "private", ttlMs 0): it lists the user's
 // own vault and changes whenever a project is created. The SDK fills these
 // fields only on answers it builds itself, and clients reject an empty
-// cacheScope. A failure is logged in full and reported with a generic
-// message.
+// cacheScope. The list is never paginated, so any cursor is invalid and
+// answered with an invalid-params error. A failure or a panic is answered
+// with an internal error (internalError, recoverAsInternal).
 func listResourcesMiddleware(res *tools.Resources, logger *slog.Logger) mcp.Middleware {
 	return func(next mcp.MethodHandler) mcp.MethodHandler {
-		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+		return func(ctx context.Context, method string, req mcp.Request) (_ mcp.Result, err error) {
 			if method != "resources/list" {
 				return next(ctx, method, req)
 			}
+			defer recoverAsInternal(logger, method, &err)
+			if p, ok := req.GetParams().(*mcp.ListResourcesParams); ok && p != nil && p.Cursor != "" {
+				return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "invalid cursor: resources/list returns every resource in one page"}
+			}
 			infos, err := res.List(ctx)
 			if err != nil {
-				logger.Error("resource list failed", "error", err)
-				return nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "internal error: could not list the resources"}
+				return nil, internalError(logger, method, err)
 			}
 			out := &mcp.ListResourcesResult{Resources: []*mcp.Resource{}}
 			out.CacheScope, out.TTLMs = "private", 0
@@ -111,8 +116,9 @@ func listResourcesMiddleware(res *tools.Resources, logger *slog.Logger) mcp.Midd
 
 // addPrompts registers every tools.Prompts definition on s. Getting a
 // prompt renders its instruction as one user message; invalid arguments
-// are reported as an invalid-params error.
-func addPrompts(s *mcp.Server) {
+// are reported as an invalid-params error, and a panic as an internal
+// error logged to logger.
+func addPrompts(s *mcp.Server, logger *slog.Logger) {
 	for _, def := range tools.Prompts {
 		args := make([]*mcp.PromptArgument, len(def.Arguments))
 		for i, a := range def.Arguments {
@@ -121,7 +127,8 @@ func addPrompts(s *mcp.Server) {
 		render := def.Render
 		description := def.Description
 		s.AddPrompt(&mcp.Prompt{Name: def.Name, Title: def.Title, Description: def.Description, Arguments: args},
-			func(_ context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+			func(_ context.Context, req *mcp.GetPromptRequest) (_ *mcp.GetPromptResult, err error) {
+				defer recoverAsInternal(logger, "prompts/get", &err)
 				text, err := render(req.Params.Arguments)
 				if err != nil {
 					return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: err.Error()}
@@ -135,14 +142,16 @@ func addPrompts(s *mcp.Server) {
 }
 
 // completionHandler returns the handler of completion/complete: for an
-// argument of a sync82 prompt or of a sync82 resource template, the
-// matching names from res.Complete; for any other reference, no values. A
-// failure is logged in full and reported with a generic message.
+// argument that a sync82 prompt or resource template actually has, the
+// matching names from res.Complete; for any other reference or argument,
+// no values. A failure or a panic is answered with an internal error
+// (internalError, recoverAsInternal).
 func completionHandler(res *tools.Resources, logger *slog.Logger) func(context.Context, *mcp.CompleteRequest) (*mcp.CompleteResult, error) {
-	return func(ctx context.Context, req *mcp.CompleteRequest) (*mcp.CompleteResult, error) {
+	return func(ctx context.Context, req *mcp.CompleteRequest) (_ *mcp.CompleteResult, err error) {
+		defer recoverAsInternal(logger, "completion/complete", &err)
 		out := &mcp.CompleteResult{Completion: mcp.CompletionResultDetails{Values: []string{}}}
 		p := req.Params
-		if p == nil || p.Ref == nil || !isSync82Reference(p.Ref) {
+		if p == nil || p.Ref == nil || !hasArgument(p.Ref, p.Argument.Name) {
 			return out, nil
 		}
 		var args map[string]string
@@ -151,8 +160,7 @@ func completionHandler(res *tools.Resources, logger *slog.Logger) func(context.C
 		}
 		values, total, err := res.Complete(ctx, p.Argument.Name, p.Argument.Value, args)
 		if err != nil {
-			logger.Error("completion failed", "argument", p.Argument.Name, "error", err)
-			return nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "internal error: could not complete the argument"}
+			return nil, internalError(logger, "completion/complete", err)
 		}
 		if values != nil {
 			out.Completion.Values = values
@@ -163,19 +171,25 @@ func completionHandler(res *tools.Resources, logger *slog.Logger) func(context.C
 	}
 }
 
-// isSync82Reference reports whether ref names one of tools.Prompts
-// ("ref/prompt") or one of tools.ResourceTemplates ("ref/resource").
-func isSync82Reference(ref *mcp.CompleteReference) bool {
+// hasArgument reports whether ref names one of tools.Prompts
+// ("ref/prompt") with an argument called name, or one of
+// tools.ResourceTemplates ("ref/resource") with a {name} variable.
+func hasArgument(ref *mcp.CompleteReference, name string) bool {
 	switch ref.Type {
 	case "ref/prompt":
 		for _, p := range tools.Prompts {
-			if p.Name == ref.Name {
-				return true
+			if p.Name != ref.Name {
+				continue
+			}
+			for _, a := range p.Arguments {
+				if a.Name == name {
+					return true
+				}
 			}
 		}
 	case "ref/resource":
 		for _, t := range tools.ResourceTemplates {
-			if t.URITemplate == ref.URI {
+			if t.URITemplate == ref.URI && strings.Contains(t.URITemplate, "{"+name+"}") {
 				return true
 			}
 		}

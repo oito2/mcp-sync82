@@ -175,6 +175,13 @@ func writeEntry(shape Shape, path, binaryPath string) (existed bool, err error) 
 	if err != nil {
 		return false, err
 	}
+	if v, present := cfg[shape.Key]; present && v != nil {
+		if _, ok := v.(map[string]any); !ok {
+			// Replacing it with an object holding only sync82 would drop
+			// whatever the user keeps there.
+			return false, fmt.Errorf("%s: %q is not a JSON object, so the file was left unchanged; fix it, then install again", path, shape.Key)
+		}
+	}
 	servers := asObject(cfg[shape.Key])
 	_, existed = servers[serverName]
 	entry := shape.Entry(binaryPath)
@@ -188,13 +195,18 @@ func writeEntry(shape Shape, path, binaryPath string) (existed bool, err error) 
 }
 
 // writeConfig writes cfg as indented JSON with a trailing newline to
-// path, keeping the mode of an existing file.
+// path, keeping the mode of an existing file. Characters such as "&", "<"
+// and ">" are written as they are, not escaped, so values the user wrote
+// (URLs, commands) don't change form when the file is rewritten.
 func writeConfig(path string, cfg map[string]any) error {
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(cfg); err != nil {
 		return err
 	}
-	return fsutil.AtomicWriteFile(path, append(data, '\n'), 0o644)
+	return fsutil.AtomicWriteFile(path, buf.Bytes(), 0o644)
 }
 
 // fileHasEntry reports whether the config file at path holds an entry
@@ -244,12 +256,16 @@ func readConfig(path string) (cfg map[string]any, strict bool, err error) {
 }
 
 // decodeObject decodes raw as exactly one JSON object, keeping numbers as
-// json.Number.
+// json.Number. Anything after the object other than white space, even a
+// stray "}" or "]", makes it fail.
 func decodeObject(raw []byte) (map[string]any, bool) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	var cfg map[string]any
-	if err := dec.Decode(&cfg); err != nil || cfg == nil || dec.More() {
+	if err := dec.Decode(&cfg); err != nil || cfg == nil {
+		return nil, false
+	}
+	if _, err := dec.Token(); err != io.EOF {
 		return nil, false
 	}
 	return cfg, true

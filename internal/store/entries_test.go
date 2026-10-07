@@ -621,3 +621,32 @@ func TestArchiveEntries_WithSummary(t *testing.T) {
 		t.Fatalf("second archive = %+v, %v; want nothing archived (the summary is not older than the cutoff) and no summary", result, err)
 	}
 }
+
+// TestWriteKinds_AppendAddsAfterExistingEntries verifies that an Append
+// write adds its sections after the existing entries without removing them,
+// in the same transaction as the other writes.
+func TestWriteKinds_AppendAddsAfterExistingEntries(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendEntry(ctx, "acme", "", "progress", "2026-01-01", "## 2026-01-01\n- first"); err != nil {
+		t.Fatal(err)
+	}
+	doc := "state"
+	err := s.WriteKinds(ctx, "acme", "", []KindWrite{
+		{Kind: "progress", Append: true, Sections: []EntrySection{{Date: "2026-01-01", Body: "## 2026-01-01\n- second"}}},
+		{Kind: "memory", Document: &doc},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := s.ReadEntries(ctx, "acme", "", "progress", false)
+	if err != nil || len(entries) != 2 || entries[0].Body != "## 2026-01-01\n- first" || entries[1].Body != "## 2026-01-01\n- second" {
+		t.Fatalf("entries = %+v, %v", entries, err)
+	}
+	if content, ok, _ := s.ReadDocument(ctx, "acme", "", "memory"); !ok || content != "state" {
+		t.Fatalf("memory = %q (ok=%v)", content, ok)
+	}
+}

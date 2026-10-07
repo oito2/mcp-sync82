@@ -582,3 +582,19 @@ func TestSearchMemoryTool_SubprojectWithoutProjectIsReported(t *testing.T) {
 		t.Fatalf("result = %+v, want an error result instead of a vault-wide search", result)
 	}
 }
+
+// TestSearchMemoryTool_RejectsInvalidProjectName verifies that an invalid
+// explicit project or subproject name is a validation error instead of a
+// misleading "project not found".
+func TestSearchMemoryTool_RejectsInvalidProjectName(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	tool := &SearchMemoryTool{Resolver: r, Stores: mgr}
+	for _, args := range []map[string]any{
+		{"query": "x", "project": "bad name!"},
+		{"query": "x", "project": "acme", "subproject": "../up"},
+	} {
+		if _, err := tool.Validate(mustJSON(t, args)); err == nil || !strings.Contains(err.Error(), "must start with a letter or digit") {
+			t.Errorf("Validate(%v) = %v, want a name error", args, err)
+		}
+	}
+}

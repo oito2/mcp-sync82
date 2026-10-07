@@ -18,6 +18,7 @@ package store
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -324,6 +325,37 @@ func TestSearchText_EntryHitsCarryTheEntryID(t *testing.T) {
 		}
 		if r.EntryID != want {
 			t.Errorf("%s hit has EntryID %d, want %d", r.Kind, r.EntryID, want)
+		}
+	}
+}
+
+// TestSearchText_NegativePagingAndCRLF verifies that a negative offset or
+// limit doesn't panic, and that CRLF content yields lines without "\r".
+func TestSearchText_NegativePagingAndCRLF(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteDocument(ctx, "acme", "", "memory", "first needle\r\nsecond needle\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []SearchMode{SearchWords, SearchExact} {
+		results, _, err := s.SearchText(ctx, SearchOptions{Query: "needle", Mode: mode, Scope: SearchScope{Project: "acme"}, Offset: -3, Limit: -1})
+		if err != nil {
+			t.Fatalf("%s: %v", mode, err)
+		}
+		if len(results) != 1 {
+			t.Errorf("%s with negative paging: %d results, want 1 (limit 0 plus the look-ahead one)", mode, len(results))
+		}
+		results, _, err = s.SearchText(ctx, SearchOptions{Query: "needle", Mode: mode, Scope: SearchScope{Project: "acme"}, Limit: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range results {
+			if strings.HasSuffix(r.Line, "\r") {
+				t.Errorf("%s: line %q keeps its carriage return", mode, r.Line)
+			}
 		}
 	}
 }

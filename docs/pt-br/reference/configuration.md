@@ -4,7 +4,7 @@
 
 # Referência de Configuração
 
-Toda fonte de configuração que o sync82 lê. O sync82 **não tem flags de linha de comando** para o servidor e tem **uma variável de ambiente**; todo o resto fica em dois pequenos arquivos JSON. Para ver como essas fontes se combinam numa chamada de tool, veja [Resolução de Contexto](../architecture/context-resolution.md).
+Toda fonte de configuração que o sync82 lê. O sync82 **não tem flags de linha de comando** para o servidor e tem **uma variável de ambiente** para ele (o `install`/`uninstall` leem mais algumas para achar os arquivos de configuração dos clientes); todo o resto fica em dois pequenos arquivos JSON. Para ver como essas fontes se combinam numa chamada de tool, veja [Resolução de Contexto](../architecture/context-resolution.md).
 
 ---
 
@@ -25,6 +25,10 @@ Toda fonte de configuração que o sync82 lê. O sync82 **não tem flags de linh
 | Variável | Padrão | Descrição |
 |---|---|---|
 | `SYNC82_DB_PATH` | `~/.sync82/knowledge.db` | Arquivo de vault usado quando nenhum argumento `path`, `path` do `.sync82.json` ou `vaultPath` global se aplica. Um `~`, `~/`, `HOME`, `HOME/`, `$HOME` ou `$HOME/` no início é expandido para o diretório home. Lida uma vez, quando o servidor (ou `export`/`import`) inicia. |
+| `XDG_CONFIG_HOME` | `~/.config` | Só `install`/`uninstall` — onde os arquivos de configuração do Claude Desktop (Linux), OpenCode, Zed e Cline são procurados. Usada só quando é um caminho absoluto. |
+| `APPDATA` | `<home>/AppData/Roaming` | Só `install`/`uninstall`, no Windows — onde os arquivos de configuração do Claude Desktop, Zed e Cline são procurados. |
+| `CLINE_DATA_DIR` | `~/.cline` | Só `install`/`uninstall` — o diretório de dados da CLI do Cline. |
+| `CLINE_MCP_SETTINGS_PATH` | — | Só `install`/`uninstall` — um caminho absoluto para o arquivo de configurações MCP do Cline, usado no lugar dos padrões. |
 
 Para defini-la em um cliente, adicione-a à entrada do servidor naquele cliente, ex. numa config no estilo `mcpServers`:
 
@@ -124,7 +128,7 @@ O bundle `sync82.mcpb` declara uma configuração de usuário opcional, exibida 
 
 | Chave | Título | Tipo | Padrão | Efeito |
 |---|---|---|---|---|
-| `db_path` | Vault database path | string | `~/.sync82/knowledge.db` | Repassado ao servidor como `SYNC82_DB_PATH`. Um `~` no início é expandido; o arquivo é criado se não existir. |
+| `db_path` | Vault database path | string | `~/.sync82/knowledge.db` | Repassado ao servidor como `SYNC82_DB_PATH`. Um `~` no início é expandido; o arquivo é criado pelo primeiro `create_project`, `init_project_memory` ou `import_memory`. |
 
 Como ela chega como `SYNC82_DB_PATH`, um `vaultPath` definido com `sync82 config set-vault` e o `.sync82.json` de um workspace continuam tendo precedência sobre ela.
 

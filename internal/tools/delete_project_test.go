@@ -19,6 +19,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/oito2/mcp-sync82/internal/config"
 )
 
 // TestDeleteProjectTool_Validate verifies that validation rejects a missing
@@ -346,5 +348,54 @@ func TestDeleteProjectTool_NotFound_IsExecutionError(t *testing.T) {
 	}
 	if _, err := tool.Execute(ctx, parsed); err == nil {
 		t.Fatal("expected an execution error for a project that doesn't exist")
+	}
+}
+
+// TestDeleteProjectTool_ForgetsOrFollowsTheLastProject verifies that
+// deleting the remembered project clears it, deleting another subproject
+// leaves it, and promoting moves a remembered subproject to the root.
+func TestDeleteProjectTool_ForgetsOrFollowsTheLastProject(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	ctx := context.Background()
+	s, err := mgr.Get(ctx, r.DefaultDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range [][2]string{{"acme", "api"}, {"acme", "web"}, {"solo", ""}} {
+		if _, _, err := s.EnsureProject(ctx, p[0], p[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tool := &DeleteProjectTool{Resolver: r, Stores: mgr}
+	remember := func(project, subproject string) {
+		t.Helper()
+		if err := config.WriteGlobalConfig(config.GlobalConfig{LastProject: project, LastSubproject: subproject, LastVaultPath: r.DefaultDBPath}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	last := func() (string, string) {
+		t.Helper()
+		c, err := config.ReadGlobalConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c.LastProject, c.LastSubproject
+	}
+
+	remember("acme", "api")
+	runTool(t, tool, map[string]any{"project": "acme", "subproject": "web", "confirm": true})
+	if p, sp := last(); p != "acme" || sp != "api" {
+		t.Errorf("after deleting another subproject, last = %s/%s, want acme/api", p, sp)
+	}
+
+	runTool(t, tool, map[string]any{"project": "acme", "subproject_action": "promote", "confirm": true})
+	if p, sp := last(); p != "api" || sp != "" {
+		t.Errorf("after promoting, last = %s/%s, want api", p, sp)
+	}
+
+	remember("solo", "")
+	runTool(t, tool, map[string]any{"project": "solo", "confirm": true})
+	if p, sp := last(); p != "" || sp != "" {
+		t.Errorf("after deleting the remembered project, last = %s/%s, want none", p, sp)
 	}
 }

@@ -135,7 +135,8 @@ const (
 //
 // It returns the matching lines skipping the first opts.Offset, up to
 // opts.Limit+1 of them: the extra one lets the caller detect that more
-// results exist. The boolean reports whether the scan stopped at
+// results exist (a negative Offset or Limit counts as 0). Lines are split
+// on "\n" with a trailing "\r" removed, so CRLF content reads like LF. The boolean reports whether the scan stopped at
 // maxScannedRows or maxScannedBytes, in which case later matches are
 // missing. It returns an error wrapping ErrNotFound when the scoped
 // project or subproject does not exist, an error wrapping ErrNoSearchTerms
@@ -181,6 +182,9 @@ func (s *Store) SearchText(ctx context.Context, opts SearchOptions) ([]SearchRes
 	var all []match
 	for rowIndex, r := range rows {
 		lines := strings.Split(r.content, "\n")
+		for i, l := range lines {
+			lines[i] = strings.TrimSuffix(l, "\r") // CRLF content
+		}
 		for _, i := range matchingLines(lines, opts.Mode, opts.Query, terms) {
 			res := SearchResult{
 				Project:    r.project,
@@ -218,15 +222,13 @@ func (s *Store) SearchText(ctx context.Context, opts SearchOptions) ([]SearchRes
 		})
 	}
 
-	if opts.Offset >= len(all) {
+	offset, limit := max(opts.Offset, 0), max(opts.Limit, 0)
+	if offset >= len(all) {
 		return []SearchResult{}, truncated, nil
 	}
-	end := opts.Offset + opts.Limit + 1
-	if end > len(all) {
-		end = len(all)
-	}
-	out := make([]SearchResult, 0, end-opts.Offset)
-	for _, m := range all[opts.Offset:end] {
+	end := min(offset+limit+1, len(all))
+	out := make([]SearchResult, 0, end-offset)
+	for _, m := range all[offset:end] {
 		out = append(out, m.SearchResult)
 	}
 	return out, truncated, nil

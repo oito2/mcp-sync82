@@ -17,6 +17,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -115,8 +116,9 @@ func TestImportProjectCore_CreatesProjectIfMissing(t *testing.T) {
 }
 
 // TestImportProjectCore_SkipsInvalidKindNamesAndEmptyFiles verifies that
-// import skips files whose name is not a valid kind or whose content is blank,
-// ignores files that are not .md, and imports the remaining files.
+// import skips files whose name is not a valid kind, is a well-known
+// non-kind name (README, CHANGELOG…) or whose content is blank, ignores
+// files that are not .md, and imports the remaining files.
 func TestImportProjectCore_SkipsInvalidKindNamesAndEmptyFiles(t *testing.T) {
 	r, mgr := newToolTestEnv(t)
 	ctx := context.Background()
@@ -127,10 +129,11 @@ func TestImportProjectCore_SkipsInvalidKindNamesAndEmptyFiles(t *testing.T) {
 
 	dir := t.TempDir()
 	files := map[string]string{
-		"memory.md":  "real content",
-		"README.md":  "not a kind name pattern issue? actually valid slug — see note below",
-		"empty.md":   "   ", // whitespace-only, treated as empty
-		"notes.json": "irrelevant, not .md",
+		"memory.md":    "real content",
+		"README.md":    "a repository readme next to the export",
+		"CHANGELOG.md": "a repository changelog",
+		"empty.md":     "   ", // whitespace-only, treated as empty
+		"notes.json":   "irrelevant, not .md",
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
@@ -148,14 +151,18 @@ func TestImportProjectCore_SkipsInvalidKindNamesAndEmptyFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("importProjectCore: %v", err)
 	}
-	// memory.md and README.md are valid kind slugs. Only "-bad-name.md"
-	// (leading hyphen) and "empty.md" (blank content) are skipped, and
-	// "notes.json" is not considered because it is not a .md file.
-	if imported != 2 {
-		t.Fatalf("imported = %d, want 2 (memory, README)", imported)
+	// Only memory.md is imported. README.md and CHANGELOG.md are valid
+	// slugs but well-known non-kind names, "-bad-name.md" fails the slug
+	// pattern and "empty.md" is blank; "notes.json" is not a .md file.
+	if imported != 1 {
+		t.Fatalf("imported = %d, want 1 (memory)", imported)
 	}
-	if len(skipped) != 2 {
-		t.Fatalf("skipped = %v, want 2 entries (-bad-name.md, empty.md)", skipped)
+	if want := []string{"-bad-name.md", "CHANGELOG.md", "README.md", "empty.md"}; !slices.Equal(skipped, want) {
+		t.Fatalf("skipped = %v, want %v", skipped, want)
+	}
+	kinds, err := s.ListKinds(ctx, "acme", "", false)
+	if err != nil || !slices.Equal(kinds, []string{"memory"}) {
+		t.Fatalf("kinds = %v, %v; want only memory", kinds, err)
 	}
 }
 
@@ -298,5 +305,36 @@ func TestImportProjectCore_RejectsFilesCollidingAfterLowerCasing(t *testing.T) {
 	}
 	if _, err := importProjectCore(ctx, s, "acme", "", dir, false); err == nil {
 		t.Fatal("expected Memory.md and memory.md to be rejected as the same kind")
+	}
+}
+
+// TestImportProjectCore_RefusesMoreThanTheTotalLimit verifies that an
+// import whose files hold more than maxImportTotalBytes in total fails
+// before writing anything, even when each file is within maxContentSize.
+func TestImportProjectCore_RefusesMoreThanTheTotalLimit(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	ctx := context.Background()
+	s, err := mgr.Get(ctx, r.DefaultDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	perFile := int64(maxContentSize - 1)
+	for i := 0; int64(i)*perFile <= maxImportTotalBytes; i++ {
+		f, err := os.Create(filepath.Join(dir, fmt.Sprintf("kind%02d.md", i)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// A sparse file: the size counts, nothing is written to disk.
+		if err := f.Truncate(perFile); err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+	}
+	if _, err := importProjectCore(ctx, s, "acme", "", dir, false); err == nil || !strings.Contains(err.Error(), "in total") {
+		t.Fatalf("err = %v, want the total-size error", err)
+	}
+	if exists, err := s.ProjectExists(ctx, "acme", ""); err != nil || exists {
+		t.Fatalf("project created by a refused import (exists=%v, err=%v)", exists, err)
 	}
 }

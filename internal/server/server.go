@@ -21,7 +21,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"log/slog"
+	"runtime/debug"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/oito2/mcp-sync82/internal/store"
@@ -64,7 +66,7 @@ func New(name, version string, logger *slog.Logger, registeredTools []tools.Tool
 			Annotations: toolAnnotations(t.Name()),
 		}, adapt(t, logger, onProjectsChanged))
 	}
-	addPrompts(s)
+	addPrompts(s, logger)
 	if resources != nil {
 		projectsChanged = addResources(s, resources, logger)
 	}
@@ -123,14 +125,13 @@ func serverIcons() []mcp.Icon {
 func adapt(t tools.Tool, logger *slog.Logger, onProjectsChanged func()) mcp.ToolHandler {
 	hints, _ := tools.HintsFor(t.Name())
 	return func(ctx context.Context, req *mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
-		// The MCP SDK runs each request in its own goroutine — an
-		// unrecovered panic here (a bad type assertion, a nil map write on
-		// an edge case no test happens to cover) would otherwise take that
-		// goroutine down without ever sending a response, leaving the
-		// calling client hanging instead of seeing a clean error.
+		// The MCP SDK runs each request in its own goroutine and recovers
+		// from no panic: an unrecovered panic here (a bad type assertion, a
+		// nil map write on an edge case no test happens to cover) would
+		// crash the whole process, ending every client's session.
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Error("tool panicked", "tool", t.Name(), "panic", r)
+				logger.Error("tool panicked", "tool", t.Name(), "panic", r, "stack", string(debug.Stack()))
 				result, err = errorResult("internal error: tool execution failed unexpectedly"), nil
 			}
 		}()
@@ -165,15 +166,16 @@ func errorResult(msg string) *mcp.CallToolResult {
 	}
 }
 
-// clientMessage logs err in full server-side and returns the message the
-// calling agent sees. Store errors are already worded for the agent
-// (e.g. `project not found: "foo"`), so err.Error() is used as-is, with
-// one exception: a store.ErrOpenFailed error carries low-level detail
-// about opening the vault file (paths, SQLite errors) and is replaced by
-// a generic message, or by store.ErrSchemaTooNew's message when the vault
-// was upgraded by a newer sync82 — the full error is still in the log.
-func clientMessage(logger *slog.Logger, toolName string, err error) string {
-	logger.Error("tool execution failed", "tool", toolName, "error", err)
+// clientMessage logs err in full server-side, naming the tool or MCP
+// method that failed (handler), and returns the message the calling agent
+// sees. Store errors are already worded for the agent (e.g. `project not
+// found: "foo"`), so err.Error() is used as-is, with one exception: a
+// store.ErrOpenFailed error carries low-level detail about opening the
+// vault file (paths, SQLite errors) and is replaced by a generic message,
+// or by store.ErrSchemaTooNew's message when the vault was upgraded by a
+// newer sync82 — the full error is still in the log.
+func clientMessage(logger *slog.Logger, handler string, err error) string {
+	logger.Error("request failed", "handler", handler, "error", err)
 	if errors.Is(err, store.ErrSchemaTooNew) {
 		return "could not open the vault database: " + store.ErrSchemaTooNew.Error()
 	}
@@ -181,4 +183,20 @@ func clientMessage(logger *slog.Logger, toolName string, err error) string {
 		return "internal error: could not open the vault database"
 	}
 	return err.Error()
+}
+
+// internalError returns the JSON-RPC internal error an MCP method other
+// than a tool call answers with when err occurs, worded by clientMessage.
+func internalError(logger *slog.Logger, method string, err error) error {
+	return &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: clientMessage(logger, method, err)}
+}
+
+// recoverAsInternal, deferred by an MCP method handler with named error
+// result *err, turns a panic into a logged internal error answer instead
+// of a crash of the whole process (the SDK recovers from no panic).
+func recoverAsInternal(logger *slog.Logger, method string, err *error) {
+	if r := recover(); r != nil {
+		logger.Error("handler panicked", "handler", method, "panic", r, "stack", string(debug.Stack()))
+		*err = &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "internal error: the request failed unexpectedly"}
+	}
 }

@@ -67,7 +67,7 @@ func (t *ArchiveMemoryTool) Name() string { return "archive_memory" }
 // Description returns the text shown to the calling agent that explains what
 // the tool does and how to use it.
 func (t *ArchiveMemoryTool) Description() string {
-	return `Archive old dated entries from progress.md or decisions.md, keeping only the last N days active. Entries without a date header are never archived. Archived entries leave the loaded context; to keep what they said, first call with dry_run: true (lists the entries that would be archived, writes nothing), read them with read_memory, then call again with summary: the summary is added as a new active entry in the same step, dated today and headed "## YYYY-MM-DD — Summary of N archived entries (from … to …)" unless it has its own "## YYYY-MM-DD" header, which must not be older than the archive cutoff. The project must be given via project or workspace_root, not taken from the last session.`
+	return `Archive old dated entries from progress.md or decisions.md, keeping only the last N days active (counted in UTC). Entries without a date header are never archived. Archived entries leave the loaded context; to keep what they said, first call with dry_run: true (lists the entries that would be archived, writes nothing), read them with read_memory, then call again with summary: the summary is added as a new active entry in the same step, dated today (UTC) and headed "## YYYY-MM-DD — Summary of N archived entries (from … to …)" unless it has its own "## YYYY-MM-DD" header, which must not be older than the archive cutoff. The project must be given via project or workspace_root, not taken from the last session.`
 }
 
 // InputSchema returns the JSON Schema of the tool's arguments: an object

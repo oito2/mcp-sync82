@@ -161,13 +161,15 @@ func replaceEntriesIn(ctx context.Context, db execer, projectID int64, kind stri
 
 // KindWrite is one kind's new content in a WriteKinds batch: Document for an
 // overwrite-style kind, or Sections replacing its entries (the non-archived
-// ones, or the archived ones when Archived is set). Document takes
-// precedence when non-nil.
+// ones, or the archived ones when Archived is set). With Append, Sections
+// are added as new non-archived entries after the existing ones instead,
+// as AppendEntry adds one. Document takes precedence when non-nil.
 type KindWrite struct {
 	Kind     string
 	Document *string
 	Sections []EntrySection
 	Archived bool
+	Append   bool
 }
 
 // WriteKinds applies every write to (project, subproject) in one transaction:
@@ -188,9 +190,12 @@ func (s *Store) WriteKinds(ctx context.Context, project, subproject string, writ
 
 	for _, w := range writes {
 		kind := normalizeName(w.Kind)
-		if w.Document != nil {
+		switch {
+		case w.Document != nil:
 			err = writeDocument(ctx, tx, projectID, kind, *w.Document)
-		} else {
+		case w.Append:
+			err = appendEntriesIn(ctx, tx, projectID, kind, w.Sections)
+		default:
 			err = replaceEntriesIn(ctx, tx, projectID, kind, w.Sections, w.Archived)
 		}
 		if err != nil {
@@ -198,6 +203,24 @@ func (s *Store) WriteKinds(ctx context.Context, project, subproject string, writ
 		}
 	}
 	return tx.Commit()
+}
+
+// appendEntriesIn adds sections as new non-archived entries of
+// (projectID, kind), each at the next insertion position, as AppendEntry
+// does. kind must be normalized; db should be a transaction when several
+// writes must apply together. It returns the first database error.
+func appendEntriesIn(ctx context.Context, db execer, projectID int64, kind string, sections []EntrySection) error {
+	for _, section := range sections {
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO entries (project_id, kind, entry_date, body, archived, created_at, position)
+			VALUES (?, ?, ?, ?, 0, ?,
+				(SELECT COALESCE(MAX(position), -1) + 1 FROM entries WHERE project_id = ? AND kind = ?))`,
+			projectID, kind, nullableString(section.Date), section.Body, now(), projectID, kind,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ReadEntries returns entries for (project, kind) in reading order: a

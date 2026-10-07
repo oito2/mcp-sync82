@@ -406,3 +406,31 @@ func TestAsObject(t *testing.T) {
 		t.Errorf("asObject(object) = %v, want it unchanged", got)
 	}
 }
+
+// TestInstallTarget_File_KeepsUserValuesAndRefusesBadShapes verifies that a
+// rewrite keeps characters such as "&" and "<" as written, that a
+// non-object server key is refused instead of replaced, and that a file
+// with a stray closing bracket after the object is not rewritten.
+func TestInstallTarget_File_KeepsUserValuesAndRefusesBadShapes(t *testing.T) {
+	env := testEnv("linux", t.TempDir(), nil)
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	writeFile(t, configPath, `{"mcpServers":{"other":{"url":"https://x?a=1&b=<2>"}}}`, 0o644)
+	if got, _, _ := install(t, fileTargetAt(configPath), env); got != ResultOK {
+		t.Fatalf("install = %q", got)
+	}
+	if data, _ := os.ReadFile(configPath); !strings.Contains(string(data), `https://x?a=1&b=<2>`) {
+		t.Errorf("the user's URL was re-escaped: %s", data)
+	}
+
+	for _, original := range []string{`{"mcpServers":[]}`, `{"mcpServers":"x"}`, `{"mcpServers":{}}}`, `{"a":1}]`} {
+		path := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, path, original, 0o644)
+		if got, _, _ := install(t, fileTargetAt(path), env); got != ResultFail {
+			t.Errorf("%s: install = %q, want %q", original, got, ResultFail)
+		}
+		if data, _ := os.ReadFile(path); string(data) != original {
+			t.Errorf("%s: the file was rewritten to %q", original, data)
+		}
+	}
+}

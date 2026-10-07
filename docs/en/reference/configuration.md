@@ -4,7 +4,7 @@
 
 # Configuration Reference
 
-Every source of configuration sync82 reads. sync82 has **no command-line flags** for the server and **one environment variable**; everything else lives in two small JSON files. For how these sources combine on a tool call, see [Context Resolution](../architecture/context-resolution.md).
+Every source of configuration sync82 reads. sync82 has **no command-line flags** for the server and **one environment variable** for it (`install`/`uninstall` read a few more to find client config files); everything else lives in two small JSON files. For how these sources combine on a tool call, see [Context Resolution](../architecture/context-resolution.md).
 
 ---
 
@@ -25,6 +25,10 @@ Every source of configuration sync82 reads. sync82 has **no command-line flags**
 | Variable | Default | Description |
 |---|---|---|
 | `SYNC82_DB_PATH` | `~/.sync82/knowledge.db` | Vault file used when no `path` argument, `.sync82.json` `path` or global `vaultPath` applies. A leading `~`, `~/`, `HOME`, `HOME/`, `$HOME` or `$HOME/` is expanded to the home directory. Read once when the server (or `export`/`import`) starts. |
+| `XDG_CONFIG_HOME` | `~/.config` | `install`/`uninstall` only — where the Claude Desktop (Linux), OpenCode, Zed and Cline config files are looked up. Used only when it is an absolute path. |
+| `APPDATA` | `<home>/AppData/Roaming` | `install`/`uninstall` only, on Windows — where the Claude Desktop, Zed and Cline config files are looked up. |
+| `CLINE_DATA_DIR` | `~/.cline` | `install`/`uninstall` only — the Cline CLI's data directory. |
+| `CLINE_MCP_SETTINGS_PATH` | — | `install`/`uninstall` only — an absolute path to the Cline MCP settings file to use instead of the default ones. |
 
 To set it for one client, add it to that client's server entry, e.g. in a `mcpServers`-style config:
 
@@ -124,7 +128,7 @@ The `sync82.mcpb` bundle declares one optional user setting, shown by Claude Des
 
 | Key | Title | Type | Default | Effect |
 |---|---|---|---|---|
-| `db_path` | Vault database path | string | `~/.sync82/knowledge.db` | Passed to the server as `SYNC82_DB_PATH`. A leading `~` is expanded; the file is created if missing. |
+| `db_path` | Vault database path | string | `~/.sync82/knowledge.db` | Passed to the server as `SYNC82_DB_PATH`. A leading `~` is expanded; the file is created by the first `create_project`, `init_project_memory` or `import_memory`. |
 
 Because it is delivered as `SYNC82_DB_PATH`, a `vaultPath` set with `sync82 config set-vault` and a workspace's `.sync82.json` still take precedence over it.
 

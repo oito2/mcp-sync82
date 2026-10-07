@@ -14,7 +14,7 @@ O sync82 expõe 19 tools via MCP. Toda tool que opera sobre um projeto específi
 | `subproject` | string | Nome do subprojeto, para um componente de um projeto existente. |
 | `workspace_root` | string | Caminho da pasta do seu projeto, usado para auto-descobrir o projeto via `.sync82.json`. |
 | `search_parent_dirs` | boolean | Se `true`, também procura `.sync82.json` em diretórios acima de `workspace_root` (útil em monorepos, onde o arquivo de marcador fica na raiz do repositório). O padrão é `false` — só `workspace_root` é checado, já que um `.sync82.json` encontrado em um ancestral que você não controla poderia redirecionar silenciosamente para onde a memória é armazenada. |
-| `path` | string | Caminho base onde a memória é armazenada. Se deixado em branco, usa o caminho padrão do vault. Para usar o diretório padrão do usuário, comece o caminho com `"HOME"` (ex. `"HOME/vault-customizado"`). |
+| `path` | string | Caminho base onde a memória é armazenada. Se deixado em branco, usa o caminho padrão do vault. Um `~`, `HOME` ou `$HOME` no início (ex. `"~/vaults/trabalho.db"`, `"HOME/vault-customizado"`) é expandido para o diretório do usuário. |
 
 Se nenhum de `project`, `subproject`, `workspace_root` resolver para um projeto e não houver um último projeto usado registrado, a tool retorna uma mensagem pedindo ao agente chamador um nome de projeto ou `workspace_root`, em vez de falhar.
 
@@ -143,7 +143,7 @@ Sobrescreve o conteúdo inteiro de um arquivo de memória. **Destrutivo**: para 
 
 Anexa uma nova entrada datada a um arquivo de memória só-anexa (`progress`, `decisions`, ou um kind customizado). `progress` e `decisions` **exigem** um cabeçalho de data `## YYYY-MM-DD` em algum lugar de `content`. Arquivos de sobrescrita (`memory`, `architecture`, `stack`, `next_steps`, ou um kind customizado criado com `write_memory`) são recusados com um resultado de erro — use `write_memory` para eles.
 
-<a id="date-headers"></a>**Cabeçalhos de data:** um cabeçalho de data é `##`, espaços ou tabs, e a data na **mesma linha** (`## 2026-10-06`). Cabeçalhos dentro de blocos de código cercados (```` ``` ```` ou `~~~`) são ignorados. Se o primeiro cabeçalho tem uma data inválida (ex. `## 2026-13-01`), vale o primeiro cabeçalho válido depois dele.
+<a id="date-headers"></a>**Cabeçalhos de data:** um cabeçalho de data é `##`, espaços ou tabs, e a data na **mesma linha** (`## 2026-10-06`). Cabeçalhos dentro de blocos de código cercados (```` ``` ```` ou `~~~`) são ignorados. Se o primeiro cabeçalho tem uma data inválida (ex. `## 2026-13-01`), vale o primeiro cabeçalho válido depois dele. Um bloco aberto com ```` ``` ```` só fecha no próximo ```` ``` ````, e um aberto com `~~~` só no próximo `~~~`. As datas que o próprio sync82 grava ou compara — o corte e o cabeçalho de resumo do `archive_memory`, a marca de superação do `edit_entry`, as idades do `check_project_health` — usam o dia do calendário em UTC, que à noite (a oeste de UTC) já pode ser amanhã.
 
 | Argumento | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
@@ -344,7 +344,7 @@ Salva o trabalho de uma sessão no vault do projeto numa única chamada — a to
 
 `custom` aceita no máximo 50 itens, e o conteúdo total de uma chamada pode ter no máximo 10 MB.
 
-Cada campo é uma operação independente — se uma falhar (ex. uma entrada customizada malformada), as outras ainda se aplicam; o resultado geral só é sinalizado como erro se pelo menos uma operação falhou.
+A chamada é tudo ou nada: todos os campos são conferidos antes — `progress`/`decisions` precisam de um cabeçalho `## YYYY-MM-DD`, nenhum campo pode estar vazio — e todos os problemas são informados juntos. Depois, todos os campos são gravados numa única transação. Se algum campo for recusado (inclusive anexar a um arquivo customizado guardado como documento de sobrescrita), nada é gravado e o resultado lista os campos a corrigir.
 
 ---
 

@@ -14,7 +14,7 @@ sync82 exposes 19 tools over MCP. Every tool that operates on a specific project
 | `subproject` | string | Subproject name, for a component of an existing project. |
 | `workspace_root` | string | Path to your project folder, used to auto-discover the project via `.sync82.json`. |
 | `search_parent_dirs` | boolean | If true, also look for `.sync82.json` in parent directories above `workspace_root` (useful in monorepos, where the marker file lives at the repo root). Defaults to `false` — only `workspace_root` itself is checked, since a `.sync82.json` found in an ancestor directory you don't control could otherwise silently redirect where memory is stored. |
-| `path` | string | Base path where the memory is stored. If left blank, uses the default vault path. To use the default user directory, start the path with `"HOME"` (e.g. `"HOME/custom-vault"`). |
+| `path` | string | Base path where the memory is stored. If left blank, uses the default vault path. A leading `~`, `HOME` or `$HOME` (e.g. `"~/vaults/work.db"`, `"HOME/custom-vault"`) is expanded to the user's home directory. |
 
 If none of `project`, `subproject`, `workspace_root` resolve to a project and no last-used project is on record, the tool returns a message asking the calling agent for a project name or `workspace_root` instead of failing.
 
@@ -143,7 +143,7 @@ Overwrite a memory file's entire content. **Destructive**: for append-only kinds
 
 Append a new dated entry to an append-only memory file (`progress`, `decisions`, or a custom kind). `progress` and `decisions` **require** a `## YYYY-MM-DD` date header somewhere in `content`. Overwrite-style files (`memory`, `architecture`, `stack`, `next_steps`, or a custom kind created with `write_memory`) are rejected with an error result — use `write_memory` for those.
 
-<a id="date-headers"></a>**Date headers:** a date header is `##`, spaces or tabs, then the date on the **same line** (`## 2026-10-06`). Headers inside fenced code blocks (```` ``` ```` or `~~~`) are ignored. If the first header has an invalid date (e.g. `## 2026-13-01`), the first valid header after it is used.
+<a id="date-headers"></a>**Date headers:** a date header is `##`, spaces or tabs, then the date on the **same line** (`## 2026-10-06`). Headers inside fenced code blocks (```` ``` ```` or `~~~`) are ignored. If the first header has an invalid date (e.g. `## 2026-13-01`), the first valid header after it is used. A block opened by ```` ``` ```` closes only at the next ```` ``` ````, and one opened by `~~~` only at the next `~~~`. The dates sync82 writes or compares itself — the `archive_memory` cutoff and summary header, the `edit_entry` supersede mark, `check_project_health`'s ages — use the UTC calendar day, which in the evening (west of UTC) can already be tomorrow.
 
 | Argument | Type | Required | Description |
 |---|---|---|---|
@@ -344,7 +344,7 @@ Save a session's work to the project vault in a single call — the tool most ag
 
 `custom` accepts at most 50 items, and the total content of one call may be at most 10 MB.
 
-Each field is an independent operation — if one fails (e.g. a malformed custom entry), the others still apply; the overall result is only flagged as an error if at least one operation failed.
+The call is all or nothing: every field is checked first — `progress`/`decisions` need a `## YYYY-MM-DD` header, no field may be empty — and every problem is reported together. Then all fields are written in one transaction. If any field is rejected (including an append to a custom file stored as an overwrite-style document), nothing is written and the result lists the fields to fix.
 
 ---
 

@@ -75,14 +75,16 @@ func (t *WriteMemoryTool) InputSchema() map[string]any {
 	}
 }
 
-// Validate decodes raw into writeMemoryArgs and checks filename and content
-// with validateWriteInput. It returns the arguments with Filename normalized
-// to its lower-case kind name, or an error listing every violated rule.
+// Validate decodes raw into writeMemoryArgs, removes entry id marker lines
+// from content and checks filename and content with validateWriteInput. It
+// returns the arguments with Filename normalized to its lower-case kind
+// name, or an error listing every violated rule.
 func (t *WriteMemoryTool) Validate(raw json.RawMessage) (any, error) {
 	var args writeMemoryArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
+	args.Content = stripEntryMarkers(args.Content)
 	kind, err := validateWriteInput(args.Filename, args.Content)
 	if err != nil {
 		return nil, err

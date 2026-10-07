@@ -14,9 +14,10 @@ Rodar o binário sem argumentos inicia o servidor MCP via stdio. É isso que seu
 
 ```bash
 sync82
+sync82 serve   # o mesmo, por extenso
 ```
 
-- Registra todas as [19 tools](./tools.md).
+- Registra todas as [19 tools](./tools.md), os [resources](./resources.md) e os [prompts MCP](./mcp-prompts.md).
 - Resolve o caminho padrão do vault a partir da variável de ambiente `SYNC82_DB_PATH`, ou `~/.sync82/knowledge.db` se não definida.
 - Registra logs só em stderr — stdout é reservado pro protocolo JSON-RPC.
 - Para de forma limpa com `SIGINT`/`SIGTERM` (assim como os outros subcomandos): o servidor fecha os vaults abertos e sai com código `0`.
@@ -109,7 +110,7 @@ sync82 config get-vault              # mostra o caminho configurado atualmente, 
 sync82 config unset-vault            # volta ao padrão (~/.sync82/knowledge.db)
 ```
 
-`<caminho>` aceita a mesma expansão `HOME`/`$HOME`/`~` que o argumento opcional `path` de toda tool, e é gravado como caminho absoluto (um relativo é resolvido a partir do diretório atual). Ele vale para toda chamada de tool e para os comandos `export`/`import`; um argumento `path` explícito (ou `--path`), ou o `.sync82.json` de um workspace, ainda tem prioridade sobre ele, e ele tem prioridade sobre `SYNC82_DB_PATH` e o padrão.
+`<caminho>` aceita a mesma expansão `HOME`/`$HOME`/`~` que o argumento opcional `path` de toda tool, e é gravado como caminho absoluto (um relativo é resolvido a partir do diretório atual). Ele vale para toda chamada de tool e para os comandos `export`/`import`; um argumento `path` explícito (ou `--path`), ou o `.sync82.json` de um workspace, ainda tem prioridade sobre ele, e ele tem prioridade sobre `SYNC82_DB_PATH` e o padrão. Um projeto vindo da última sessão abre no vault em que foi lembrado (`lastVaultPath`), e não neste.
 
 Atualizações do `config.json` feitas por vários processos do sync82 ao mesmo tempo (ex. dois clientes MCP) são serializadas com um arquivo de lock, `~/.sync82/config.lock`, e uma atualização que não muda nada não regrava o arquivo. Um `config.json` vazio ou com JSON inválido é movido para `config.json.corrupt-<unix-timestamp>` na próxima atualização (`set-vault`/`unset-vault`, ou uma chamada de tool que registra o último projeto usado), e uma config nova é iniciada — veja [Solução de Problemas](../troubleshooting/common-issues.md#um-arquivo-configjsoncorrupt--apareceu-em-sync82).
 

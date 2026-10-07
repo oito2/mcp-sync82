@@ -42,8 +42,8 @@ import (
 // what the import would do. Files that cannot be imported are listed in
 // the report as skipped. It returns an error when the project or
 // subproject name is invalid, inputDir cannot be read, it holds more than
-// maxImportFiles ".md" files, two files differ only in case, or a store
-// operation fails. s may be nil only with dryRun, for a vault that does not
+// maxImportFiles ".md" files or more than maxImportTotalBytes of them, two
+// files differ only in case, or a store operation fails. s may be nil only with dryRun, for a vault that does not
 // exist yet: every file is then reported as new.
 //
 // It is the entry point shared by the import_memory tool and the "sync82
@@ -68,8 +68,24 @@ func (r ImportReport) Imported() int {
 	return len(r.Created) + len(r.Overwritten)
 }
 
-// maxImportFiles is the maximum number of ".md" files one import accepts.
-const maxImportFiles = 256
+// Bounds of one import: the most ".md" files it reads, and the most bytes
+// they may hold in total, all of which stay in memory until the single
+// write transaction.
+const (
+	maxImportFiles      = 256
+	maxImportTotalBytes = 64 << 20
+)
+
+// nonKindNames are the base names, lower-cased, of Markdown files commonly
+// kept next to an export (in a repository, for example) that are never
+// imported as memory kinds.
+var nonKindNames = map[string]bool{
+	"readme":          true,
+	"changelog":       true,
+	"license":         true,
+	"contributing":    true,
+	"code_of_conduct": true,
+}
 
 // errNotRegularFile reports a path that is a symlink, directory or special
 // file (FIFO, device, socket) rather than a regular file.
@@ -77,9 +93,11 @@ var errNotRegularFile = errors.New("not a regular file")
 
 // readRegularFile reads path when it is a regular file — not a symlink or
 // special file — of at most limit bytes. A file over the limit returns
-// ok=false with no error; a non-regular file returns errNotRegularFile;
-// other failures are returned as errors. The read is bounded, so a file
-// growing after the size check is never read past the limit.
+// ok=false with no error; a non-regular file, or one that is not the file
+// first inspected (replaced between the check and the open, for example by
+// a symlink), returns errNotRegularFile; other failures are returned as
+// errors. The read is bounded, so a file growing after the size check is
+// never read past the limit.
 func readRegularFile(path string, limit int64) (data []byte, ok bool, err error) {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -96,7 +114,7 @@ func readRegularFile(path string, limit int64) (data []byte, ok bool, err error)
 		return nil, false, err
 	}
 	defer f.Close()
-	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+	if opened, err := f.Stat(); err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
 		return nil, false, errNotRegularFile
 	}
 	data, err = io.ReadAll(io.LimitReader(f, limit+1))
@@ -145,6 +163,7 @@ func importProjectCore(ctx context.Context, s *store.Store, project, subproject,
 	// First pass: read and check every file, deciding each write, before
 	// anything is written.
 	var writes []store.KindWrite
+	var totalBytes int
 	seen := map[string]string{}
 	for _, name := range names {
 		archived := strings.HasSuffix(name, archivedSuffix)
@@ -153,10 +172,10 @@ func importProjectCore(ctx context.Context, s *store.Store, project, subproject,
 			base = strings.TrimSuffix(name, archivedSuffix)
 		}
 		kind, err := validateKind(base)
-		if err != nil {
-			// Not every ".md" file in the directory is a memory kind (e.g. a
-			// README.md next to the exported files): skip it instead of
-			// failing the whole import.
+		if err != nil || nonKindNames[kind] {
+			// Not every ".md" file in the directory is a memory kind (a name
+			// that isn't a valid kind, or a README.md next to the exported
+			// files): skip it instead of failing the whole import.
 			report.Skipped = append(report.Skipped, name)
 			continue
 		}
@@ -180,6 +199,9 @@ func importProjectCore(ctx context.Context, s *store.Store, project, subproject,
 		}
 		if err != nil {
 			return ImportReport{}, fmt.Errorf("read %s: %w", name, err)
+		}
+		if totalBytes += len(data); totalBytes > maxImportTotalBytes {
+			return ImportReport{}, fmt.Errorf("the .md files in %s hold more than %d MB in total; import them in smaller groups", inputDir, maxImportTotalBytes>>20)
 		}
 		content := stripEntryMarkers(string(data))
 		if strings.TrimSpace(content) == "" {

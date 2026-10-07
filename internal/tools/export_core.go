@@ -94,8 +94,17 @@ func exportProjectCore(ctx context.Context, s *store.Store, project, subproject,
 		if content != "" && !strings.HasSuffix(content, "\n") {
 			content += "\n"
 		}
-		if err := fsutil.AtomicWriteFile(filepath.Join(outputDir, f.name), []byte(content), 0o600); err != nil {
-			return i, fmt.Errorf("write %s: %w", f.name, err)
+		// AtomicReplaceFile never writes through a symlink: one swapped in
+		// after the check above can't redirect the export elsewhere.
+		if err := fsutil.AtomicReplaceFile(filepath.Join(outputDir, f.name), []byte(content), 0o600); err != nil {
+			written := make([]string, i)
+			for j := range written {
+				written[j] = files[j].name
+			}
+			if len(written) == 0 {
+				return i, fmt.Errorf("write %s: %w", f.name, err)
+			}
+			return i, fmt.Errorf("write %s (already written: %s): %w", f.name, strings.Join(written, ", "), err)
 		}
 	}
 	return len(files), nil

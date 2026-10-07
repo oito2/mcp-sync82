@@ -37,18 +37,24 @@ var fencePattern = regexp.MustCompile("(?m)^[ \t]*(```|~~~)")
 // dateHeaderMatches returns the index pairs (in the form of
 // regexp.FindAllStringSubmatchIndex: the whole match, then the date
 // group) of every "## YYYY-MM-DD" header in content outside fenced code
-// blocks, where such a line is example text rather than a header.
+// blocks, where such a line is example text rather than a header. A block
+// opened by ``` closes only at the next ```, and one opened by ~~~ only at
+// the next ~~~, so the other marker inside a block is just text.
 func dateHeaderMatches(content string) [][]int {
-	fences := fencePattern.FindAllStringIndex(content, -1)
+	fences := fencePattern.FindAllStringSubmatchIndex(content, -1)
 	inFence := func(pos int) bool {
-		open := false
+		marker := ""
 		for _, f := range fences {
 			if f[0] > pos {
 				break
 			}
-			open = !open
+			if m := content[f[2]:f[3]]; marker == "" {
+				marker = m
+			} else if marker == m {
+				marker = ""
+			}
 		}
-		return open
+		return marker != ""
 	}
 	var out [][]int
 	for _, m := range dateHeaderPattern.FindAllStringSubmatchIndex(content, -1) {

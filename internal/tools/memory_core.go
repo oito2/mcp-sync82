@@ -78,27 +78,36 @@ func validateAppendInput(kind, content string) (string, error) {
 // by wrapNotFound. For the date-headed kinds the entry's date is taken
 // from its first valid date header.
 func appendMemoryCore(ctx context.Context, s *store.Store, project, subproject, kind, content string) error {
-	content = stripEntryMarkers(content)
-	kind, err := validateAppendInput(kind, content)
+	w, err := planAppend(ctx, s, project, subproject, kind, stripEntryMarkers(content))
 	if err != nil {
 		return err
 	}
+	return wrapNotFound(s.WriteKinds(ctx, project, subproject, []store.KindWrite{w}), FormatLabel(project, subproject))
+}
+
+// planAppend returns the store.KindWrite that appends content, already
+// free of entry id markers, as one new entry of kind: dated by its first
+// valid "## YYYY-MM-DD" header for the date-headed kinds, undated
+// otherwise. It validates the input with validateAppendInput and refuses a
+// kind stored as a document with an error wrapping errAppendToDocumentKind;
+// a missing project yields the error built by wrapNotFound.
+func planAppend(ctx context.Context, s *store.Store, project, subproject, kind, content string) (store.KindWrite, error) {
+	kind, err := validateAppendInput(kind, content)
+	if err != nil {
+		return store.KindWrite{}, err
+	}
 	mode, err := s.KindMode(ctx, project, subproject, kind)
 	if err != nil {
-		return wrapNotFound(err, FormatLabel(project, subproject))
+		return store.KindWrite{}, wrapNotFound(err, FormatLabel(project, subproject))
 	}
 	if mode == store.KindStorageDocument {
-		return fmt.Errorf("%q %w", kind, errAppendToDocumentKind)
+		return store.KindWrite{}, fmt.Errorf("%q %w", kind, errAppendToDocumentKind)
 	}
-
 	entryDate := ""
 	if isAppendOnlyKind(kind) {
 		entryDate = extractFirstDate(content)
 	}
-	if err := s.AppendEntry(ctx, project, subproject, kind, entryDate, content); err != nil {
-		return wrapNotFound(err, FormatLabel(project, subproject))
-	}
-	return nil
+	return store.KindWrite{Kind: kind, Append: true, Sections: []store.EntrySection{{Date: entryDate, Body: content}}}, nil
 }
 
 // validateWriteInput checks a (kind, content) pair against write_memory's
@@ -127,36 +136,40 @@ func validateWriteInput(kind, content string) (string, error) {
 
 // writeMemoryCore replaces the whole content of kind in the given project
 // and subproject of s. It is shared by write_memory and
-// update_project_memory. The kind keeps the storage it already has:
-// progress, decisions and any custom kind written by appending stay a log
-// of dated entries (replaced via splitByDateHeader), everything else is an
-// overwrite-style document. Entry id marker lines are removed from content
-// (stripEntryMarkers) first. Invalid input is rejected with
-// validateWriteInput's error, and a missing project yields the error built
-// by wrapNotFound.
+// update_project_memory. Entry id marker lines are removed from content
+// (stripEntryMarkers) first; see planWrite for how the kind is stored.
+// Invalid input is rejected with validateWriteInput's error, and a missing
+// project yields the error built by wrapNotFound.
 func writeMemoryCore(ctx context.Context, s *store.Store, project, subproject, kind, content string) error {
-	content = stripEntryMarkers(content)
-	kind, err := validateWriteInput(kind, content)
+	w, err := planWrite(ctx, s, project, subproject, kind, stripEntryMarkers(content))
 	if err != nil {
 		return err
 	}
+	return wrapNotFound(s.WriteKinds(ctx, project, subproject, []store.KindWrite{w}), FormatLabel(project, subproject))
+}
 
+// planWrite returns the store.KindWrite that replaces the whole content of
+// kind with content, already free of entry id markers. The kind keeps the
+// storage it already has: progress, decisions and any custom kind written
+// by appending stay a log of dated entries (replaced via
+// splitByDateHeader), everything else is an overwrite-style document.
+// Invalid input is rejected with validateWriteInput's error, and a missing
+// project yields the error built by wrapNotFound.
+func planWrite(ctx context.Context, s *store.Store, project, subproject, kind, content string) (store.KindWrite, error) {
+	kind, err := validateWriteInput(kind, content)
+	if err != nil {
+		return store.KindWrite{}, err
+	}
 	asEntries := isAppendOnlyKind(kind)
 	if !asEntries && !isStandardKind(kind) {
 		mode, err := s.KindMode(ctx, project, subproject, kind)
 		if err != nil {
-			return wrapNotFound(err, FormatLabel(project, subproject))
+			return store.KindWrite{}, wrapNotFound(err, FormatLabel(project, subproject))
 		}
 		asEntries = mode == store.KindStorageEntries
 	}
-
 	if asEntries {
-		err = s.ReplaceAllEntries(ctx, project, subproject, kind, splitByDateHeader(content))
-	} else {
-		err = s.WriteDocument(ctx, project, subproject, kind, content)
+		return store.KindWrite{Kind: kind, Sections: splitByDateHeader(content)}, nil
 	}
-	if err != nil {
-		return wrapNotFound(err, FormatLabel(project, subproject))
-	}
-	return nil
+	return store.KindWrite{Kind: kind, Document: &content}, nil
 }

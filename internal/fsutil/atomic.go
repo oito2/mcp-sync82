@@ -33,7 +33,8 @@ import (
 //
 // path is the destination file, data its full new content, and perm the mode
 // for a newly created file. A path that is a symlink is written through to its target, keeping the
-// link. An existing file keeps its permission bits; perm only applies to a
+// link; a dangling symlink, whose target doesn't exist, is replaced by a
+// regular file instead. An existing file keeps its permission bits; perm only applies to a
 // newly created file, and is applied exactly (not masked by the umask).
 // Missing parent directories are created private to the user (0700).
 //

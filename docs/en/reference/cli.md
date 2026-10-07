@@ -14,9 +14,10 @@ Running the binary with no arguments starts the MCP server over stdio. This is w
 
 ```bash
 sync82
+sync82 serve   # the same, spelled out
 ```
 
-- Registers all [19 tools](./tools.md).
+- Registers all [19 tools](./tools.md), the [resources](./resources.md) and the [MCP prompts](./mcp-prompts.md).
 - Resolves the default vault path from the `SYNC82_DB_PATH` environment variable, or `~/.sync82/knowledge.db` if unset.
 - Logs to stderr only — stdout is reserved for the JSON-RPC protocol.
 - Stops cleanly on `SIGINT`/`SIGTERM` (as do the other subcommands): the server closes its open vaults and exits with code `0`.
@@ -109,7 +110,7 @@ sync82 config get-vault           # show the currently configured path, if any
 sync82 config unset-vault         # go back to the default (~/.sync82/knowledge.db)
 ```
 
-`<path>` accepts the same `HOME`/`$HOME`/`~` expansion as every tool's optional `path` argument, and is stored as an absolute path (a relative one is resolved against the current directory). It applies to every tool call and to the `export`/`import` commands; an explicit `path` argument (or `--path`), or a workspace's `.sync82.json`, still wins over it, and it wins over `SYNC82_DB_PATH` and the default.
+`<path>` accepts the same `HOME`/`$HOME`/`~` expansion as every tool's optional `path` argument, and is stored as an absolute path (a relative one is resolved against the current directory). It applies to every tool call and to the `export`/`import` commands; an explicit `path` argument (or `--path`), or a workspace's `.sync82.json`, still wins over it, and it wins over `SYNC82_DB_PATH` and the default. A project taken from the last session opens in the vault it was remembered with (`lastVaultPath`), not in this one.
 
 Updates to `config.json` from several sync82 processes at once (e.g. two MCP clients) are serialized with a lock file, `~/.sync82/config.lock`, and an update that changes nothing doesn't rewrite the file. A `config.json` that is empty or not valid JSON is moved aside to `config.json.corrupt-<unix-timestamp>` on the next update (`set-vault`/`unset-vault`, or a tool call that records the last-used project), and a fresh config is started — see [Troubleshooting](../troubleshooting/common-issues.md#a-configjsoncorrupt--file-appeared-in-sync82).
 

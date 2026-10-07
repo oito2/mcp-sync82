@@ -257,6 +257,24 @@ func (s *Store) PromoteSubproject(ctx context.Context, parentName, subName strin
 // wrapping ErrAlreadyExists when any name collides with a top-level project
 // (rolling the whole batch back), or a database error.
 func (s *Store) PromoteAllSubprojects(ctx context.Context, parentName string) ([]string, error) {
+	return s.promoteSubprojects(ctx, parentName, false)
+}
+
+// PromoteSubprojectsAndDelete moves every subproject of the top-level
+// project parentName to the vault root, as PromoteAllSubprojects does, and
+// then deletes parentName with its own documents and entries, all in one
+// transaction: either both happen or nothing changes. It returns the
+// promoted names (nil when there are none). It returns an error wrapping
+// ErrNotFound when the project does not exist, an error wrapping
+// ErrAlreadyExists when a subproject name collides with a top-level
+// project, or a database error.
+func (s *Store) PromoteSubprojectsAndDelete(ctx context.Context, parentName string) ([]string, error) {
+	return s.promoteSubprojects(ctx, parentName, true)
+}
+
+// promoteSubprojects implements PromoteAllSubprojects and, when
+// deleteParent is set, PromoteSubprojectsAndDelete.
+func (s *Store) promoteSubprojects(ctx context.Context, parentName string, deleteParent bool) ([]string, error) {
 	parentName = normalizeName(parentName)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -282,11 +300,8 @@ func (s *Store) PromoteAllSubprojects(ctx context.Context, parentName string) ([
 	if err != nil {
 		return nil, err
 	}
-	if len(subs) == 0 {
-		return nil, nil
-	}
 
-	names := make([]string, 0, len(subs))
+	var names []string
 	for _, sub := range subs {
 		if _, err := tx.ExecContext(ctx, `UPDATE projects SET parent_id = NULL WHERE id = ?`, sub.ID); err != nil {
 			if isUniqueConstraintErr(err) {
@@ -295,6 +310,13 @@ func (s *Store) PromoteAllSubprojects(ctx context.Context, parentName string) ([
 			return nil, fmt.Errorf("promote subprojects of %q: %w", parentName, err)
 		}
 		names = append(names, sub.Name)
+	}
+	if deleteParent {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM projects WHERE id = ?`, parentID); err != nil {
+			return nil, fmt.Errorf("delete project %q: %w", parentName, err)
+		}
+	} else if len(names) == 0 {
+		return nil, nil
 	}
 
 	if err := tx.Commit(); err != nil {

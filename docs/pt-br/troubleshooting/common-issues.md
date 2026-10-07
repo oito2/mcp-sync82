@@ -204,6 +204,16 @@ Mostre a configuração atual do vault para este workspace.
 
 ---
 
+### "No vault exists at …"
+
+**Sintoma:** uma chamada de tool responde `No vault exists at <caminho>. Check the "path" argument, the workspace's .sync82.json or "sync82 config set-vault"; a vault is created by create_project, init_project_memory or import_memory.`
+
+**Causa:** o arquivo de vault a que a chamada chegou não existe. Tools de leitura nunca criam um vault, então um erro de digitação no `path`, um `.sync82.json` ou um `sync82 config set-vault` apontando para um lugar novo, ou uma instalação nova, terminam aqui.
+
+**Solução:** confira qual vault a chamada usou — o `get_vault_config` informa — e corrija o `path`, o `.sync82.json` ou o valor do `set-vault` se estiver errado. Se estiver certo e o vault só for novo, crie-o com `create_project`, `init_project_memory` ou `import_memory`.
+
+---
+
 ### Um arquivo `config.json.corrupt-*` apareceu em `~/.sync82/`
 
 **Sintoma:** `~/.sync82/` contém um arquivo chamado `config.json.corrupt-<unix-timestamp>`, e o override do vault (`sync82 config get-vault`) ou o último projeto usado sumiu.

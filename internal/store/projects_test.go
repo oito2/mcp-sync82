@@ -18,6 +18,7 @@ package store
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 )
@@ -446,5 +447,35 @@ func TestRenameProject_NotFound(t *testing.T) {
 	err := s.RenameProject(ctx, "nonexistent", "", "whatever")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// TestPromoteSubprojectsAndDelete verifies that the subprojects are promoted
+// and the parent deleted together, and that a name collision changes
+// nothing at all.
+func TestPromoteSubprojectsAndDelete(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	for _, p := range [][2]string{{"oito2", "sync82"}, {"oito2", "perci"}, {"other", "build82"}, {"build82", ""}} {
+		if _, _, err := s.EnsureProject(ctx, p[0], p[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	promoted, err := s.PromoteSubprojectsAndDelete(ctx, "oito2")
+	if err != nil || !slices.Equal(promoted, []string{"perci", "sync82"}) {
+		t.Fatalf("PromoteSubprojectsAndDelete = %v, %v", promoted, err)
+	}
+	for name, want := range map[string]bool{"oito2": false, "perci": true, "sync82": true} {
+		if exists, _ := s.ProjectExists(ctx, name, ""); exists != want {
+			t.Errorf("project %q exists = %v, want %v", name, exists, want)
+		}
+	}
+
+	if _, err := s.PromoteSubprojectsAndDelete(ctx, "other"); !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("collision: err = %v, want ErrAlreadyExists", err)
+	}
+	if exists, _ := s.ProjectExists(ctx, "other", "build82"); !exists {
+		t.Error("a failed promotion changed the project tree")
 	}
 }

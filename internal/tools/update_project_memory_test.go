@@ -100,10 +100,38 @@ func TestUpdateProjectMemoryTool_MixedAppendAndOverwrite(t *testing.T) {
 	}
 }
 
-// TestUpdateProjectMemoryTool_OneFailureDoesNotBlockOthers verifies that a
-// rejected item (progress without a date header) is reported under Errors with
-// an error result, while the other items in the same call are still written.
-func TestUpdateProjectMemoryTool_OneFailureDoesNotBlockOthers(t *testing.T) {
+// TestUpdateProjectMemoryTool_InvalidFieldWritesNothing verifies that a
+// field its write would reject (progress without a date header) makes
+// Validate fail with every problem listed, so the valid fields of the same
+// call are not written either.
+func TestUpdateProjectMemoryTool_InvalidFieldWritesNothing(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	tool := &UpdateProjectMemoryTool{Resolver: r, Stores: mgr}
+	_, err := tool.Validate(mustJSON(t, map[string]any{
+		"project":   "acme",
+		"progress":  "no date header here",
+		"decisions": "## 2026-01-01\n- fine",
+		"stack":     "",
+		"memory":    "# Memory\nwould be written",
+	}))
+	if err == nil {
+		t.Fatal("expected a validation error")
+	}
+	for _, want := range []string{"nothing was written", "progress:", "stack:"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "decisions:") || strings.Contains(err.Error(), "memory:") {
+		t.Errorf("valid fields reported as problems: %q", err)
+	}
+}
+
+// TestUpdateProjectMemoryTool_StoreRejectionWritesNothing verifies that a
+// field rejected only when the store is checked (an append to a custom kind
+// stored as a document) is an error result and leaves every other field of
+// the call unwritten.
+func TestUpdateProjectMemoryTool_StoreRejectionWritesNothing(t *testing.T) {
 	r, mgr := newToolTestEnv(t)
 	ctx := context.Background()
 	s, err := mgr.Get(ctx, r.DefaultDBPath)
@@ -113,41 +141,19 @@ func TestUpdateProjectMemoryTool_OneFailureDoesNotBlockOthers(t *testing.T) {
 	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
 		t.Fatal(err)
 	}
-
-	tool := &UpdateProjectMemoryTool{Resolver: r, Stores: mgr}
-	parsed, err := tool.Validate(mustJSON(t, map[string]any{
-		"project":  "acme",
-		"progress": "no date header here", // invalid: no "## YYYY-MM-DD" header
-		"memory":   "# Memory\nstill written",
-	}))
-	if err != nil {
-		t.Fatalf("Validate: %v", err)
-	}
-	result, err := tool.Execute(ctx, parsed)
-	if err != nil {
-		t.Fatalf("Execute returned a Go error instead of a partial-failure result: %v", err)
-	}
-	if !result.IsError {
-		t.Fatal("expected IsError=true when at least one op failed")
-	}
-	if !strings.Contains(result.Text, "Errors:") || !strings.Contains(result.Text, "progress:") {
-		t.Errorf("expected the progress failure reported in Errors, got: %s", result.Text)
-	}
-	if !strings.Contains(result.Text, "Overwritten: memory") {
-		t.Errorf("expected memory to still succeed despite progress failing, got: %s", result.Text)
-	}
-
-	content, ok, err := s.ReadDocument(ctx, "acme", "", "memory")
-	if err != nil || !ok || content != "# Memory\nstill written" {
-		t.Fatalf("expected memory to have been written despite the other failure: ok=%v content=%q err=%v", ok, content, err)
-	}
-
-	exists, err := s.KindExists(ctx, "acme", "", "progress")
-	if err != nil {
+	if err := s.WriteDocument(ctx, "acme", "", "notes", "a document"); err != nil {
 		t.Fatal(err)
 	}
-	if exists {
-		t.Fatal("expected progress to remain unwritten since its content was rejected")
+	result := runTool(t, &UpdateProjectMemoryTool{Resolver: r, Stores: mgr}, map[string]any{
+		"project": "acme",
+		"memory":  "# Memory\nwould be written",
+		"custom":  []map[string]string{{"filename": "notes", "content": "an appended note"}},
+	})
+	if !result.IsError || !strings.Contains(result.Text, "Nothing was written") || !strings.Contains(result.Text, "notes:") {
+		t.Fatalf("result = %+v, want an error result naming notes", result)
+	}
+	if _, ok, _ := s.ReadDocument(ctx, "acme", "", "memory"); ok {
+		t.Fatal("memory was written by a call that failed")
 	}
 }
 
@@ -239,37 +245,14 @@ func TestUpdateProjectMemoryTool_NeedsInput(t *testing.T) {
 }
 
 // TestUpdateProjectMemoryTool_ExplicitEmptyStringStillCountsAsProvided
-// verifies that a field explicitly sent as an empty string counts as provided:
-// it is attempted, fails content validation and is reported as an error,
-// instead of being treated as absent.
+// verifies that a field explicitly sent as an empty string counts as
+// provided: Validate rejects it as empty instead of treating it as absent.
 func TestUpdateProjectMemoryTool_ExplicitEmptyStringStillCountsAsProvided(t *testing.T) {
-	// hasContent must depend on presence in the JSON payload, not on
-	// non-emptiness: an explicit empty string is attempted, fails its own
-	// content validation and lands in Errors.
 	r, mgr := newToolTestEnv(t)
-	ctx := context.Background()
-	s, err := mgr.Get(ctx, r.DefaultDBPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
-		t.Fatal(err)
-	}
-
 	tool := &UpdateProjectMemoryTool{Resolver: r, Stores: mgr}
-	parsed, err := tool.Validate(mustJSON(t, map[string]any{"project": "acme", "memory": ""}))
-	if err != nil {
-		t.Fatalf("Validate: %v", err)
-	}
-	result, err := tool.Execute(ctx, parsed)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if strings.Contains(result.Text, "Nothing to update") {
-		t.Fatal("an explicitly-provided empty string must still count as content being provided")
-	}
-	if !result.IsError || !strings.Contains(result.Text, "memory:") {
-		t.Fatalf("expected the empty memory content to fail validation and be reported as an error, got: %s", result.Text)
+	_, err := tool.Validate(mustJSON(t, map[string]any{"project": "acme", "memory": ""}))
+	if err == nil || !strings.Contains(err.Error(), "memory:") {
+		t.Fatalf("err = %v, want the empty memory reported", err)
 	}
 }
 

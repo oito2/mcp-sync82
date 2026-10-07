@@ -19,5 +19,7 @@
 // answer ListTools — plus a CallTool handler built by adapt. adapt runs
 // the tool's Validate/Execute contract, recovers from panics so one
 // tool's bug can't take down the connection, and sanitizes execution
-// errors (via handleError) before they reach the client.
+// errors (via clientMessage) before they reach the client. The resource,
+// prompt and completion handlers recover from panics and word their errors
+// the same way (recoverAsInternal, internalError).
 package server

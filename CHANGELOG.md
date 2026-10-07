@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-07
+
+### Changed
+
+- **`update_project_memory` is all or nothing.** Every field is checked before anything is written — a `progress` without a date header or an empty field is reported together with every other problem — and all fields are then written in one transaction. Before, the valid fields of a call were written even when another one failed.
+- `import_memory` and `sync82 import` skip `README.md`, `CHANGELOG.md`, `LICENSE.md`, `CONTRIBUTING.md` and `CODE_OF_CONDUCT.md` instead of importing them as memory files, and refuse a folder whose `.md` files hold more than 64 MB in total.
+- `delete_project` forgets the last used project when it deletes it, and follows a remembered subproject that it promotes to the vault root.
+
+### Security
+
+- `export_memory` never writes through a symlink swapped in after its check, and `import_memory` only reads the file it inspected, so a link placed in a shared folder can't redirect an export or pull another file into the vault.
+- A panic in a resource, prompt or completion handler is answered with an internal error instead of crashing the server and ending every client's session.
+
+### Fixed
+
+- Promoting subprojects and deleting their project happen in one transaction, so a failure leaves everything as it was.
+- Errors from resource reads, the resource list and completion are worded like tool errors, including the "upgrade sync82" hint for a vault with a newer schema.
+- Completion only answers for an argument the prompt or resource template actually has, and `resources/list` rejects a cursor, since it returns everything in one page.
+- `search_memory` rejects an invalid `project` or `subproject` name instead of reporting it as not found; its lines no longer keep a trailing carriage return from CRLF content.
+- A `## YYYY-MM-DD` example inside a code block is no longer taken as a date header when the block mixes ```` ``` ```` and `~~~` lines.
+- `sync82 install` writes `&`, `<` and `>` in other servers' values as they were instead of escaping them, refuses a config file whose `mcpServers` (or equivalent) is not an object instead of replacing it, and treats a file with stray characters after its JSON object as invalid.
+- `write_memory` removes `<!-- entry:N -->` lines before checking that the content is not empty.
+
 ## [1.1.0] - 2026-10-07
 
 ### Added
@@ -64,6 +87,7 @@ First public release.
 - `sync82 install` for Claude Code, Claude Desktop, Antigravity, Codex, OpenCode, Cursor, Zed and Cline.
 - Release binaries for Linux, macOS and Windows (amd64/arm64), a Claude Desktop extension (`sync82.mcpb`) and an MCP Registry entry (`io.github.oito2/mcp-sync82`), with SHA-256 checksums, a Sigstore signature and GitHub build provenance attestations.
 
-[Unreleased]: https://github.com/oito2/mcp-sync82/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/oito2/mcp-sync82/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/oito2/mcp-sync82/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/oito2/mcp-sync82/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/oito2/mcp-sync82/releases/tag/v1.0.0

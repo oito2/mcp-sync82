@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/oito2/mcp-sync82/internal/config"
 	"github.com/oito2/mcp-sync82/internal/store"
 )
 
@@ -114,9 +115,11 @@ func (t *DeleteProjectTool) Validate(raw json.RawMessage) (any, error) {
 // Execute deletes a subproject, or a top-level project. When the project has
 // subprojects and no subproject_action was given, it returns a non-error
 // result that asks the caller to choose "cancel", "promote" or "delete_all".
-// Promotion moves the subprojects to the vault root first and aborts,
-// changing nothing, if that fails. A missing vault yields an error result;
-// other failures are returned as errors.
+// Promotion and deletion happen in one transaction, so a failure changes
+// nothing. After a deletion, a last used project (or subproject) that no
+// longer exists is forgotten, and one that was promoted is followed to its
+// new name. A missing vault yields an error result; other failures are
+// returned as errors.
 func (t *DeleteProjectTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(deleteProjectArgs)
 	dbPath := t.Resolver.DBPathOrDefault(args.Path)
@@ -134,6 +137,7 @@ func (t *DeleteProjectTool) Execute(ctx context.Context, rawArgs any) (ToolResul
 		if err := s.DeleteSubproject(ctx, args.Project, args.Subproject); err != nil {
 			return ToolResult{}, err
 		}
+		t.forgetLastProject(args.Project, args.Subproject, false, dbPath)
 		return ToolResult{Text: fmt.Sprintf("Subproject %q deleted.", FormatLabel(args.Project, args.Subproject))}, nil
 	}
 
@@ -173,19 +177,16 @@ func (t *DeleteProjectTool) Execute(ctx context.Context, rawArgs any) (ToolResul
 	}
 
 	if args.SubprojectAction == "promote" && len(subs) > 0 {
-		// PromoteAllSubprojects runs every promotion in one transaction, so
-		// a name collision on any subproject leaves all of them in place
-		// and deletion is aborted.
-		promoted, err := s.PromoteAllSubprojects(ctx, args.Project)
+		// Every promotion and the deletion run in one transaction, so a name
+		// collision on any subproject leaves everything in place.
+		promoted, err := s.PromoteSubprojectsAndDelete(ctx, args.Project)
 		if err != nil {
 			return ToolResult{
 				Text:    fmt.Sprintf("Could not promote subprojects: %s. Nothing was changed. Deletion aborted.", err.Error()),
 				IsError: true,
 			}, nil
 		}
-		if err := s.DeleteProject(ctx, args.Project); err != nil {
-			return ToolResult{}, err
-		}
+		t.forgetLastProject(args.Project, "", true, dbPath)
 		return ToolResult{Text: fmt.Sprintf("Project %q deleted. Subprojects promoted to vault root: %s.", args.Project, strings.Join(promoted, ", "))}, nil
 	}
 
@@ -195,6 +196,7 @@ func (t *DeleteProjectTool) Execute(ctx context.Context, rawArgs any) (ToolResul
 	if err := s.DeleteProject(ctx, args.Project); err != nil {
 		return ToolResult{}, err
 	}
+	t.forgetLastProject(args.Project, "", false, dbPath)
 	note := ""
 	if len(subs) > 0 {
 		names := make([]string, len(subs))
@@ -204,4 +206,31 @@ func (t *DeleteProjectTool) Execute(ctx context.Context, rawArgs any) (ToolResul
 		note = fmt.Sprintf(" (including subprojects: %s)", strings.Join(names, ", "))
 	}
 	return ToolResult{Text: fmt.Sprintf("Project %q deleted%s.", args.Project, note)}, nil
+}
+
+// forgetLastProject updates the global config after project (or its
+// subproject, when not empty) was deleted from the vault at dbPath, so the
+// last used project never names something that no longer exists: a
+// remembered target inside what was deleted is cleared, except that with
+// promoted set a remembered subproject of project follows its promotion to
+// the vault root. A remembered target in another vault is left alone. A
+// failure is only logged.
+func (t *DeleteProjectTool) forgetLastProject(project, subproject string, promoted bool, dbPath string) {
+	project, subproject = NormalizeName(project), NormalizeName(subproject)
+	err := config.UpdateGlobalConfig(func(c *config.GlobalConfig) {
+		if c.LastProject != project || (c.LastVaultPath != "" && c.LastVaultPath != dbPath) {
+			return
+		}
+		switch {
+		case subproject != "" && c.LastSubproject != subproject:
+			// Another subproject of the same project: still there.
+		case promoted && c.LastSubproject != "":
+			c.LastProject, c.LastSubproject = c.LastSubproject, ""
+		default:
+			c.LastProject, c.LastSubproject, c.LastVaultPath = "", "", ""
+		}
+	})
+	if err != nil {
+		t.Resolver.Logger.Error("forget last project after delete", "error", err)
+	}
 }

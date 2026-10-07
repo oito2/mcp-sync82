@@ -115,8 +115,8 @@ func (t *SearchMemoryTool) InputSchema() map[string]any {
 			"until":              map[string]any{"type": "string", "description": "Only search dated entries on or before this date (\"YYYY-MM-DD\"); documents and undated entries are left out."},
 			"project":            map[string]any{"type": "string", "description": "Limit the search to this project (and its subprojects, unless subproject is also given)."},
 			"subproject":         map[string]any{"type": "string", "description": "Limit the search to this specific subproject (requires project or workspace_root)."},
-			"limit":              map[string]any{"type": "integer", "description": "Maximum number of results to return (1-1000, default 100)."},
-			"offset":             map[string]any{"type": "integer", "description": "Number of results to skip, for pagination (default 0)."},
+			"limit":              map[string]any{"type": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum number of results to return (1-1000, default 100)."},
+			"offset":             map[string]any{"type": "integer", "minimum": 0, "description": "Number of results to skip, for pagination (default 0)."},
 			"context_lines":      map[string]any{"type": "integer", "minimum": 0, "maximum": maxSearchContextLines, "description": "Number of surrounding lines to include per match (0-20, default 0)."},
 			"workspace_root":     map[string]any{"type": "string", "description": "Path to your project folder, used to auto-discover the project via .sync82.json when project isn't given."},
 			"search_parent_dirs": map[string]any{"type": "boolean", "description": SearchParentDirsDescription},
@@ -130,7 +130,8 @@ func (t *SearchMemoryTool) InputSchema() map[string]any {
 // Validate decodes raw into searchMemoryArgs and applies the defaults (Limit
 // 100, words match, text format), lower-casing the kinds. It returns the
 // arguments, or an error listing every problem: an empty or multi-line
-// query, a words or phrase query with no letter or number, an unknown
+// query, an invalid project or subproject name, a words or phrase query
+// with no letter or number, an unknown
 // match, an invalid kind, since or until date, since after until, a
 // subproject without a project, or an out-of-range limit, offset or
 // context_lines.
@@ -174,6 +175,13 @@ func (t *SearchMemoryTool) Validate(raw json.RawMessage) (any, error) {
 	}
 	if args.Since != "" && args.Until != "" && args.Since > args.Until {
 		problems = append(problems, `"since" must not be after "until"`)
+	}
+	for _, n := range []struct{ field, name string }{{"project", args.Project}, {"subproject", args.Subproject}} {
+		if name := NormalizeName(n.name); name != "" {
+			if err := validateProjectName(n.field, name); err != nil {
+				problems = append(problems, err.Error())
+			}
+		}
 	}
 	if strings.TrimSpace(args.Subproject) != "" && strings.TrimSpace(args.Project) == "" && strings.TrimSpace(args.WorkspaceRoot) == "" {
 		problems = append(problems, `"subproject" requires "project" or "workspace_root"`)

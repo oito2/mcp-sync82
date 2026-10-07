@@ -115,7 +115,7 @@ func (t *LoadProjectContextTool) InputSchema() map[string]any {
 			"files":              map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Only load these specific files/kinds, instead of everything."},
 			"mode":               map[string]any{"type": "string", "enum": []string{contextModeSummary, contextModeFull}, "description": "\"summary\" (default): the 10 most recent dated entries per log, cut at 40 KB. \"full\": every entry, cut at 200 KB. since, max_entries and max_bytes override these defaults."},
 			"since":              map[string]any{"type": "string", "description": "Only include dated entries (progress, decisions, custom append kinds) on or after this date (\"YYYY-MM-DD\"). Undated entries are always included. Overwrite-style files are unaffected. In summary mode, giving since lifts the default 10-entry limit."},
-			"max_entries":        map[string]any{"type": "integer", "description": "Only include the most recent N dated entries per append-only kind (summary mode default: 10). Overwrite-style files are unaffected."},
+			"max_entries":        map[string]any{"type": "integer", "minimum": 0, "description": "Only include the most recent N dated entries per append-only kind (summary mode default: 10). Overwrite-style files are unaffected."},
 			"max_bytes":          map[string]any{"type": "integer", "minimum": minContextBytes, "maximum": maxContextBytes, "description": "Cut the response at this many bytes (default 40960, i.e. 40 KB, in summary mode; 204800, i.e. 200 KB, in full mode), with a note when it is cut."},
 			"path":               map[string]any{"type": "string", "description": PathDescription},
 		},

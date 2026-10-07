@@ -231,7 +231,8 @@ func buildManifest(version string, tools []mcpbTool) mcpbManifest {
 				Type:  "string",
 				Title: "Vault database path",
 				Description: "Path of the SQLite vault file that stores project memory. A leading ~ " +
-					"is expanded to the home directory; the file is created if missing.",
+					"is expanded to the home directory; the file is created by the first create_project, " +
+					"init_project_memory or import_memory.",
 				Required: false,
 				Default:  dbPathDefault,
 			},

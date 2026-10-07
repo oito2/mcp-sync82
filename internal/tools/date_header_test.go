@@ -137,3 +137,13 @@ func TestDateHeaderQuirks(t *testing.T) {
 		t.Errorf("splitByDateHeader = %+v, want one section: a fenced header doesn't start a new one", sections)
 	}
 }
+
+// TestExtractFirstDate_MixedFenceMarkers verifies that a ~~~ line inside a
+// ``` block doesn't close it, so a date header example after it is still
+// ignored.
+func TestExtractFirstDate_MixedFenceMarkers(t *testing.T) {
+	content := "intro\n```\n~~~\n## 2020-01-01\n```\n## 2026-05-05\n- real"
+	if got := extractFirstDate(content); got != "2026-05-05" {
+		t.Fatalf("extractFirstDate = %q, want 2026-05-05 (the header inside the fence is an example)", got)
+	}
+}
