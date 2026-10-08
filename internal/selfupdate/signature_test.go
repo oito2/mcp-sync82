@@ -130,14 +130,27 @@ func signedUpdateDeps(t *testing.T, srv *httptest.Server, exePath string, cosign
 }
 
 // writeOldBinary writes "old" as the current binary in a new temporary
-// directory and returns its path.
+// directory and returns its path with symlinks resolved, the path
+// RunSelfUpdate swaps (on macOS the temporary directory is reached through
+// a symlink, and on Windows it can be given as a short 8.3 name).
 func writeOldBinary(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "sync82")
 	if err := os.WriteFile(path, []byte("old"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return path
+	return mustEvalSymlinks(t, path)
+}
+
+// mustEvalSymlinks returns path with symlinks resolved, failing the test
+// when it can't be resolved.
+func mustEvalSymlinks(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
 }
 
 // TestRunSelfUpdate_VerifiesTheSignature checks that, with cosign v3 found,
@@ -317,7 +330,7 @@ func TestRunSelfUpdate_SwapFailureRestoresTheBinary(t *testing.T) {
 // rollback's swap fails, the staged backup is moved back to "<binary>.bak"
 // and the running binary is unchanged.
 func TestRunSelfUpdate_RollbackSwapFailureKeepsTheBackup(t *testing.T) {
-	exePath := filepath.Join(t.TempDir(), "sync82")
+	exePath := filepath.Join(mustEvalSymlinks(t, t.TempDir()), "sync82")
 	for path, content := range map[string]string{exePath: "v2", exePath + ".bak": "v1"} {
 		if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 			t.Fatal(err)
