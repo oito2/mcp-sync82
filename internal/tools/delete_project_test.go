@@ -369,7 +369,9 @@ func TestDeleteProjectTool_ForgetsOrFollowsTheLastProject(t *testing.T) {
 	tool := &DeleteProjectTool{Resolver: r, Stores: mgr}
 	remember := func(project, subproject string) {
 		t.Helper()
-		if err := config.WriteGlobalConfig(config.GlobalConfig{LastProject: project, LastSubproject: subproject, LastVaultPath: r.DefaultDBPath}); err != nil {
+		if err := config.UpdateGlobalConfig(func(c *config.GlobalConfig) {
+			*c = config.GlobalConfig{LastProject: project, LastSubproject: subproject, LastVaultPath: r.DefaultDBPath}
+		}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -397,5 +399,31 @@ func TestDeleteProjectTool_ForgetsOrFollowsTheLastProject(t *testing.T) {
 	runTool(t, tool, map[string]any{"project": "solo", "confirm": true})
 	if p, sp := last(); p != "" || sp != "" {
 		t.Errorf("after deleting the remembered project, last = %s/%s, want none", p, sp)
+	}
+}
+
+// TestDeleteAndRename_NotFoundIsWordedOnce checks that a missing project
+// or subproject is reported as `project not found: "<label>"`, without the
+// store's "not found" repeated after it.
+func TestDeleteAndRename_NotFoundIsWordedOnce(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	runTool(t, &CreateProjectTool{Resolver: r, Stores: mgr}, map[string]any{"project": "a"})
+	for _, c := range []struct {
+		tool Tool
+		args map[string]any
+		want string
+	}{
+		{&RenameProjectTool{Resolver: r, Stores: mgr}, map[string]any{"project": "zz", "new_name": "yy"}, `project not found: "zz"`},
+		{&DeleteProjectTool{Resolver: r, Stores: mgr}, map[string]any{"project": "a", "subproject": "nope", "confirm": true}, `project not found: "a/nope"`},
+		{&DeleteProjectTool{Resolver: r, Stores: mgr}, map[string]any{"project": "zz", "confirm": true}, `project not found: "zz"`},
+	} {
+		parsed, err := c.tool.Validate(mustJSON(t, c.args))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = c.tool.Execute(context.Background(), parsed)
+		if err == nil || err.Error() != c.want {
+			t.Errorf("%s %v: err = %v, want %q", c.tool.Name(), c.args, err, c.want)
+		}
 	}
 }

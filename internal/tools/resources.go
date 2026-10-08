@@ -101,19 +101,15 @@ func (r *Resources) List(ctx context.Context) ([]ResourceInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	projects, err := s.ListTopLevelProjects(ctx)
+	tree, err := s.ProjectTree(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var out []ResourceInfo
-	for _, p := range projects {
+	for _, p := range tree {
 		out = append(out, contextResource(p.Name, ""))
-		subs, err := s.ListSubprojects(ctx, p.ID)
-		if err != nil {
-			return nil, err
-		}
-		for _, sub := range subs {
-			out = append(out, contextResource(p.Name, sub.Name))
+		for _, sub := range p.Subprojects {
+			out = append(out, contextResource(p.Name, sub))
 		}
 	}
 	return out, nil

@@ -49,8 +49,8 @@ func TestWriteGlobalConfig_RoundTrip(t *testing.T) {
 	t.Setenv("USERPROFILE", os.Getenv("HOME"))
 
 	want := GlobalConfig{LastProject: "oito2", LastSubproject: "sync82", VaultPath: "HOME/custom-vault"}
-	if err := WriteGlobalConfig(want); err != nil {
-		t.Fatalf("WriteGlobalConfig: %v", err)
+	if err := writeGlobalConfig(want); err != nil {
+		t.Fatalf("writeGlobalConfig: %v", err)
 	}
 
 	got, err := ReadGlobalConfig()
@@ -68,8 +68,8 @@ func TestUpdateLastProject(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", os.Getenv("HOME"))
 
-	if err := WriteGlobalConfig(GlobalConfig{VaultPath: "HOME/custom-vault"}); err != nil {
-		t.Fatalf("WriteGlobalConfig (seed): %v", err)
+	if err := writeGlobalConfig(GlobalConfig{VaultPath: "HOME/custom-vault"}); err != nil {
+		t.Fatalf("writeGlobalConfig (seed): %v", err)
 	}
 
 	if err := UpdateLastProject("oito2", "sync82", "/vaults/v.db"); err != nil {
@@ -144,7 +144,7 @@ func TestWriteGlobalConfig_IsPrivate(t *testing.T) {
 	}
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", os.Getenv("HOME"))
-	if err := WriteGlobalConfig(GlobalConfig{LastProject: "acme"}); err != nil {
+	if err := writeGlobalConfig(GlobalConfig{LastProject: "acme"}); err != nil {
 		t.Fatal(err)
 	}
 	path, err := GlobalConfigPath()
@@ -174,7 +174,7 @@ func TestUpdateGlobalConfig_UnchangedDoesNotRewrite(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	// Compact JSON differs from WriteGlobalConfig's indented output, so any
+	// Compact JSON differs from writeGlobalConfig's indented output, so any
 	// rewrite changes the bytes on disk.
 	seed := []byte(`{"lastProject":"oito2","lastSubproject":"sync82","lastVaultPath":"/v.db"}`)
 	if err := os.WriteFile(path, seed, 0o600); err != nil {
@@ -357,5 +357,147 @@ func TestUpdateGlobalConfig_CrossProcessNoLostUpdates(t *testing.T) {
 	want := strconv.Itoa(helperProcesses * helperIncrements)
 	if cfg.LastSubproject != want {
 		t.Fatalf("counter = %q, want %s — a concurrent process lost an update", cfg.LastSubproject, want)
+	}
+}
+
+// TestGlobalConfig_ConcurrentReadersAndWriters runs readers and writers of
+// the global config at the same time. Every read sees a complete config
+// and every write succeeds; on Windows this depends on readers holding the
+// shared lock while the writer renames the file.
+func TestGlobalConfig_ConcurrentReadersAndWriters(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	if err := UpdateLastProject("p0", "", "/vaults/v.db"); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 400)
+	for w := range 4 {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for i := range 25 {
+				errs <- UpdateLastProject(fmt.Sprintf("p%d-%d", w, i), "", "/vaults/v.db")
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for range 25 {
+				cfg, err := ReadGlobalConfig()
+				if err == nil && (cfg.LastProject == "" || cfg.LastVaultPath != "/vaults/v.db") {
+					err = fmt.Errorf("read an incomplete config: %+v", cfg)
+				}
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestReadGlobalConfig_CreatesNoDirectory checks that reading the config
+// of a user without ~/.sync82 returns the zero value and creates nothing.
+func TestReadGlobalConfig_CreatesNoDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	cfg, err := ReadGlobalConfig()
+	if err != nil || cfg != (GlobalConfig{}) {
+		t.Fatalf("ReadGlobalConfig = %+v, %v; want the zero config", cfg, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, defaultVaultDir)); !os.IsNotExist(err) {
+		t.Errorf("~/.sync82 was created by a read (stat err = %v)", err)
+	}
+}
+
+// TestUpdateGlobalConfig_CorruptSymlinkKeepsTheLink checks that a corrupt
+// config.json that is a symlink keeps its link: its content is copied
+// aside and the update is written through the link to its target.
+func TestUpdateGlobalConfig_CorruptSymlinkKeepsTheLink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks needs a privilege on Windows")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	target := filepath.Join(t.TempDir(), "dotfiles-config.json")
+	if err := os.WriteFile(target, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path, err := GlobalConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := UpdateLastProject("acme", "", "/vaults/v.db"); err != nil {
+		t.Fatalf("UpdateLastProject: %v", err)
+	}
+	if info, err := os.Lstat(path); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("config.json is no longer a symlink (err %v)", err)
+	}
+	if data, _ := os.ReadFile(target); !bytes.Contains(data, []byte(`"lastProject": "acme"`)) {
+		t.Errorf("target = %s, want the update written through the link", data)
+	}
+	aside, _ := filepath.Glob(path + ".corrupt-*")
+	if len(aside) != 1 {
+		t.Fatalf("copies aside = %v, want one", aside)
+	}
+	if data, _ := os.ReadFile(aside[0]); string(data) != "{not json" {
+		t.Errorf("copy aside = %q, want the corrupt content", data)
+	}
+}
+
+// TestUpdateGlobalConfig_RepairsACorruptSymlinkOnANoOpUpdate checks that an
+// update that changes nothing still repairs a corrupt config.json that is
+// a symlink, writing a valid config through the link, so later reads work.
+func TestUpdateGlobalConfig_RepairsACorruptSymlinkOnANoOpUpdate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks needs a privilege on Windows")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	target := filepath.Join(t.TempDir(), "dotfiles-config.json")
+	if err := os.WriteFile(target, []byte("garbage{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path, err := GlobalConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateGlobalConfig(func(cfg *GlobalConfig) { cfg.VaultPath = "" }); err != nil {
+		t.Fatalf("no-op update: %v", err)
+	}
+	if _, err := ReadGlobalConfig(); err != nil {
+		t.Fatalf("read after the repair: %v", err)
+	}
+	if info, err := os.Lstat(path); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("config.json is no longer a symlink (err %v)", err)
+	}
+	if aside, _ := filepath.Glob(path + ".corrupt-*"); len(aside) != 1 {
+		t.Errorf("copies aside = %v, want one", aside)
+	}
+	if err := UpdateGlobalConfig(func(cfg *GlobalConfig) { cfg.VaultPath = "" }); err != nil {
+		t.Fatal(err)
+	}
+	if aside, _ := filepath.Glob(path + ".corrupt-*"); len(aside) != 1 {
+		t.Errorf("a second no-op update made another copy: %v", aside)
 	}
 }

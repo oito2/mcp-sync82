@@ -17,6 +17,7 @@ package tools
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/oito2/mcp-sync82/internal/config"
@@ -164,7 +165,9 @@ func TestRenameProjectTool_UpdatesRememberedLastProject(t *testing.T) {
 	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := config.WriteGlobalConfig(config.GlobalConfig{LastProject: "acme", LastVaultPath: r.DefaultDBPath}); err != nil {
+	if err := config.UpdateGlobalConfig(func(c *config.GlobalConfig) {
+		*c = config.GlobalConfig{LastProject: "acme", LastVaultPath: r.DefaultDBPath}
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -183,5 +186,23 @@ func TestRenameProjectTool_UpdatesRememberedLastProject(t *testing.T) {
 	}
 	if cfg.LastProject != "acme2" {
 		t.Fatalf("LastProject = %q, want %q", cfg.LastProject, "acme2")
+	}
+}
+
+// TestRenameProjectTool_SameNameIsRefused checks that renaming a project or
+// subproject to its current name, in any case, is refused.
+func TestRenameProjectTool_SameNameIsRefused(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	tool := &RenameProjectTool{Resolver: r, Stores: mgr}
+	for _, args := range []map[string]any{
+		{"project": "a", "new_name": "A"},
+		{"project": "a", "subproject": "api", "new_name": "API"},
+	} {
+		if _, err := tool.Validate(mustJSON(t, args)); err == nil || !strings.Contains(err.Error(), "is the current name") {
+			t.Errorf("Validate(%v) = %v, want the same name refused", args, err)
+		}
+	}
+	if _, err := tool.Validate(mustJSON(t, map[string]any{"project": "a", "subproject": "api", "new_name": "a"})); err != nil {
+		t.Errorf("renaming subproject api to its parent's name: %v", err)
 	}
 }

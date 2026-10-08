@@ -19,8 +19,6 @@ import (
 	"bufio"
 	"cmp"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,6 +33,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/oito2/mcp-sync82/internal/fsutil"
+	"github.com/oito2/mcp-sync82/internal/prompt"
 )
 
 // Repo is the GitHub repository self-update fetches releases from.
@@ -67,9 +68,15 @@ type Deps struct {
 	// filesystems.
 	TempDir string
 
-	// ValidateURL checks a download URL before it is fetched. Defaults to
-	// validateAssetURL (HTTPS from GitHub only).
+	// ValidateURL checks a download URL, and every redirect target, before
+	// it is fetched. Defaults to validateAssetURL (HTTPS from github.com or
+	// GitHub's release asset hosts only).
 	ValidateURL func(rawURL string) error
+
+	// ValidateAsset checks the download URL of a release asset against the
+	// release's tag before it is fetched. Defaults to validateReleaseAsset
+	// (the repository's own release of that tag only).
+	ValidateAsset func(rawURL, tag string) error
 
 	// RunVersion runs a binary with --version and returns its trimmed
 	// output. Defaults to runVersion.
@@ -100,24 +107,34 @@ const (
 // keeping the replaced binary as "<binary>.bak" — restored automatically
 // if the swap fails, and by hand with --rollback.
 func RunSelfUpdate(ctx context.Context, args []string, deps Deps, stdin io.Reader, stdout, stderr io.Writer) int {
-	checkOnly := false
-	skipConfirm := false
-	rollback := false
+	seen := map[string]bool{}
 	for _, a := range args {
-		switch a {
-		case "--check":
-			checkOnly = true
-		case "--yes", "-y":
-			skipConfirm = true
-		case "--rollback":
-			rollback = true
+		name := a
+		if a == "-y" {
+			name = "--yes"
+		}
+		switch name {
+		case "--check", "--yes", "--rollback":
 		default:
-			fmt.Fprintf(stderr, "Error: unknown self-update option %q (usage: sync82 self-update [--check] [--yes] | --rollback)\nRun 'sync82 --help' for usage.\n", a)
+			fmt.Fprintf(stderr, "Error: unknown self-update option %q (usage: sync82 self-update [--check] [--yes] | --rollback)\nRun 'sync82 self-update --help' for usage.\n", a)
 			return 2
 		}
+		if seen[name] {
+			fmt.Fprintf(stderr, "Error: %s given twice\nRun 'sync82 self-update --help' for usage.\n", a)
+			return 2
+		}
+		seen[name] = true
+	}
+	checkOnly, skipConfirm, rollback := seen["--check"], seen["--yes"], seen["--rollback"]
+	if rollback && (checkOnly || skipConfirm) {
+		fmt.Fprintln(stderr, "Error: --rollback can't be combined with --check or --yes\nRun 'sync82 self-update --help' for usage.")
+		return 2
 	}
 	if deps.ValidateURL == nil {
 		deps.ValidateURL = validateAssetURL
+	}
+	if deps.ValidateAsset == nil {
+		deps.ValidateAsset = validateReleaseAsset
 	}
 	if deps.RunVersion == nil {
 		deps.RunVersion = runVersion
@@ -159,15 +176,15 @@ func RunSelfUpdate(ctx context.Context, args []string, deps Deps, stdin io.Reade
 	}
 
 	if !skipConfirm {
-		fmt.Fprint(stdout, "Update now? [y/N] ")
-		line, err := bufio.NewReader(stdin).ReadString('\n')
-		answer := strings.ToLower(strings.TrimSpace(line))
-		if err != nil && answer == "" {
-			fmt.Fprintln(stdout)
-			fmt.Fprintln(stderr, "Error: no answer to the confirmation prompt: stdin is closed; pass --yes to update without asking.")
+		yes, err := prompt.AskYes(ctx, bufio.NewReader(stdin), stdout, "Update now? [y/N] ")
+		switch {
+		case errors.Is(err, context.Canceled):
+			fmt.Fprintln(stderr, "Interrupted; nothing was changed.")
 			return 1
-		}
-		if answer != "y" && answer != "yes" {
+		case err != nil:
+			fmt.Fprintf(stderr, "Error: %v; pass --yes to update without asking.\n", err)
+			return 1
+		case !yes:
 			fmt.Fprintln(stdout, "Aborted.")
 			return 0
 		}
@@ -185,7 +202,11 @@ func RunSelfUpdate(ctx context.Context, args []string, deps Deps, stdin io.Reade
 		return 1
 	}
 	for _, u := range []string{assetURL, checksumsURL} {
-		if err := deps.ValidateURL(u); err != nil {
+		err := deps.ValidateAsset(u, latest)
+		if err == nil {
+			err = deps.ValidateURL(u)
+		}
+		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
@@ -232,7 +253,7 @@ func RunSelfUpdate(ctx context.Context, args []string, deps Deps, stdin io.Reade
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	actualSum, err := sha256File(newBinaryPath)
+	actualSum, err := fsutil.SHA256File(newBinaryPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "Could not verify checksum: %v\n", err)
 		return 1
@@ -242,7 +263,7 @@ func RunSelfUpdate(ctx context.Context, args []string, deps Deps, stdin io.Reade
 		return 1
 	}
 
-	if err := os.Chmod(newBinaryPath, 0o755); err != nil {
+	if err := os.Chmod(newBinaryPath, binaryMode(currentExePath)); err != nil {
 		fmt.Fprintf(stderr, "Could not make the new binary executable: %v\n", err)
 		return 1
 	}
@@ -285,17 +306,65 @@ func runRollback(ctx context.Context, deps Deps, stdout, stderr io.Writer) int {
 	}
 
 	staged := currentExePath + ".rollback"
-	if err := os.Rename(bak, staged); err != nil {
+	if err := fsutil.Rename(bak, staged); err != nil {
 		reportReplaceError(stderr, currentExePath, err)
 		return 1
 	}
 	if err := replaceWithBackup(currentExePath, staged); err != nil {
-		_ = os.Rename(staged, bak)
+		_ = fsutil.Rename(staged, bak)
 		reportReplaceError(stderr, currentExePath, err)
 		return 1
 	}
 	fmt.Fprintf(stdout, "Rolled back to %s (the replaced version is kept at %s). Restart sync82 (or your MCP client) to use it.\n", previous, bak)
 	return 0
+}
+
+// binaryMode returns the permission bits for a new binary replacing the one
+// at currentPath: the current binary's own bits, with the owner's execute
+// bit always set, so an update neither widens nor narrows who can run it;
+// 0755 when the current binary can't be inspected.
+func binaryMode(currentPath string) os.FileMode {
+	info, err := os.Stat(currentPath)
+	if err != nil {
+		return 0o755
+	}
+	return info.Mode().Perm() | 0o100
+}
+
+// errBackupInUse reports a backup that can be neither removed nor moved
+// aside, because a running process still holds it.
+var errBackupInUse = errors.New("the previous version is still in use")
+
+// clearBackup removes the backup at bak, if any, so the current binary can
+// take its place. On Windows a backup that is still running (an MCP client
+// started it before the previous update) can't be removed or replaced, but
+// it can be renamed: it is then moved aside to "<bak>.old-<n>", which a
+// later update removes once it no longer runs. Leftover "<bak>.old-*"
+// files are removed on a best-effort basis. It returns an error wrapping
+// errBackupInUse, telling the user to restart their MCP clients, when bak
+// can be neither removed nor moved aside.
+func clearBackup(bak string) error {
+	// Listed by name prefix, not with a glob, so "[", "*" or "?" in the
+	// install path are taken literally.
+	dir, prefix := filepath.Dir(bak), filepath.Base(bak)+".old-"
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), prefix) {
+				_ = os.Remove(filepath.Join(dir, e.Name()))
+			}
+		}
+	}
+	err := os.Remove(bak)
+	if err == nil || errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	parked := fmt.Sprintf("%s.old-%d", bak, time.Now().UnixNano())
+	if rerr := fsutil.Rename(bak, parked); rerr != nil {
+		// err is reported with %v: wrapping it would make a Windows
+		// access-denied error read as a missing privilege.
+		return fmt.Errorf("%w: %s can't be removed or moved aside (%v); restart your MCP clients, then try again", errBackupInUse, bak, err)
+	}
+	return nil
 }
 
 // backupPath returns the path where the binary at exePath is kept when an
@@ -307,20 +376,28 @@ func backupPath(exePath string) string {
 // replaceWithBackup moves currentPath to its backup path and newPath into
 // its place, restoring currentPath if the second move fails. Both paths
 // are in the same directory, so each move is an atomic rename. A running
-// binary can be renamed on every supported OS, including Windows. It
-// returns an error when either move fails; the error also reports when the
-// restore itself failed.
+// binary can be renamed on every supported OS, including Windows; each
+// move goes through fsutil.Rename, which retries a move another process
+// briefly blocks on Windows. An existing backup is cleared first by
+// clearBackup, and the directory is synced once both moves are done, so
+// the swap survives a crash. It returns an error when clearing the backup
+// or either move fails; the error also reports when the restore itself
+// failed.
 func replaceWithBackup(currentPath, newPath string) error {
 	bak := backupPath(currentPath)
-	if err := os.Rename(currentPath, bak); err != nil {
+	if err := clearBackup(bak); err != nil {
+		return err
+	}
+	if err := fsutil.Rename(currentPath, bak); err != nil {
 		return fmt.Errorf("move the current binary to %s: %w", bak, err)
 	}
-	if err := os.Rename(newPath, currentPath); err != nil {
-		if rerr := os.Rename(bak, currentPath); rerr != nil {
+	if err := fsutil.Rename(newPath, currentPath); err != nil {
+		if rerr := fsutil.Rename(bak, currentPath); rerr != nil {
 			return fmt.Errorf("%w (restoring the previous binary also failed: %v; it is at %s)", err, rerr, bak)
 		}
 		return err
 	}
+	fsutil.SyncDir(filepath.Dir(currentPath))
 	return nil
 }
 
@@ -368,16 +445,40 @@ func runVersion(ctx context.Context, path string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// validateAssetURL accepts only HTTPS downloads from github.com or a
-// *.githubusercontent.com host, where GitHub serves release assets. It
-// returns an error for an unparsable URL or any other scheme or host.
+// assetHosts are the hosts a release download may be served from:
+// github.com, which answers the asset URL, and the hosts it redirects
+// release assets to. Other *.githubusercontent.com hosts serve user
+// content (raw files, gists) and are refused.
+var assetHosts = map[string]bool{
+	"github.com":                           true,
+	"objects.githubusercontent.com":        true,
+	"release-assets.githubusercontent.com": true,
+}
+
+// validateAssetURL accepts only HTTPS downloads from one of assetHosts,
+// without credentials or an explicit port. It returns an error for an
+// unparsable URL or any other scheme or host.
 func validateAssetURL(rawURL string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return fmt.Errorf("invalid download URL %q: %w", rawURL, err)
 	}
-	if u.Scheme != "https" || (u.Hostname() != "github.com" && !strings.HasSuffix(u.Hostname(), ".githubusercontent.com")) {
-		return fmt.Errorf("refusing to download from %q: only HTTPS URLs on github.com are accepted", rawURL)
+	if u.Scheme != "https" || !assetHosts[u.Hostname()] || u.Port() != "" || u.User != nil {
+		return fmt.Errorf("refusing to download from %q: only HTTPS URLs on GitHub's release hosts are accepted", rawURL)
+	}
+	return nil
+}
+
+// validateReleaseAsset accepts only the download URL of an asset of this
+// repository's release tag: https://github.com/<Repo>/releases/download/<tag>/<name>,
+// with no further path segment, query or fragment. It returns an error for
+// any other URL, so a release response can't point the download anywhere
+// else.
+func validateReleaseAsset(rawURL, tag string) error {
+	prefix := "https://github.com/" + Repo + "/releases/download/" + tag + "/"
+	name, ok := strings.CutPrefix(rawURL, prefix)
+	if !ok || name == "" || strings.ContainsAny(name, "/?#\\") {
+		return fmt.Errorf("refusing to download %q: it is not an asset of the %s release of %s", rawURL, tag, Repo)
 	}
 	return nil
 }
@@ -452,6 +553,20 @@ var releaseTagPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
 // isValidReleaseTag reports whether tag matches releaseTagPattern.
 func isValidReleaseTag(tag string) bool {
 	return releaseTagPattern.MatchString(tag)
+}
+
+// ReleasePlatforms returns the GOOS/GOARCH pairs every release is built
+// for, each published as the asset AssetName names. Each call returns a
+// new slice.
+func ReleasePlatforms() [][2]string {
+	return [][2]string{
+		{"linux", "amd64"},
+		{"linux", "arm64"},
+		{"darwin", "amd64"},
+		{"darwin", "arm64"},
+		{"windows", "amd64"},
+		{"windows", "arm64"},
+	}
 }
 
 // AssetName returns the release asset name of the sync82 binary for
@@ -621,32 +736,19 @@ func downloadToFile(ctx context.Context, client *http.Client, url, destPath stri
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-
+	// The file is flushed to disk before it is closed, and a failure to
+	// close it is reported: the binary is about to replace the running one.
 	n, err := io.Copy(out, io.LimitReader(resp.Body, maxDownloadSize+1))
-	if err != nil {
-		return err
+	if err == nil && n > maxDownloadSize {
+		err = fmt.Errorf("response from %s exceeded the %d byte download limit", url, maxDownloadSize)
 	}
-	if n > maxDownloadSize {
-		return fmt.Errorf("response from %s exceeded the %d byte download limit", url, maxDownloadSize)
+	if err == nil {
+		err = out.Sync()
 	}
-	return nil
-}
-
-// sha256File returns the lowercase hex SHA-256 digest of the file at path,
-// or an error if it cannot be read.
-func sha256File(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
+	if cerr := out.Close(); err == nil {
+		err = cerr
 	}
-	defer f.Close()
-
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return err
 }
 
 // findChecksum parses checksums.txt's "<hash>  <filename>" lines

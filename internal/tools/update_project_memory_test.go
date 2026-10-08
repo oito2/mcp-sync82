@@ -353,7 +353,9 @@ func TestUpdateProjectMemoryTool_LastSessionAllowsOnlyAppends(t *testing.T) {
 	if err := s.WriteDocument(ctx, "acme", "", "memory", "keep me"); err != nil {
 		t.Fatal(err)
 	}
-	if err := config.WriteGlobalConfig(config.GlobalConfig{LastProject: "acme", LastVaultPath: r.DefaultDBPath}); err != nil {
+	if err := config.UpdateGlobalConfig(func(c *config.GlobalConfig) {
+		*c = config.GlobalConfig{LastProject: "acme", LastVaultPath: r.DefaultDBPath}
+	}); err != nil {
 		t.Fatal(err)
 	}
 	tool := &UpdateProjectMemoryTool{Resolver: r, Stores: mgr}
@@ -372,5 +374,25 @@ func TestUpdateProjectMemoryTool_LastSessionAllowsOnlyAppends(t *testing.T) {
 	result = runTool(t, tool, map[string]any{"progress": "## 2026-01-01\n- appended"})
 	if result.IsError || !strings.Contains(result.Text, "Appended: progress") {
 		t.Fatalf("append-only call = %+v, want it accepted", result)
+	}
+}
+
+// TestUpdateProjectMemoryTool_DuplicateCustomKindIsRefused checks that one
+// custom file given twice (in any case) is refused before anything is
+// written, so it can't be stored both as a document and as a log, and that
+// every problem is listed together.
+func TestUpdateProjectMemoryTool_DuplicateCustomKindIsRefused(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	tool := &UpdateProjectMemoryTool{Resolver: r, Stores: mgr}
+	_, err := tool.Validate(mustJSON(t, map[string]any{
+		"project": "acme",
+		"custom": []map[string]any{
+			{"filename": "api", "content": "## 2026-01-01\n- a", "mode": "append"},
+			{"filename": "API", "content": "doc", "mode": "write"},
+			{"filename": "bad name", "content": "x"},
+		},
+	}))
+	if err == nil || !strings.Contains(err.Error(), `"api" is given more than once`) || !strings.Contains(err.Error(), "bad name") {
+		t.Fatalf("Validate = %v, want the duplicate and the bad name reported together", err)
 	}
 }

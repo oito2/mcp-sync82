@@ -30,7 +30,7 @@ OpenCode is detected when the `opencode` command is on `PATH`; otherwise the tar
 }
 ```
 
-A file with comments or trailing commas (common in `opencode.jsonc`) is never rewritten: the target fails and prints the entry to add by hand.
+A file with comments or trailing commas (common in `opencode.jsonc`) is never rewritten: the target reports `manual step needed` and prints the entry to add by hand.
 
 Alternatively, register it with OpenCode's own CLI, using the absolute path printed by `which sync82`:
 

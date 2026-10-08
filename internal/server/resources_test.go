@@ -27,6 +27,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/oito2/mcp-sync82/internal/store"
+	"github.com/oito2/mcp-sync82/internal/tools"
 )
 
 // TestRecoverAsInternal_TurnsAPanicIntoAnError verifies that a deferred
@@ -59,6 +60,13 @@ func TestInternalError_WordsErrorsLikeTools(t *testing.T) {
 // TestHasArgument verifies that completion only accepts an argument the
 // referenced prompt or resource template actually has.
 func TestHasArgument(t *testing.T) {
+	opts := Options{
+		Prompts: []tools.PromptDefinition{{Name: "start_session", Arguments: []tools.PromptArgument{{Name: "project"}}}},
+		ResourceTemplates: []tools.ResourceTemplate{
+			{URITemplate: "sync82://projects/{project}/context"},
+			{URITemplate: "sync82://projects/{project}/files/{file}"},
+		},
+	}
 	cases := []struct {
 		ref  mcp.CompleteReference
 		arg  string
@@ -72,7 +80,7 @@ func TestHasArgument(t *testing.T) {
 		{mcp.CompleteReference{Type: "ref/resource", URI: "sync82://projects/{project}/context"}, "project", true},
 	}
 	for _, c := range cases {
-		if got := hasArgument(&c.ref, c.arg); got != c.want {
+		if got := hasArgument(opts, &c.ref, c.arg); got != c.want {
 			t.Errorf("hasArgument(%+v, %q) = %v, want %v", c.ref, c.arg, got, c.want)
 		}
 	}
@@ -91,5 +99,18 @@ func TestListResourcesMiddleware_RejectsACursor(t *testing.T) {
 	var rpcErr *jsonrpc.Error
 	if !errors.As(err, &rpcErr) || rpcErr.Code != jsonrpc.CodeInvalidParams {
 		t.Fatalf("err = %v, want an invalid-params error", err)
+	}
+}
+
+// TestCancelAsInfo verifies that the SDK's logger records an error caused
+// by context.Canceled at INFO and every other error at ERROR.
+func TestCancelAsInfo(t *testing.T) {
+	var buf strings.Builder
+	logger := slog.New(cancelAsInfo{slog.NewTextHandler(&buf, nil)}).With("server", "sync82")
+	logger.Error("server run cancelled", "error", fmt.Errorf("run: %w", context.Canceled))
+	logger.Error("server failed", "error", errors.New("broken pipe"))
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], "level=INFO") || !strings.Contains(lines[1], "level=ERROR") {
+		t.Errorf("logged:\n%s\nwant the cancellation at INFO and the failure at ERROR", buf.String())
 	}
 }

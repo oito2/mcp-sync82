@@ -1,0 +1,250 @@
+{
+  "check_project_health": {
+    "properties": {
+      "files": {
+        "additionalProperties": {
+          "type": "boolean"
+        },
+        "type": "object"
+      },
+      "healthy": {
+        "type": "boolean"
+      },
+      "project": {
+        "type": "string"
+      },
+      "projects": {
+        "items": {
+          "properties": {
+            "healthy": {
+              "type": "boolean"
+            },
+            "missing": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "project": {
+              "type": "string"
+            },
+            "subproject": {
+              "type": "string"
+            },
+            "warnings": {
+              "items": {
+                "properties": {
+                  "check": {
+                    "enum": [
+                      "stale",
+                      "template",
+                      "undated_entries",
+                      "large_history",
+                      "empty_log"
+                    ],
+                    "type": "string"
+                  },
+                  "file": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file",
+                  "check",
+                  "message"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "project",
+            "healthy",
+            "missing",
+            "warnings"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "vault": {
+        "type": "string"
+      },
+      "warnings": {
+        "items": {
+          "properties": {
+            "check": {
+              "enum": [
+                "stale",
+                "template",
+                "undated_entries",
+                "large_history",
+                "empty_log"
+              ],
+              "type": "string"
+            },
+            "file": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "file",
+            "check",
+            "message"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "vault",
+      "healthy"
+    ],
+    "type": "object"
+  },
+  "list_files": {
+    "properties": {
+      "files": {
+        "items": {
+          "properties": {
+            "estimated_tokens": {
+              "type": "integer"
+            },
+            "last_modified": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "size_bytes": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "project": {
+        "type": "string"
+      },
+      "vault": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "project",
+      "vault",
+      "files"
+    ],
+    "type": "object"
+  },
+  "list_projects": {
+    "properties": {
+      "projects": {
+        "items": {
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "subprojects": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "name",
+            "subprojects"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "vault": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "vault",
+      "projects"
+    ],
+    "type": "object"
+  },
+  "search_memory": {
+    "properties": {
+      "next_offset": {
+        "type": "integer"
+      },
+      "query": {
+        "type": "string"
+      },
+      "results": {
+        "items": {
+          "properties": {
+            "context_after": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "context_before": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "entry_date": {
+              "type": "string"
+            },
+            "entry_id": {
+              "type": "integer"
+            },
+            "file": {
+              "type": "string"
+            },
+            "line": {
+              "type": "integer"
+            },
+            "project": {
+              "type": "string"
+            },
+            "subproject": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "project",
+            "file",
+            "line",
+            "text"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "scan_truncated": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "query",
+      "results"
+    ],
+    "type": "object"
+  }
+}

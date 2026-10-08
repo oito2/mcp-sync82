@@ -38,13 +38,9 @@ type AppendMemoryTool struct {
 // appendMemoryArgs holds the decoded arguments of the append_memory tool;
 // its JSON tags match the property names declared in InputSchema.
 type appendMemoryArgs struct {
-	Project          string `json:"project,omitempty"`
-	Subproject       string `json:"subproject,omitempty"`
-	Filename         string `json:"filename"`
-	Content          string `json:"content"`
-	Path             string `json:"path,omitempty"`
-	WorkspaceRoot    string `json:"workspace_root,omitempty"`
-	SearchParentDirs bool   `json:"search_parent_dirs,omitempty"`
+	targetArgs
+	Filename string `json:"filename"`
+	Content  string `json:"content"`
 }
 
 // Name returns the MCP tool name, "append_memory".
@@ -62,15 +58,10 @@ func (t *AppendMemoryTool) Description() string {
 func (t *AppendMemoryTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
-			"project":            map[string]any{"type": "string", "description": "Project name. If omitted, auto-discovered from workspace_root or the last used project."},
-			"subproject":         map[string]any{"type": "string", "description": "Subproject name."},
-			"filename":           map[string]any{"type": "string", "description": "The file/kind to append to (e.g. \"progress\", \"decisions\", or a custom name)."},
-			"content":            map[string]any{"type": "string", "description": "The content to append. For \"progress\"/\"decisions\", must contain a \"## YYYY-MM-DD\" header."},
-			"workspace_root":     map[string]any{"type": "string", "description": "Path to your project folder, used to auto-discover the project via .sync82.json."},
-			"search_parent_dirs": map[string]any{"type": "boolean", "description": SearchParentDirsDescription},
-			"path":               map[string]any{"type": "string", "description": PathDescription},
-		},
+		"properties": targetProperties(targetSchema{}, map[string]any{
+			"filename": map[string]any{"type": "string", "description": "The file/kind to append to (e.g. \"progress\", \"decisions\", or a custom name)."},
+			"content":  map[string]any{"type": "string", "description": "The content to append. For \"progress\"/\"decisions\", must contain a \"## YYYY-MM-DD\" header."},
+		}),
 		"required": []string{"filename", "content"},
 	}
 }
@@ -84,6 +75,9 @@ func (t *AppendMemoryTool) Validate(raw json.RawMessage) (any, error) {
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
+	// Entry id marker lines are removed before the checks, so content
+	// holding only markers is refused here as empty.
+	args.Content = stripEntryMarkers(args.Content)
 	kind, err := validateAppendInput(args.Filename, args.Content)
 	if err != nil {
 		return nil, err
@@ -99,10 +93,7 @@ func (t *AppendMemoryTool) Validate(raw json.RawMessage) (any, error) {
 // returned as errors.
 func (t *AppendMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(appendMemoryArgs)
-	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, ContextArgs{
-		Project: args.Project, Subproject: args.Subproject, Path: args.Path,
-		WorkspaceRoot: args.WorkspaceRoot, SearchParentDirs: args.SearchParentDirs,
-	})
+	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, args.contextArgs())
 	if ready != nil {
 		return *ready, nil
 	}

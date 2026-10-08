@@ -27,18 +27,18 @@ import (
 	"github.com/oito2/mcp-sync82/internal/tools"
 )
 
-// addResources registers every tools.ResourceTemplate on s, read through
+// addResources registers every template in templates on s, read through
 // res, and a receiving middleware that answers resources/list with the
 // context resource of every project in the default vault, listed when the
 // request arrives so projects created during the session appear. It
 // returns the function that tells connected clients the resource list
 // changed: it registers the first template again, which makes the SDK send
 // notifications/resources/list_changed (debounced), the only way the SDK
-// offers to send it.
-func addResources(s *mcp.Server, res *tools.Resources, logger *slog.Logger) (listChanged func()) {
+// offers to send it. templates must not be empty.
+func addResources(s *mcp.Server, defs []tools.ResourceTemplate, res *tools.Resources, logger *slog.Logger) (listChanged func()) {
 	read := readResourceHandler(res, logger)
-	templates := make([]*mcp.ResourceTemplate, len(tools.ResourceTemplates))
-	for i, t := range tools.ResourceTemplates {
+	templates := make([]*mcp.ResourceTemplate, len(defs))
+	for i, t := range defs {
 		templates[i] = &mcp.ResourceTemplate{
 			URITemplate: t.URITemplate,
 			Name:        t.Name,
@@ -114,12 +114,12 @@ func listResourcesMiddleware(res *tools.Resources, logger *slog.Logger) mcp.Midd
 	}
 }
 
-// addPrompts registers every tools.Prompts definition on s. Getting a
+// addPrompts registers every definition in prompts on s. Getting a
 // prompt renders its instruction as one user message; invalid arguments
 // are reported as an invalid-params error, and a panic as an internal
 // error logged to logger.
-func addPrompts(s *mcp.Server, logger *slog.Logger) {
-	for _, def := range tools.Prompts {
+func addPrompts(s *mcp.Server, prompts []tools.PromptDefinition, logger *slog.Logger) {
+	for _, def := range prompts {
 		args := make([]*mcp.PromptArgument, len(def.Arguments))
 		for i, a := range def.Arguments {
 			args[i] = &mcp.PromptArgument{Name: a.Name, Description: a.Description, Required: a.Required}
@@ -142,23 +142,23 @@ func addPrompts(s *mcp.Server, logger *slog.Logger) {
 }
 
 // completionHandler returns the handler of completion/complete: for an
-// argument that a sync82 prompt or resource template actually has, the
-// matching names from res.Complete; for any other reference or argument,
+// argument that one of opts.Prompts or opts.ResourceTemplates actually
+// has, the matching names from opts.Resources.Complete; for any other reference or argument,
 // no values. A failure or a panic is answered with an internal error
 // (internalError, recoverAsInternal).
-func completionHandler(res *tools.Resources, logger *slog.Logger) func(context.Context, *mcp.CompleteRequest) (*mcp.CompleteResult, error) {
+func completionHandler(opts Options, logger *slog.Logger) func(context.Context, *mcp.CompleteRequest) (*mcp.CompleteResult, error) {
 	return func(ctx context.Context, req *mcp.CompleteRequest) (_ *mcp.CompleteResult, err error) {
 		defer recoverAsInternal(logger, "completion/complete", &err)
 		out := &mcp.CompleteResult{Completion: mcp.CompletionResultDetails{Values: []string{}}}
 		p := req.Params
-		if p == nil || p.Ref == nil || !hasArgument(p.Ref, p.Argument.Name) {
+		if p == nil || p.Ref == nil || !hasArgument(opts, p.Ref, p.Argument.Name) {
 			return out, nil
 		}
 		var args map[string]string
 		if p.Context != nil {
 			args = p.Context.Arguments
 		}
-		values, total, err := res.Complete(ctx, p.Argument.Name, p.Argument.Value, args)
+		values, total, err := opts.Resources.Complete(ctx, p.Argument.Name, p.Argument.Value, args)
 		if err != nil {
 			return nil, internalError(logger, "completion/complete", err)
 		}
@@ -171,13 +171,13 @@ func completionHandler(res *tools.Resources, logger *slog.Logger) func(context.C
 	}
 }
 
-// hasArgument reports whether ref names one of tools.Prompts
+// hasArgument reports whether ref names one of opts.Prompts
 // ("ref/prompt") with an argument called name, or one of
-// tools.ResourceTemplates ("ref/resource") with a {name} variable.
-func hasArgument(ref *mcp.CompleteReference, name string) bool {
+// opts.ResourceTemplates ("ref/resource") with a {name} variable.
+func hasArgument(opts Options, ref *mcp.CompleteReference, name string) bool {
 	switch ref.Type {
 	case "ref/prompt":
-		for _, p := range tools.Prompts {
+		for _, p := range opts.Prompts {
 			if p.Name != ref.Name {
 				continue
 			}
@@ -188,7 +188,7 @@ func hasArgument(ref *mcp.CompleteReference, name string) bool {
 			}
 		}
 	case "ref/resource":
-		for _, t := range tools.ResourceTemplates {
+		for _, t := range opts.ResourceTemplates {
 			if t.URITemplate == ref.URI && strings.Contains(t.URITemplate, "{"+name+"}") {
 				return true
 			}

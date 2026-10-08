@@ -154,9 +154,17 @@ sync82 config set-vault /um/caminho/gravavel/vault.db
 
 **Sintoma:** toda chamada de tool nesse vault falha. O sync82 1.0.0 responde `internal error: could not open the vault database`; as versões seguintes respondem `could not open the vault database: the vault's schema is newer than this sync82 supports; upgrade sync82`. O log do servidor (stderr, que aparece nos logs MCP do cliente) e comandos da CLI como o `sync82 export` mostram as versões envolvidas: `vault schema version 3 is newer than this sync82 supports (2)`.
 
-**Causa:** o vault foi aberto por um sync82 mais novo, que atualizou o schema dele — a versão 3, por exemplo, cria os índices da busca de texto completo — e agora está sendo aberto por um binário mais antigo. Vários clientes que compartilham um vault podem rodar binários diferentes do sync82. O binário mais antigo recusa o vault em vez de gravar nele, porque as gravações dele deixariam desatualizadas as partes mais novas do schema.
+**Causa:** o vault foi aberto por um sync82 mais novo, que atualizou o schema dele — a versão 3 (sync82 1.1.0) cria os índices da busca de texto completo e a versão 4 (sync82 1.2.0) faz os ids nunca serem reaproveitados — e agora está sendo aberto por um binário mais antigo. Vários clientes que compartilham um vault podem rodar binários diferentes do sync82. O binário mais antigo recusa o vault em vez de gravar nele, porque as gravações dele deixariam desatualizadas as partes mais novas do schema.
 
 **Solução:** atualize o binário do sync82 que cada cliente usa (`sync82 self-update`, ou `go install github.com/oito2/mcp-sync82/cmd/sync82@latest`) e reinicie os clientes. Confira o binário de cada cliente com `sync82 version` ou pelo caminho que a configuração MCP dele aponta. Uma atualização de schema não pode ser desfeita. Para voltar a um sync82 mais antigo, exporte os projetos com o mais novo (`sync82 export --all <dir>`) e importe com o mais antigo num vault novo (`sync82 import`, com `--path` apontando para o novo arquivo de vault).
+
+### O `self-update` diz que a versão anterior ainda está em uso
+
+**Sintoma:** o `sync82 self-update` no Windows para com `the previous version is still in use: …\sync82.exe.bak can't be removed or moved aside (…); restart your MCP clients, then try again`.
+
+**Causa:** um cliente MCP ainda roda o binário que a última atualização guardou como `sync82.exe.bak`. O Windows não deixa apagar um programa em execução; a atualização o move para `sync82.exe.bak.old-<n>` no lugar, e essa mensagem quer dizer que nem isso deu certo.
+
+**Solução:** feche e reabra seus clientes MCP (ou encerre os processos `sync82.exe`) e rode `sync82 self-update` de novo. Arquivos `sync82.exe.bak.old-*` que sobrarem são removidos pela próxima atualização quando nada mais os estiver rodando.
 
 ---
 

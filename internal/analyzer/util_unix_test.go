@@ -20,6 +20,7 @@ package analyzer
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -65,5 +66,59 @@ func TestReadMarkerFile_SkipsDevice(t *testing.T) {
 	r := analyzeWithin(t, root, 2*time.Second)
 	if len(r.Languages) != 0 {
 		t.Errorf("Languages = %v, want none from a device", r.Languages)
+	}
+}
+
+// TestOpenMarker_DoesNotBlockOnAFIFO verifies that opening a FIFO with no
+// writer returns at once, so a FIFO swapped in after readMarkerFile's Stat
+// can't block it; the file is then rejected as not regular.
+func TestOpenMarker_DoesNotBlockOnAFIFO(t *testing.T) {
+	root := t.TempDir()
+	if err := syscall.Mkfifo(filepath.Join(root, "Cargo.toml"), 0o644); err != nil {
+		t.Skipf("mkfifo unavailable: %v", err)
+	}
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	opened := make(chan error, 1)
+	go func() {
+		f, err := openMarker(r, "Cargo.toml")
+		if err == nil {
+			info, serr := f.Stat()
+			if serr == nil && info.Mode().IsRegular() {
+				err = os.ErrInvalid
+			}
+			f.Close()
+		}
+		opened <- err
+	}()
+	select {
+	case err := <-opened:
+		if err != nil {
+			t.Fatalf("openMarker on a FIFO: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("openMarker blocked on a FIFO with no writer")
+	}
+}
+
+// TestDetectComponents_IgnoresSymlinkedMonorepoDir checks that a packages/
+// directory that is a symlink to somewhere outside the workspace is not
+// listed.
+func TestDetectComponents_IgnoresSymlinkedMonorepoDir(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	if err := os.Mkdir(filepath.Join(outside, "secret-client"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "packages")); err != nil {
+		t.Fatal(err)
+	}
+	r := analyzeWithin(t, root, 2*time.Second)
+	for _, c := range r.Components {
+		if strings.Contains(c, "secret-client") {
+			t.Fatalf("Components = %v, listing a directory outside the workspace", r.Components)
+		}
 	}
 }

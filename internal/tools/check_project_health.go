@@ -18,8 +18,10 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -29,11 +31,12 @@ import (
 // CheckProjectHealthTool implements check_project_health: report which of
 // the six standard kinds exist for the resolved project. "Exists" means a
 // documents row is present (even empty — it was written on purpose) or at
-// least one non-archived entries row is present. It also reports warnings
-// that never make the project unhealthy: a current-state document left
-// behind by newer log entries, a standard document still empty or holding
-// the blank template, undated log entries and a long active log.
-
+// least one entries row is present, archived or not. A missing
+// current-state document makes the project unhealthy; a log
+// (progress, decisions) with no entry yet only gets an empty_log warning. It also reports
+// warnings that never make the project unhealthy: a current-state document
+// left behind by newer log entries, a standard document still empty or
+// holding the blank template, undated log entries and a long active log.
 type CheckProjectHealthTool struct {
 	Resolver *Resolver
 	Stores   *store.Manager
@@ -43,13 +46,10 @@ type CheckProjectHealthTool struct {
 // check_project_health tool; its JSON tags match the property names declared
 // in InputSchema.
 type checkProjectHealthArgs struct {
-	Project          string `json:"project,omitempty"`
-	Subproject       string `json:"subproject,omitempty"`
-	Path             string `json:"path,omitempty"`
-	WorkspaceRoot    string `json:"workspace_root,omitempty"`
-	SearchParentDirs bool   `json:"search_parent_dirs,omitempty"`
-	Format           string `json:"format,omitempty"`
-	StaleDays        int    `json:"stale_days,omitempty"`
+	targetArgs
+	AllProjects bool   `json:"all_projects,omitempty"`
+	Format      string `json:"format,omitempty"`
+	StaleDays   int    `json:"stale_days,omitempty"`
 }
 
 // Health warning thresholds: the default number of days after which a
@@ -70,6 +70,7 @@ const (
 	checkTemplate       = "template"
 	checkUndatedEntries = "undated_entries"
 	checkLargeHistory   = "large_history"
+	checkEmptyLog       = "empty_log"
 )
 
 // healthWarning is one problem check_project_health reports without making
@@ -87,59 +88,69 @@ func (t *CheckProjectHealthTool) Name() string { return "check_project_health" }
 // Description returns the text shown to the calling agent that explains what
 // the tool does and how to use it.
 func (t *CheckProjectHealthTool) Description() string {
-	return "Report which of the six standard memory files exist for a project, plus warnings about memory that may be out of date: a current-state file (memory, architecture, stack, next_steps) not updated for stale_days (default 30) while progress or decisions got newer entries, a standard file still empty or holding the blank template, undated progress/decisions entries, and a log with more than 200 active entries. Returns an error result (isError: true) when the project is unhealthy (a standard file is missing) — a deliberate signal for the calling agent to act on, not a crash; warnings alone never make it unhealthy."
+	return "Report which of the six standard memory files exist for a project. A missing current-state file (memory, architecture, stack, next_steps) makes the project unhealthy; progress or decisions with no entry yet only gets a warning. Other warnings point at memory that may be out of date: a current-state file (memory, architecture, stack, next_steps) not updated for stale_days (default 30) while progress or decisions got newer entries, a standard file still empty or holding the blank template, undated progress/decisions entries, and a log with more than 200 active entries. With all_projects: true it checks every project and subproject of the vault instead, one line each, then the details of the ones that are not healthy. Returns an error result (isError: true) when the project (or any project) is unhealthy (a current-state file is missing) — a deliberate signal for the calling agent to act on, not a crash; warnings alone never make it unhealthy."
 }
 
 // InputSchema returns the JSON Schema of the tool's arguments: an object
-// with the optional property format plus the project-resolution properties.
+// with the optional properties all_projects, format and stale_days plus the
+// project-resolution properties.
 func (t *CheckProjectHealthTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
-			"project":            map[string]any{"type": "string", "description": "Project name. If omitted, auto-discovered from workspace_root or the last used project."},
-			"subproject":         map[string]any{"type": "string", "description": "Subproject name."},
-			"workspace_root":     map[string]any{"type": "string", "description": "Path to your project folder, used to auto-discover the project via .sync82.json."},
-			"search_parent_dirs": map[string]any{"type": "boolean", "description": SearchParentDirsDescription},
-			"path":               map[string]any{"type": "string", "description": PathDescription},
-			"format":             formatProperty(),
-			"stale_days":         map[string]any{"type": "integer", "minimum": 1, "description": "Days after which a current-state file older than the newest progress/decisions entry is reported as possibly out of date (default 30)."},
-		},
+		"properties": targetProperties(targetSchema{}, map[string]any{
+			"all_projects": map[string]any{"type": "boolean", "description": "Check every project and subproject of the vault (the one named by path, or the default vault) instead of one project. Can't be combined with project, subproject or workspace_root."},
+			"format":       formatProperty(),
+			"stale_days":   map[string]any{"type": "integer", "minimum": 1, "description": "Days after which a current-state file older than the newest progress/decisions entry is reported as possibly out of date (default 30)."},
+		}),
 	}
 }
 
 // Validate decodes raw into checkProjectHealthArgs, normalizes format to
 // "text" or "json" and defaults StaleDays to defaultStaleDays. It returns
-// the arguments, or an error when format is invalid or stale_days is
-// negative.
+// the arguments, or an error when format is invalid, stale_days is
+// negative, or all_projects is combined with project, subproject or
+// workspace_root.
 func (t *CheckProjectHealthTool) Validate(raw json.RawMessage) (any, error) {
 	var args checkProjectHealthArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
+	var problems []string
 	format, err := validateFormat(args.Format)
 	if err != nil {
-		return nil, err
+		problems = append(problems, err.Error())
 	}
 	args.Format = format
 	if args.StaleDays < 0 {
-		return nil, fmt.Errorf(`"stale_days" must be >= 1`)
+		problems = append(problems, `"stale_days" must be >= 1`)
 	}
 	if args.StaleDays == 0 {
 		args.StaleDays = defaultStaleDays
 	}
+	if args.AllProjects {
+		for _, f := range []struct{ name, value string }{{"project", args.Project}, {"subproject", args.Subproject}, {"workspace_root", args.WorkspaceRoot}} {
+			if strings.TrimSpace(f.value) != "" {
+				problems = append(problems, fmt.Sprintf(`"all_projects" can't be combined with %q`, f.name))
+			}
+		}
+	}
+	if err := problemsError(problems); err != nil {
+		return nil, err
+	}
 	return args, nil
 }
 
-// Execute resolves the target project, checks that each standard kind
-// exists and collects the healthWarnings. The result is a text or JSON
-// report; its IsError flag is set when any standard kind is missing, never
-// for warnings alone. Store failures are returned as errors.
+// Execute checks the target project, or with AllProjects every project of
+// the vault, and returns a text or JSON report; in both formats the report
+// is also the structured content. Its IsError flag is set when any checked
+// project misses a standard kind, never for warnings alone. Store failures
+// are returned as errors.
 func (t *CheckProjectHealthTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(checkProjectHealthArgs)
-	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, ContextArgs{
-		Project: args.Project, Subproject: args.Subproject, Path: args.Path,
-		WorkspaceRoot: args.WorkspaceRoot, SearchParentDirs: args.SearchParentDirs,
-	})
+	if args.AllProjects {
+		return t.executeVault(ctx, args)
+	}
+	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, args.contextArgs())
 	if ready != nil {
 		return *ready, nil
 	}
@@ -147,80 +158,240 @@ func (t *CheckProjectHealthTool) Execute(ctx context.Context, rawArgs any) (Tool
 		return ToolResult{}, err
 	}
 
-	type kindStatus struct {
-		kind   string
-		exists bool
-	}
-	statuses := make([]kindStatus, 0, len(standardKinds))
-	isHealthy := true
-	for _, k := range standardKinds {
-		exists, err := s.KindExists(ctx, rctx.Project, rctx.Subproject, k)
-		if err != nil {
-			return ToolResult{}, wrapNotFound(err, rctx.Label())
-		}
-		statuses = append(statuses, kindStatus{kind: k, exists: exists})
-		if !exists {
-			isHealthy = false
-		}
-	}
-
-	warnings, err := healthWarnings(ctx, s, rctx, args.StaleDays)
+	h, err := checkHealth(ctx, s, rctx.Project, rctx.Subproject, args.StaleDays)
 	if err != nil {
 		return ToolResult{}, err
 	}
-
+	report := healthReport{Project: rctx.Label(), Vault: rctx.DBPath, Healthy: h.Healthy, Files: map[string]bool{}, Warnings: h.Warnings}
+	for _, k := range standardKinds {
+		report.Files[k] = h.Exists[k]
+	}
 	if args.Format == "json" {
-		report := healthReport{Project: rctx.Label(), Vault: rctx.DBPath, Healthy: isHealthy, Files: map[string]bool{}, Warnings: warnings}
-		for _, st := range statuses {
-			report.Files[st.kind] = st.exists
-		}
-		return jsonResult(report, !isHealthy)
+		return jsonResult(report, !h.Healthy)
 	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Health report for project: %s%s\n", rctx.Label(), ContextNote(rctx))
-	if isHealthy {
+	if h.Healthy {
 		b.WriteString("Status: HEALTHY ✅\n\nFiles:\n")
 	} else {
 		b.WriteString("Status: UNHEALTHY ❌\n\nFiles:\n")
 	}
-	for _, st := range statuses {
-		status := "MISSING"
-		if st.exists {
-			status = "OK"
+	for _, k := range standardKinds {
+		status := "OK"
+		switch {
+		case report.Files[k]:
+		case slices.Contains(h.Missing, k):
+			status = "MISSING"
+		default:
+			status = "EMPTY (no entry yet)"
 		}
-		fmt.Fprintf(&b, "- %s: %s\n", st.kind, status)
+		fmt.Fprintf(&b, "- %s: %s\n", k, status)
 	}
-	if !isHealthy {
-		b.WriteString("\nRecommendation: Use create_project or init_project_memory to restore missing files.")
+	if !h.Healthy {
+		b.WriteString("\n" + missingFilesAdvice)
 	}
-	if len(warnings) > 0 {
-		if !isHealthy {
+	if len(h.Warnings) > 0 {
+		if !h.Healthy {
 			b.WriteString("\n")
 		}
 		b.WriteString("\nWarnings:\n")
-		for _, w := range warnings {
+		for _, w := range h.Warnings {
 			fmt.Fprintf(&b, "- %s: %s\n", w.File, w.Message)
 		}
 	}
 
-	return ToolResult{Text: b.String(), IsError: !isHealthy}, nil
+	return ToolResult{Text: b.String(), IsError: !h.Healthy, Structured: report}, nil
 }
 
-// healthWarnings returns the warnings for the project of rctx in s, current
-// state files first, in standard kind order. A current-state document still
+// executeVault checks every project and subproject of the vault named by
+// args.Path (or the default vault), never the last-used project, and
+// returns VaultHealthText or the JSON report, with the report as the
+// structured content. A missing vault is an error result.
+func (t *CheckProjectHealthTool) executeVault(ctx context.Context, args checkProjectHealthArgs) (ToolResult, error) {
+	dbPath := t.Resolver.DBPathOrDefault(args.Path)
+	s, err := t.Stores.GetExisting(ctx, dbPath)
+	if errors.Is(err, store.ErrVaultNotFound) {
+		return vaultMissingResult(dbPath), nil
+	}
+	if err != nil {
+		return ToolResult{}, err
+	}
+	report, err := VaultHealth(ctx, s, dbPath, args.StaleDays)
+	if err != nil {
+		return ToolResult{}, err
+	}
+	if args.Format == "json" {
+		return jsonResult(report, !report.Healthy)
+	}
+	return ToolResult{Text: VaultHealthText(report), IsError: !report.Healthy, Structured: report}, nil
+}
+
+// projectHealth is the outcome of checking one project: whether it is
+// healthy, the current-state kinds it misses, in standard kind order,
+// whether each standard kind exists, and its warnings.
+type projectHealth struct {
+	Healthy  bool
+	Missing  []string
+	Exists   map[string]bool
+	Warnings []healthWarning
+}
+
+// missingFilesAdvice is the recommendation printed when a current-state
+// file is missing: init_project_memory writes the ones that are missing
+// and leaves the others as they are.
+const missingFilesAdvice = "Recommendation: Use init_project_memory to write the missing files; it leaves the existing ones as they are."
+
+// checkHealth checks the project or subproject named by project and
+// subproject in s: every current-state kind must exist, a log with no
+// entry yet gets an empty_log warning, and healthWarnings lists what may be
+// out of date. It returns an error wrapping store.ErrNotFound when the
+// project does not exist, or a store error.
+func checkHealth(ctx context.Context, s *store.Store, project, subproject string, staleDays int) (projectHealth, error) {
+	modes, err := s.KindModes(ctx, project, subproject)
+	if err != nil {
+		return projectHealth{}, wrapNotFound(err, FormatLabel(project, subproject))
+	}
+	h := projectHealth{Healthy: true, Missing: []string{}, Exists: map[string]bool{}}
+	for _, k := range standardKinds {
+		h.Exists[k] = modes[k] != store.KindStorageNone
+	}
+	for _, k := range currentStateKinds {
+		if !h.Exists[k] {
+			h.Healthy = false
+			h.Missing = append(h.Missing, k)
+		}
+	}
+	h.Warnings, err = healthWarnings(ctx, s, project, subproject, modes, staleDays)
+	if err != nil {
+		return projectHealth{}, err
+	}
+	for _, k := range []string{"progress", "decisions"} {
+		if !h.Exists[k] {
+			h.Warnings = append(h.Warnings, healthWarning{File: k, Check: checkEmptyLog,
+				Message: "no entry yet; record the work with update_project_memory or append_memory"})
+		}
+	}
+	return h, nil
+}
+
+// VaultHealthReport is the report of a vault-wide health check: the vault
+// path, whether every project in it is healthy, and one entry per project
+// and subproject, in name order with each project followed by its
+// subprojects.
+type VaultHealthReport struct {
+	Vault    string                `json:"vault"`
+	Healthy  bool                  `json:"healthy"`
+	Projects []ProjectHealthReport `json:"projects"`
+}
+
+// ProjectHealthReport is one project's entry in a VaultHealthReport: its
+// name, its subproject name (empty for a top-level project), whether it is
+// healthy, the standard kinds it misses and its warnings.
+type ProjectHealthReport struct {
+	Project    string          `json:"project"`
+	Subproject string          `json:"subproject,omitempty"`
+	Healthy    bool            `json:"healthy"`
+	Missing    []string        `json:"missing"`
+	Warnings   []healthWarning `json:"warnings"`
+}
+
+// VaultHealth checks every project and subproject of s, whose path is
+// vault, with staleDays as the stale threshold. An empty vault is healthy.
+// Store failures are returned as errors.
+func VaultHealth(ctx context.Context, s *store.Store, vault string, staleDays int) (VaultHealthReport, error) {
+	report := VaultHealthReport{Vault: vault, Healthy: true, Projects: []ProjectHealthReport{}}
+	tree, err := s.ProjectTree(ctx)
+	if err != nil {
+		return VaultHealthReport{}, err
+	}
+	check := func(project, subproject string) error {
+		h, err := checkHealth(ctx, s, project, subproject, staleDays)
+		if err != nil {
+			return err
+		}
+		if h.Warnings == nil {
+			h.Warnings = []healthWarning{}
+		}
+		report.Healthy = report.Healthy && h.Healthy
+		report.Projects = append(report.Projects, ProjectHealthReport{Project: project, Subproject: subproject, Healthy: h.Healthy, Missing: h.Missing, Warnings: h.Warnings})
+		return nil
+	}
+	for _, top := range tree {
+		if err := check(top.Name, ""); err != nil {
+			return VaultHealthReport{}, err
+		}
+		for _, sub := range top.Subprojects {
+			if err := check(top.Name, sub); err != nil {
+				return VaultHealthReport{}, err
+			}
+		}
+	}
+	return report, nil
+}
+
+// VaultHealthText renders report as text: one status line per project
+// (HEALTHY, UNHEALTHY with the missing count, or WARNINGS with their
+// count), a summary line, then the missing files and warnings of every
+// project that is not plainly healthy.
+func VaultHealthText(report VaultHealthReport) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Health report for vault: %s\n", report.Vault)
+	if len(report.Projects) == 0 {
+		b.WriteString("\nNo projects in the vault.\n")
+		return b.String()
+	}
+	b.WriteString("\n")
+	var unhealthy, warned int
+	for _, p := range report.Projects {
+		label := FormatLabel(p.Project, p.Subproject)
+		switch {
+		case !p.Healthy:
+			unhealthy++
+			fmt.Fprintf(&b, "- %s: UNHEALTHY ❌ (%d missing)\n", label, len(p.Missing))
+		case len(p.Warnings) > 0:
+			warned++
+			fmt.Fprintf(&b, "- %s: WARNINGS ⚠️ (%d)\n", label, len(p.Warnings))
+		default:
+			fmt.Fprintf(&b, "- %s: HEALTHY ✅\n", label)
+		}
+	}
+	fmt.Fprintf(&b, "\n%d %s: %d healthy, %d unhealthy, %d with warnings only.\n",
+		len(report.Projects), pluralize(len(report.Projects), "project", "projects"), len(report.Projects)-unhealthy-warned, unhealthy, warned)
+	for _, p := range report.Projects {
+		if p.Healthy && len(p.Warnings) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "\n%s:\n", FormatLabel(p.Project, p.Subproject))
+		if len(p.Missing) > 0 {
+			fmt.Fprintf(&b, "- missing: %s\n", strings.Join(p.Missing, ", "))
+		}
+		for _, w := range p.Warnings {
+			fmt.Fprintf(&b, "- %s: %s\n", w.File, w.Message)
+		}
+	}
+	if unhealthy > 0 {
+		b.WriteString("\n" + missingFilesAdvice + "\n")
+	}
+	return b.String()
+}
+
+// healthWarnings returns the warnings for the project or subproject named
+// by project and subproject in s, current state files first, in standard kind order; modes is the project's
+// store.KindModes, so only the kinds stored as documents are read. A
+// current-state document still
 // empty or equal to its blank template gets a template warning; otherwise it
 // gets a stale warning when it was last updated more than staleDays days ago
 // and progress or decisions has a dated entry after that day. The two logs
 // get an undated_entries warning for undated entries other than a preamble
 // and a large_history warning above largeHistoryLength active dated
 // entries. Store failures are returned as errors.
-func healthWarnings(ctx context.Context, s *store.Store, rctx ResolvedContext, staleDays int) ([]healthWarning, error) {
+func healthWarnings(ctx context.Context, s *store.Store, project, subproject string, modes map[string]store.KindStorage, staleDays int) ([]healthWarning, error) {
 	var warnings []healthWarning
 	newestEntry := ""
 	logStats := map[string]store.EntryStats{}
 	for _, k := range []string{"progress", "decisions"} {
-		st, err := s.EntryStats(ctx, rctx.Project, rctx.Subproject, k)
+		st, err := s.EntryStats(ctx, project, subproject, k)
 		if err != nil {
 			return nil, err
 		}
@@ -232,19 +403,22 @@ func healthWarnings(ctx context.Context, s *store.Store, rctx ResolvedContext, s
 
 	today := healthNow().UTC().Truncate(24 * time.Hour)
 	for _, k := range currentStateKinds {
-		content, ok, err := s.ReadDocument(ctx, rctx.Project, rctx.Subproject, k)
+		if modes[k] != store.KindStorageDocument {
+			continue
+		}
+		content, ok, err := s.ReadDocument(ctx, project, subproject, k)
 		if err != nil {
 			return nil, err
 		}
 		if !ok {
 			continue
 		}
-		if isUnfilledTemplate(k, content, rctx.Label()) {
+		if isUnfilledTemplate(k, content, FormatLabel(project, subproject)) {
 			warnings = append(warnings, healthWarning{File: k, Check: checkTemplate,
 				Message: "still empty or holding the blank template; fill it in with write_memory"})
 			continue
 		}
-		meta, err := s.Metadata(ctx, rctx.Project, rctx.Subproject, k)
+		meta, err := s.Metadata(ctx, project, subproject, k)
 		if err != nil {
 			return nil, err
 		}
@@ -308,4 +482,29 @@ type healthReport struct {
 	Healthy  bool            `json:"healthy"`
 	Files    map[string]bool `json:"files"`
 	Warnings []healthWarning `json:"warnings,omitempty"`
+}
+
+// OutputSchema returns the JSON Schema of the structured content of every
+// check_project_health result: a healthReport for one project, or a
+// VaultHealthReport with all_projects. Both hold vault and healthy.
+func (t *CheckProjectHealthTool) OutputSchema() map[string]any {
+	warning := schemaObject(map[string]any{
+		"file":    schemaString(),
+		"check":   map[string]any{"type": "string", "enum": []string{checkStale, checkTemplate, checkUndatedEntries, checkLargeHistory, checkEmptyLog}},
+		"message": schemaString(),
+	}, "file", "check", "message")
+	return schemaObject(map[string]any{
+		"project":  schemaString(),
+		"vault":    schemaString(),
+		"healthy":  schemaBoolean(),
+		"files":    map[string]any{"type": "object", "additionalProperties": schemaBoolean()},
+		"warnings": schemaArray(warning),
+		"projects": schemaArray(schemaObject(map[string]any{
+			"project":    schemaString(),
+			"subproject": schemaString(),
+			"healthy":    schemaBoolean(),
+			"missing":    schemaArray(schemaString()),
+			"warnings":   schemaArray(warning),
+		}, "project", "healthy", "missing", "warnings")),
+	}, "vault", "healthy")
 }

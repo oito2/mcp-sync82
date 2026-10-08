@@ -20,25 +20,21 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 )
 
 // WriteDocument sets the content of the overwrite-style document of the given
 // kind for project/subproject, inserting it when it does not exist yet. The
 // names are normalized. It returns an error wrapping ErrNotFound when the
-// project or subproject does not exist, or a database error. A single upsert
-// statement keeps the write atomic.
+// project or subproject does not exist, or a database error. The project
+// is resolved and the document upserted in one transaction.
 func (s *Store) WriteDocument(ctx context.Context, project, subproject, kind, content string) error {
 	project, subproject, kind = normalizeName(project), normalizeName(subproject), normalizeName(kind)
-	projectID, err := s.resolveProjectID(ctx, project, subproject)
-	if err != nil {
-		return err
-	}
-
-	if err := writeDocument(ctx, s.db, projectID, kind, content); err != nil {
-		return fmt.Errorf("write document %s/%s: %w", label(project, subproject), kind, err)
-	}
-	return nil
+	return s.withProjectTx(ctx, project, subproject, func(tx *sql.Tx, projectID int64) error {
+		if err := writeDocument(ctx, tx, projectID, kind, content); err != nil {
+			return fmt.Errorf("write document %s/%s: %w", label(project, subproject), kind, err)
+		}
+		return nil
+	})
 }
 
 // execer is the subset of *sql.DB and *sql.Tx used by the write helpers, so
@@ -69,29 +65,25 @@ func (s *Store) ReadDocument(ctx context.Context, project, subproject, kind stri
 	if err != nil {
 		return "", false, err
 	}
+	content, ok, err = readDocumentIn(ctx, s.db, projectID, kind)
+	if err != nil {
+		return "", false, fmt.Errorf("read document %s/%s: %w", label(project, subproject), kind, err)
+	}
+	return content, ok, nil
+}
 
-	err = s.db.QueryRowContext(ctx,
+// readDocumentIn reads the content of the document of (projectID, kind)
+// from db; ok is false, with no error, when there is none. kind must be
+// normalized. It returns the database error, if any.
+func readDocumentIn(ctx context.Context, db execer, projectID int64, kind string) (content string, ok bool, err error) {
+	err = db.QueryRowContext(ctx,
 		`SELECT content FROM documents WHERE project_id = ? AND kind = ?`, projectID, kind,
 	).Scan(&content)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
 	if err != nil {
-		return "", false, fmt.Errorf("read document %s/%s: %w", label(project, subproject), kind, err)
+		return "", false, err
 	}
 	return content, true, nil
-}
-
-// IsBlankOrTemplate reports whether the document of the given kind is blank:
-// either no row exists or its content is empty or whitespace-only. Errors are
-// those of ReadDocument.
-func (s *Store) IsBlankOrTemplate(ctx context.Context, project, subproject, kind string) (bool, error) {
-	content, ok, err := s.ReadDocument(ctx, project, subproject, kind)
-	if err != nil {
-		return false, err
-	}
-	if !ok {
-		return true, nil
-	}
-	return strings.TrimSpace(content) == "", nil
 }

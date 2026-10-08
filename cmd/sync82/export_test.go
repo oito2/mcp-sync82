@@ -114,7 +114,7 @@ func TestRunExport_WrongArgCount(t *testing.T) {
 	if code != usageExitCode {
 		t.Fatalf("exit code = %d, want %d", code, usageExitCode)
 	}
-	if !strings.Contains(stderr.String(), "usage:") || !strings.Contains(stderr.String(), "Run 'sync82 --help' for usage.") {
+	if !strings.Contains(stderr.String(), "usage:") || !strings.Contains(stderr.String(), "--help' for usage.") {
 		t.Errorf("stderr = %q, want a usage message", stderr.String())
 	}
 }
@@ -228,7 +228,7 @@ func TestRunExport_All_WrongArgCount(t *testing.T) {
 	if code != usageExitCode {
 		t.Fatalf("exit code = %d, want %d", code, usageExitCode)
 	}
-	if !strings.Contains(stderr.String(), "usage:") || !strings.Contains(stderr.String(), "Run 'sync82 --help' for usage.") {
+	if !strings.Contains(stderr.String(), "usage:") || !strings.Contains(stderr.String(), "--help' for usage.") {
 		t.Errorf("stderr = %q, want a usage message", stderr.String())
 	}
 }

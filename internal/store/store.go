@@ -15,7 +15,9 @@
 
 // Package store implements sync82's SQLite-backed persistence layer: projects
 // (each optionally holding subprojects), overwrite-style documents,
-// append-only entries, and case-insensitive substring search across both.
+// append-only entries, and search across both: by words or phrase through
+// FTS5 indexes that ignore case and the accents of Latin letters, or by a
+// case-insensitive substring.
 // Manager caches one *Store per vault path so repeated calls against the
 // same vault reuse a connection pool; Open handles per-vault schema
 // migrations and connection setup. Every *Store method is safe for
@@ -179,6 +181,14 @@ func isUniqueConstraintErr(err error) bool {
 	return errors.As(err, &sqliteErr) && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE
 }
 
+// isForeignKeyErr reports whether err wraps a modernc.org/sqlite error whose
+// extended result code is SQLITE_CONSTRAINT_FOREIGNKEY: a row referring to
+// a row that doesn't exist, such as a project deleted meanwhile.
+func isForeignKeyErr(err error) bool {
+	var sqliteErr *sqlite.Error
+	return errors.As(err, &sqliteErr) && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_FOREIGNKEY
+}
+
 // label formats a project/subproject pair for error messages: "project" when
 // subproject is empty, otherwise "project/subproject".
 func label(project, subproject string) string {
@@ -201,26 +211,61 @@ func nullableString(s string) sql.NullString {
 // ErrNotFound when the project or subproject does not exist, or a database
 // error.
 func (s *Store) resolveProjectID(ctx context.Context, project, subproject string) (int64, error) {
+	return resolveProjectIDIn(ctx, s.db, project, subproject)
+}
+
+// resolveProjectIDIn is resolveProjectID run on db, which may be a
+// transaction: a write resolves its project inside its own transaction, so
+// a project deleted and its id reused in between can never receive it. It
+// looks the project and subproject up in one query.
+func resolveProjectIDIn(ctx context.Context, db execer, project, subproject string) (int64, error) {
 	project, subproject = normalizeName(project), normalizeName(subproject)
-	parent, err := s.FindProjectByName(ctx, project, nil)
-	if err != nil {
-		return 0, err
-	}
-	if parent == nil {
+	var parentID int64
+	var childID sql.NullInt64
+	err := db.QueryRowContext(ctx, `
+		SELECT p.id, c.id FROM projects p
+		LEFT JOIN projects c ON c.parent_id = p.id AND c.name = ?
+		WHERE p.parent_id IS NULL AND p.name = ?`,
+		subproject, project,
+	).Scan(&parentID, &childID)
+	if errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf("project not found: %q: %w", project, ErrNotFound)
 	}
-	if subproject == "" {
-		return parent.ID, nil
-	}
-
-	sub, err := s.FindProjectByName(ctx, subproject, &parent.ID)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("find project %q: %w", label(project, subproject), err)
 	}
-	if sub == nil {
+	if subproject == "" {
+		return parentID, nil
+	}
+	if !childID.Valid {
 		return 0, fmt.Errorf("project not found: %q/%q: %w", project, subproject, ErrNotFound)
 	}
-	return sub.ID, nil
+	return childID.Int64, nil
+}
+
+// withProjectTx runs fn in one transaction, with the id of project and
+// subproject resolved inside that transaction, and commits it when fn
+// succeeds; any error rolls everything back. It returns an error wrapping
+// ErrNotFound when the project or subproject does not exist, fn's error
+// unchanged, or a database error.
+func (s *Store) withProjectTx(ctx context.Context, project, subproject string, fn func(tx *sql.Tx, projectID int64) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction on %s: %w", label(project, subproject), err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
+
+	projectID, err := resolveProjectIDIn(ctx, tx, project, subproject)
+	if err != nil {
+		return err
+	}
+	if err := fn(tx, projectID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit on %s: %w", label(project, subproject), err)
+	}
+	return nil
 }
 
 // normalizeName lower-cases a project, subproject or kind name. Every name is

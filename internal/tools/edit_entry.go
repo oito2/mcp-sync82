@@ -45,16 +45,12 @@ type EditEntryTool struct {
 // editEntryArgs holds the decoded arguments of the edit_entry tool; its
 // JSON tags match the property names declared in InputSchema.
 type editEntryArgs struct {
-	Project          string `json:"project,omitempty"`
-	Subproject       string `json:"subproject,omitempty"`
-	Filename         string `json:"filename"`
-	EntryID          int64  `json:"entry_id"`
-	Action           string `json:"action"`
-	Content          string `json:"content,omitempty"`
-	Confirm          bool   `json:"confirm,omitempty"`
-	Path             string `json:"path,omitempty"`
-	WorkspaceRoot    string `json:"workspace_root,omitempty"`
-	SearchParentDirs bool   `json:"search_parent_dirs,omitempty"`
+	targetArgs
+	Filename string `json:"filename"`
+	EntryID  int64  `json:"entry_id"`
+	Action   string `json:"action"`
+	Content  string `json:"content,omitempty"`
+	Confirm  bool   `json:"confirm,omitempty"`
 }
 
 // Name returns the MCP tool name, "edit_entry".
@@ -72,18 +68,13 @@ func (t *EditEntryTool) Description() string {
 func (t *EditEntryTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
-			"project":            map[string]any{"type": "string", "description": "Project name. If omitted, auto-discovered from workspace_root; unlike other tools, the last used project is refused."},
-			"subproject":         map[string]any{"type": "string", "description": "Subproject name."},
-			"filename":           map[string]any{"type": "string", "description": "The append-only file/kind the entry belongs to (e.g. \"progress\", \"decisions\", or a custom name)."},
-			"entry_id":           map[string]any{"type": "integer", "minimum": 1, "description": "The entry's id, as shown by read_memory with with_ids: true (\"<!-- entry:N -->\") or by search_memory's JSON output (entry_id)."},
-			"action":             map[string]any{"type": "string", "enum": []string{editActionReplace, editActionSupersede, editActionDelete}, "description": "\"replace\": rewrite the entry in place. \"supersede\": append content as a new entry and mark the old one as superseded. \"delete\": remove the entry (requires confirm: true)."},
-			"content":            map[string]any{"type": "string", "description": "The new entry text, required for replace and supersede. For \"progress\"/\"decisions\", must contain a \"## YYYY-MM-DD\" header."},
-			"confirm":            map[string]any{"type": "boolean", "description": "Must be true for action delete. Ask the user before setting this."},
-			"workspace_root":     map[string]any{"type": "string", "description": "Path to your project folder, used to auto-discover the project via .sync82.json."},
-			"search_parent_dirs": map[string]any{"type": "boolean", "description": SearchParentDirsDescription},
-			"path":               map[string]any{"type": "string", "description": PathDescription},
-		},
+		"properties": targetProperties(targetSchema{Project: projectRefusesLastDescription}, map[string]any{
+			"filename": map[string]any{"type": "string", "description": "The append-only file/kind the entry belongs to (e.g. \"progress\", \"decisions\", or a custom name)."},
+			"entry_id": map[string]any{"type": "integer", "minimum": 1, "description": "The entry's id, as shown by read_memory with with_ids: true (\"<!-- entry:N -->\") or by search_memory's JSON output (entry_id)."},
+			"action":   map[string]any{"type": "string", "enum": []string{editActionReplace, editActionSupersede, editActionDelete}, "description": "\"replace\": rewrite the entry in place. \"supersede\": append content as a new entry and mark the old one as superseded. \"delete\": remove the entry (requires confirm: true)."},
+			"content":  map[string]any{"type": "string", "description": "The new entry text, required for replace and supersede. For \"progress\"/\"decisions\", must contain a \"## YYYY-MM-DD\" header."},
+			"confirm":  map[string]any{"type": "boolean", "description": "Must be true for action delete. Ask the user before setting this."},
+		}),
 		"required": []string{"filename", "entry_id", "action"},
 	}
 }
@@ -140,10 +131,7 @@ func (t *EditEntryTool) Validate(raw json.RawMessage) (any, error) {
 // errors.
 func (t *EditEntryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(editEntryArgs)
-	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, ContextArgs{
-		Project: args.Project, Subproject: args.Subproject, Path: args.Path,
-		WorkspaceRoot: args.WorkspaceRoot, SearchParentDirs: args.SearchParentDirs,
-	})
+	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, args.contextArgs())
 	if ready != nil {
 		return *ready, nil
 	}

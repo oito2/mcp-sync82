@@ -384,8 +384,9 @@ func TestMigrate_V3IndexesAnExistingV2Vault(t *testing.T) {
 			t.Fatalf("Open #%d: %v", open+1, err)
 		}
 		var version, applied int
-		if err := s.db.QueryRow(`SELECT MAX(version), COUNT(*) FROM schema_migrations`).Scan(&version, &applied); err != nil || version != 3 || applied != 3 {
-			t.Fatalf("Open #%d: schema version %d with %d records (%v), want 3 and 3", open+1, version, applied, err)
+		latest := migrations[len(migrations)-1].version
+		if err := s.db.QueryRow(`SELECT MAX(version), COUNT(*) FROM schema_migrations`).Scan(&version, &applied); err != nil || version != latest || applied != latest {
+			t.Fatalf("Open #%d: schema version %d with %d records (%v), want %d and %d", open+1, version, applied, err, latest, latest)
 		}
 		if got := lines(search(t, s, SearchWords, "decisao sessao")); len(got) != 0 {
 			t.Errorf("words needing both words in one row matched across rows: %q", got)
@@ -431,5 +432,130 @@ func BenchmarkSearchText(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+// TestSearchExact_PrefilterKeepsEverySubstringMatch verifies that the
+// FTS5 prefilter never drops a row an exact search must find: every
+// substring of every stored line, cut at any position, still finds its
+// entry, including cuts inside tokens such as "o_bar" in "foo_barbaz".
+func TestSearchExact_PrefilterKeepsEverySubstringMatch(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	bodies := []string{
+		"## 2026-01-01\n- foo_barbaz moved to config.json (v1.2.0)",
+		"## 2026-01-02\n- Sessão de manutenção: ação nº 3 — 100% concluída",
+		"## 2026-01-03\n- path C:\\Users\\dev\\vault.db, ~/.sync82/knowledge.db",
+	}
+	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range bodies {
+		if err := s.AppendEntry(ctx, "acme", "", "progress", body[3:13], body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	checked := 0
+	for i, body := range bodies {
+		line := strings.Split(body, "\n")[1]
+		runes := []rune(line)
+		for start := 0; start < len(runes); start++ {
+			for end := start + 1; end <= len(runes) && end-start <= 12; end++ {
+				query := string(runes[start:end])
+				if strings.TrimSpace(query) == "" || strings.ContainsAny(query, "\r\n") {
+					continue
+				}
+				results, _, err := s.SearchText(ctx, SearchOptions{Query: query, Mode: SearchExact, Limit: 100})
+				if err != nil {
+					t.Fatalf("SearchText(%q): %v", query, err)
+				}
+				found := false
+				for _, r := range results {
+					if r.Line == line {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("exact search for %q (prefilter %s) missed entry %d", query, exactPrefilter(query), i)
+				}
+				checked++
+			}
+		}
+	}
+	t.Logf("%d substrings checked", checked)
+}
+
+// TestTokenize_MatchesFTS5WhereThePrefilterRelies compares tokenize with
+// the words the FTS5 index holds for "q<r>q", for every rune of the Basic
+// Multilingual Plane that prefilterSafe accepts: the exact-search
+// prefilter is only sound where the two agree. Runes outside that set may
+// differ (FTS5's Unicode tables are older than Go's), which prefilterSafe
+// keeps out of the prefilter.
+func TestTokenize_MatchesFTS5WhereThePrefilterRelies(t *testing.T) {
+	s := newTestStore(t)
+	for _, stmt := range []string{
+		`CREATE VIRTUAL TABLE temp.probe USING fts5(body, tokenize='unicode61 remove_diacritics 2')`,
+		`CREATE VIRTUAL TABLE temp.probe_vocab USING fts5vocab(temp, probe, 'row')`,
+	} {
+		if _, err := s.db.Exec(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	checked := 0
+	for r := rune(0x80); r <= 0xFFFF; r++ {
+		if !prefilterSafe(r) {
+			continue
+		}
+		word := "q" + string(r) + "q"
+		if _, err := s.db.Exec(`DELETE FROM probe`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.db.Exec(`INSERT INTO probe(body) VALUES (?)`, word); err != nil {
+			t.Fatal(err)
+		}
+		var indexed string
+		if err := s.db.QueryRow(`SELECT coalesce(group_concat(term, '|'), '') FROM (SELECT term FROM probe_vocab ORDER BY term)`).Scan(&indexed); err != nil {
+			t.Fatal(err)
+		}
+		tokens := tokenize(word)
+		slices.Sort(tokens)
+		if got := strings.Join(slices.Compact(tokens), "|"); got != indexed {
+			t.Errorf("U+%04X %c: tokenize = %q, FTS5 indexes %q", r, r, got, indexed)
+		}
+		checked++
+	}
+	if checked < 1000 {
+		t.Fatalf("only %d runes checked", checked)
+	}
+}
+
+// TestSearchText_NonLatinScripts verifies that words, phrase and exact
+// searches find text in scripts whose combining marks the FTS5 tokenizer
+// treats as separators: Devanagari, vocalized Hebrew and Arabic.
+func TestSearchText_NonLatinScripts(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteDocument(ctx, "acme", "", "memory", "नमस्ते दुनिया यह परीक्षण\nשָׁלוֹם עוֹלָם\nمَرْحَبًا بِالْعَالَمِ"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		query string
+		mode  SearchMode
+	}{
+		{"नमस्ते", SearchWords}, {"दुनिया", SearchWords}, {"नमस्ते दुनिया", SearchPhrase},
+		{"नमस्ते दुनिया", SearchExact}, {"दुनिया यह", SearchExact},
+		{"שָׁלוֹם", SearchWords}, {"שָׁלוֹם עוֹלָם", SearchExact},
+		{"مَرْحَبًا", SearchWords}, {"مَرْحَبًا بِالْعَالَمِ", SearchExact},
+	} {
+		results, _, err := s.SearchText(ctx, SearchOptions{Query: c.query, Mode: c.mode, Limit: 10})
+		if err != nil {
+			t.Fatalf("%s %q: %v", c.mode, c.query, err)
+		}
+		if len(results) != 1 {
+			t.Errorf("%s %q: %d results, want 1", c.mode, c.query, len(results))
+		}
 	}
 }

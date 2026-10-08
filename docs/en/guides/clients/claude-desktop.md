@@ -35,7 +35,7 @@ It merges a `sync82` entry with the absolute path of the binary into:
 | OS | File |
 |---|---|
 | macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json`; for the MSIX package (the claude.ai download and the Microsoft Store), the app reads `%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude\claude_desktop_config.json` instead (its "Edit Config" button may open the other file). `sync82 install` writes every one of them whose directory exists. |
 | Linux (beta) | `$XDG_CONFIG_HOME/Claude/claude_desktop_config.json` (default `~/.config/Claude/claude_desktop_config.json`) — the location the Linux beta uses; Anthropic's documentation doesn't list a Linux path yet |
 
 The client is detected when that `Claude` directory exists; otherwise the target prints `Skipped: claude-desktop not detected.` On any other OS it prints `Skipped: claude-desktop (Claude Desktop is only available for macOS, Windows and Linux).`
@@ -89,7 +89,7 @@ This removes the `claude_desktop_config.json` entry (Option B). An extension ins
 
 ## ⚠️ Troubleshooting
 
-- **sync82 doesn't show up** — make sure you fully quit and reopened Claude Desktop, and that the file is valid JSON. If `sync82 install claude-desktop` reported a failure because the file has comments or trailing commas, add the printed entry by hand.
+- **sync82 doesn't show up** — make sure you fully quit and reopened Claude Desktop, and that the file is valid JSON. If `sync82 install claude-desktop` reported `manual step needed` because the file has comments or trailing commas, add the printed entry by hand.
 - **`command` not found** — the path in `command` must be absolute and point at an existing binary; run `sync82 install claude-desktop` again after moving it.
 - **Wrong vault** — ask _"Show me the current vault configuration"_ (`get_vault_config`), and see [Context Resolution](../../architecture/context-resolution.md).
 

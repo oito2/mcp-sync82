@@ -36,6 +36,54 @@ const PathDescription = `Base path where the memory is stored. If left blank, us
 // confirmation.
 const SearchParentDirsDescription = `If true, also look for .sync82.json in parent directories above workspace_root (useful in monorepos, where the marker file lives at the repo root). Defaults to false — only workspace_root itself is checked.`
 
+// Description texts of the project-resolution schema properties shared by
+// the project-scoped tools. projectRefusesLastDescription is the project
+// text of the tools that refuse a project taken only from the last session.
+const (
+	projectDescription            = `Project name. If omitted, auto-discovered from workspace_root or the last used project.`
+	projectRefusesLastDescription = `Project name. If omitted, auto-discovered from workspace_root; unlike other tools, the last used project is refused.`
+	subprojectDescription         = `Subproject name.`
+	workspaceRootDescription      = `Path to your project folder, used to auto-discover the project via .sync82.json.`
+)
+
+// targetSchema selects the description texts targetProperties gives the
+// project, subproject and workspace_root properties. An empty field keeps
+// the default text: projectDescription, subprojectDescription and
+// workspaceRootDescription.
+type targetSchema struct {
+	Project       string
+	Subproject    string
+	WorkspaceRoot string
+}
+
+// targetProperties returns the JSON Schema properties of targetArgs —
+// project, subproject, path, workspace_root and search_parent_dirs — with
+// the texts selected by opts, merged with a tool's own properties, own.
+// It panics when own redefines one of the shared properties, which only a
+// programming error can cause.
+func targetProperties(opts targetSchema, own map[string]any) map[string]any {
+	text := func(custom, fallback string) string {
+		if custom != "" {
+			return custom
+		}
+		return fallback
+	}
+	props := map[string]any{
+		"project":            map[string]any{"type": "string", "description": text(opts.Project, projectDescription)},
+		"subproject":         map[string]any{"type": "string", "description": text(opts.Subproject, subprojectDescription)},
+		"path":               map[string]any{"type": "string", "description": PathDescription},
+		"workspace_root":     map[string]any{"type": "string", "description": text(opts.WorkspaceRoot, workspaceRootDescription)},
+		"search_parent_dirs": map[string]any{"type": "boolean", "description": SearchParentDirsDescription},
+	}
+	for name, schema := range own {
+		if _, shared := props[name]; shared {
+			panic("targetProperties: property " + name + " is already defined")
+		}
+		props[name] = schema
+	}
+	return props
+}
+
 // pluralize returns singular when n == 1, plural otherwise — the
 // "file"/"files", "entry"/"entries" choice several tool responses make,
 // shared instead of reimplemented at each call site.
@@ -97,4 +145,36 @@ func jsonResult(v any, isError bool) (ToolResult, error) {
 		return ToolResult{}, fmt.Errorf("encode result: %w", err)
 	}
 	return ToolResult{Text: string(data), Structured: v, IsError: isError}, nil
+}
+
+// Building blocks of the tools' hand-written output schemas.
+
+// schemaString, schemaInteger and schemaBoolean return the JSON Schema of a
+// string, an integer and a boolean.
+func schemaString() map[string]any  { return map[string]any{"type": "string"} }
+func schemaInteger() map[string]any { return map[string]any{"type": "integer"} }
+func schemaBoolean() map[string]any { return map[string]any{"type": "boolean"} }
+
+// schemaArray returns the JSON Schema of an array whose items follow items.
+func schemaArray(items map[string]any) map[string]any {
+	return map[string]any{"type": "array", "items": items}
+}
+
+// schemaObject returns the JSON Schema of an object with properties, of
+// which required must be present.
+func schemaObject(properties map[string]any, required ...string) map[string]any {
+	schema := map[string]any{"type": "object", "properties": properties}
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+	return schema
+}
+
+// problemsError returns the error a Validate returns for problems, one
+// line each under "invalid arguments:", or nil when there is none.
+func problemsError(problems []string) error {
+	if len(problems) == 0 {
+		return nil
+	}
+	return fmt.Errorf("invalid arguments:\n- %s", strings.Join(problems, "\n- "))
 }

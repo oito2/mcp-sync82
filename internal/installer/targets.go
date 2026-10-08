@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // serverName is the key sync82 is registered under in every client.
@@ -236,6 +237,63 @@ func claudeDesktopDir(env Env) string {
 	return ""
 }
 
+// claudeDesktopMSIXDirs returns the Claude directories of the MSIX package
+// of Claude Desktop on Windows, the form the claude.ai download and the
+// Microsoft Store install: the app's AppData is virtualized under
+// %LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude, and that
+// copy of claude_desktop_config.json is the one the app reads. It returns
+// nil on other systems or when no such package exists.
+func claudeDesktopMSIXDirs(env Env) []string {
+	if env.GOOS != "windows" {
+		return nil
+	}
+	local := env.getenv("LOCALAPPDATA")
+	if local == "" {
+		local = filepath.Join(env.HomeDir, "AppData", "Local")
+	}
+	packages := filepath.Join(local, "Packages")
+	entries, err := os.ReadDir(packages)
+	if err != nil {
+		return nil
+	}
+	var dirs []string
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), "Claude_") {
+			dirs = append(dirs, filepath.Join(packages, e.Name(), "LocalCache", "Roaming", "Claude"))
+		}
+	}
+	return dirs
+}
+
+// claudeDesktopDirs returns every Claude Desktop configuration directory to
+// look at: claudeDesktopDir, then those of claudeDesktopMSIXDirs.
+func claudeDesktopDirs(env Env) []string {
+	var dirs []string
+	if dir := claudeDesktopDir(env); dir != "" {
+		dirs = append(dirs, dir)
+	}
+	return append(dirs, claudeDesktopMSIXDirs(env)...)
+}
+
+// claudeDesktopConfigPaths returns the claude_desktop_config.json of every
+// directory of claudeDesktopDirs that exists, so an MSIX install gets the
+// file it reads; with none, the file of claudeDesktopDir, as for a classic
+// install.
+func claudeDesktopConfigPaths(env Env) []string {
+	var paths []string
+	for _, dir := range claudeDesktopDirs(env) {
+		if dirExists(dir) {
+			paths = append(paths, filepath.Join(dir, "claude_desktop_config.json"))
+		}
+	}
+	if len(paths) == 0 {
+		if p := claudeDesktopConfigPath(env); p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths
+}
+
 // claudeDesktopConfigPath returns Claude Desktop's
 // claude_desktop_config.json, or "" on systems without Claude Desktop.
 func claudeDesktopConfigPath(env Env) string {
@@ -325,13 +383,17 @@ func clineExtensionDir(env Env) string {
 }
 
 // clineCLIDirs returns the directory marking a Cline CLI install and the
-// directory holding its data: ~/.cline and ~/.cline/data, or both set to
-// $CLINE_DATA_DIR when it is set.
+// directory holding its data: ~/.cline and ~/.cline/data — with
+// $CLINE_DIR, when it is an absolute path, in place of ~/.cline — or both
+// set to $CLINE_DATA_DIR when it is set.
 func clineCLIDirs(env Env) (marker, data string) {
 	if v := env.getenv("CLINE_DATA_DIR"); v != "" {
 		return v, v
 	}
 	marker = filepath.Join(env.HomeDir, ".cline")
+	if v := env.getenv("CLINE_DIR"); filepath.IsAbs(v) {
+		marker = v
+	}
 	return marker, filepath.Join(marker, "data")
 }
 
@@ -393,8 +455,15 @@ var Targets = []Target{
 			}
 			return ""
 		},
-		DetectDirs:  fixedPaths(claudeDesktopDir),
-		ConfigPaths: fixedPaths(claudeDesktopConfigPath),
+		DetectDirs:  claudeDesktopDirs,
+		ConfigPaths: claudeDesktopConfigPaths,
+		RemovePaths: func(env Env) []string {
+			var paths []string
+			for _, dir := range claudeDesktopDirs(env) {
+				paths = append(paths, filepath.Join(dir, "claude_desktop_config.json"))
+			}
+			return paths
+		},
 	},
 	{
 		Kind:      KindFile,
@@ -516,4 +585,31 @@ func DetectedIn(targets []Target, env Env) []Target {
 		}
 	}
 	return detected
+}
+
+// UninstallCandidatesIn returns the targets of targets an uninstall with no
+// target acts on, in targets order: every detected one, plus every file
+// target that isn't detected any more but whose config files still hold a
+// sync82 entry (its client was removed, or moved off PATH), so the entry
+// isn't left behind.
+func UninstallCandidatesIn(targets []Target, env Env) []Target {
+	var out []Target
+	for _, t := range targets {
+		if t.Detected(env) || (t.Kind == KindFile && t.unsupported(env) == "" && t.holdsEntry(env)) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// holdsEntry reports whether one of the file target t's remove paths holds
+// a sync82 entry. A file that can't be read counts as holding one, so the
+// uninstall reports it.
+func (t Target) holdsEntry(env Env) bool {
+	for _, path := range t.removePaths(env) {
+		if has, err := fileHasEntry(path, t.Shape); has || err != nil {
+			return true
+		}
+	}
+	return false
 }

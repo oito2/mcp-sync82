@@ -287,39 +287,34 @@ func (s *Store) resolveScopeProjectIDs(ctx context.Context, scope SearchScope) (
 	if scope.Project == "" {
 		return nil, nil
 	}
-
-	parent, err := s.FindProjectByName(ctx, scope.Project, nil)
+	id, err := s.resolveProjectID(ctx, scope.Project, scope.Subproject)
 	if err != nil {
 		return nil, err
 	}
-	if parent == nil {
-		return nil, fmt.Errorf("project not found: %q: %w", scope.Project, ErrNotFound)
-	}
-
 	if scope.Subproject != "" {
-		sub, err := s.FindProjectByName(ctx, scope.Subproject, &parent.ID)
-		if err != nil {
-			return nil, err
-		}
-		if sub == nil {
-			return nil, fmt.Errorf("project not found: %q/%q: %w", scope.Project, scope.Subproject, ErrNotFound)
-		}
-		return []int64{sub.ID}, nil
+		return []int64{id}, nil
 	}
 
-	ids := []int64{parent.ID}
-	subs, err := s.ListSubprojects(ctx, parent.ID)
+	ids := []int64{id}
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM projects WHERE parent_id = ? ORDER BY name`, id)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list subprojects of %q: %w", normalizeName(scope.Project), err)
 	}
-	for _, sub := range subs {
-		ids = append(ids, sub.ID)
+	defer rows.Close()
+	for rows.Next() {
+		var sub int64
+		if err := rows.Scan(&sub); err != nil {
+			return nil, fmt.Errorf("scan subproject id: %w", err)
+		}
+		ids = append(ids, sub)
 	}
-	return ids, nil
+	return ids, rows.Err()
 }
 
 // fetchMatchingRows runs the case-insensitive LIKE query of a SearchExact
 // search against documents and then entries (archived entries excluded),
+// on the rows the full-text indexes return for exactPrefilter's expression
+// when the query gives one, and on every row otherwise,
 // scoped to projectIDs (nil means no scope) and filtered by opts.Kinds,
 // opts.Since and opts.Until, each in a fixed order. Documents are skipped
 // when a date filter is set. It returns the matching rows, at most
@@ -328,6 +323,15 @@ func (s *Store) resolveScopeProjectIDs(ctx context.Context, scope SearchScope) (
 // database error on failure.
 func (s *Store) fetchMatchingRows(ctx context.Context, opts SearchOptions, projectIDs []int64) (rows []searchRow, truncated bool, err error) {
 	like := "%" + escapeLike(strings.ToLower(opts.Query)) + "%"
+
+	// With a prefilter, LIKE only runs on the rows the full-text index
+	// returns, instead of on every row of the vault.
+	docPrefilter, entryPrefilter, prefilterArgs := "", "", []any{}
+	if match := exactPrefilter(opts.Query); match != "" {
+		docPrefilter = ` AND d.id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH ?)`
+		entryPrefilter = ` AND e.id IN (SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?)`
+		prefilterArgs = []any{match}
+	}
 
 	type query struct {
 		what string
@@ -346,9 +350,9 @@ func (s *Store) fetchMatchingRows(ctx context.Context, opts SearchOptions, proje
 		FROM documents d
 		JOIN projects p ON p.id = d.project_id
 		LEFT JOIN projects parent ON parent.id = p.parent_id
-		WHERE ` + lowerFunc + `(d.content) LIKE ? ESCAPE '\'` + docFilter + `
+		WHERE ` + lowerFunc + `(d.content) LIKE ? ESCAPE '\'` + docPrefilter + docFilter + `
 		ORDER BY d.project_id, d.kind
-		LIMIT ?`, append(append([]any{like}, docArgs...), maxScannedRows+1)})
+		LIMIT ?`, append(append(append([]any{like}, prefilterArgs...), docArgs...), maxScannedRows+1)})
 	}
 
 	entryFilter, entryArgs := searchFilters("e", true, opts, projectIDs)
@@ -357,9 +361,9 @@ func (s *Store) fetchMatchingRows(ctx context.Context, opts SearchOptions, proje
 		FROM entries e
 		JOIN projects p ON p.id = e.project_id
 		LEFT JOIN projects parent ON parent.id = p.parent_id
-		WHERE e.archived = 0 AND ` + lowerFunc + `(e.body) LIKE ? ESCAPE '\'` + entryFilter + `
+		WHERE e.archived = 0 AND ` + lowerFunc + `(e.body) LIKE ? ESCAPE '\'` + entryPrefilter + entryFilter + `
 		ORDER BY e.project_id, e.kind, (e.entry_date IS NULL AND e.position >= 0), e.entry_date, e.position
-		LIMIT ?`, append(append([]any{like}, entryArgs...), maxScannedRows+1)})
+		LIMIT ?`, append(append(append([]any{like}, prefilterArgs...), entryArgs...), maxScannedRows+1)})
 
 	var total int
 	for _, q := range queries {

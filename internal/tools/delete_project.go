@@ -135,7 +135,7 @@ func (t *DeleteProjectTool) Execute(ctx context.Context, rawArgs any) (ToolResul
 	// Deleting a specific subproject needs no further decisions.
 	if args.Subproject != "" {
 		if err := s.DeleteSubproject(ctx, args.Project, args.Subproject); err != nil {
-			return ToolResult{}, err
+			return ToolResult{}, projectNotFound(err, FormatLabel(args.Project, args.Subproject))
 		}
 		t.forgetLastProject(args.Project, args.Subproject, false, dbPath)
 		return ToolResult{Text: fmt.Sprintf("Subproject %q deleted.", FormatLabel(args.Project, args.Subproject))}, nil
@@ -169,11 +169,11 @@ func (t *DeleteProjectTool) Execute(ctx context.Context, rawArgs any) (ToolResul
 				"  - \"delete_all\" — delete the project and all its subprojects",
 			args.Project, len(subs), strings.Join(lines, "\n"),
 		)
-		return ToolResult{Text: text}, nil // not an error result: it asks for missing input
+		return ToolResult{Text: text, ProjectsUnchanged: true}, nil // not an error result: it asks for missing input
 	}
 
 	if args.SubprojectAction == "cancel" {
-		return ToolResult{Text: fmt.Sprintf("Deletion of %q cancelled.", args.Project)}, nil
+		return ToolResult{Text: fmt.Sprintf("Deletion of %q cancelled.", args.Project), ProjectsUnchanged: true}, nil
 	}
 
 	if args.SubprojectAction == "promote" && len(subs) > 0 {
@@ -194,7 +194,7 @@ func (t *DeleteProjectTool) Execute(ctx context.Context, rawArgs any) (ToolResul
 	// promote, or the project has no subprojects: a plain delete, which
 	// also reports "project not found" when args.Project doesn't exist.
 	if err := s.DeleteProject(ctx, args.Project); err != nil {
-		return ToolResult{}, err
+		return ToolResult{}, projectNotFound(err, args.Project)
 	}
 	t.forgetLastProject(args.Project, "", false, dbPath)
 	note := ""
@@ -218,7 +218,7 @@ func (t *DeleteProjectTool) Execute(ctx context.Context, rawArgs any) (ToolResul
 func (t *DeleteProjectTool) forgetLastProject(project, subproject string, promoted bool, dbPath string) {
 	project, subproject = NormalizeName(project), NormalizeName(subproject)
 	err := config.UpdateGlobalConfig(func(c *config.GlobalConfig) {
-		if c.LastProject != project || (c.LastVaultPath != "" && c.LastVaultPath != dbPath) {
+		if c.LastProject != project || (c.LastVaultPath != "" && !samePath(c.LastVaultPath, dbPath)) {
 			return
 		}
 		switch {

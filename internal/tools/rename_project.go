@@ -96,6 +96,8 @@ func (t *RenameProjectTool) Validate(raw json.RawMessage) (any, error) {
 		problems = append(problems, `"new_name" is required and must not be empty`)
 	} else if err := validateProjectName("new_name", args.NewName); err != nil {
 		problems = append(problems, err.Error())
+	} else if args.NewName == firstNonEmpty(args.Subproject, args.Project) {
+		problems = append(problems, fmt.Sprintf(`"new_name" is the current name, %q`, args.NewName))
 	}
 	if len(problems) > 0 {
 		return nil, fmt.Errorf("invalid arguments:\n- %s", strings.Join(problems, "\n- "))
@@ -126,7 +128,7 @@ func (t *RenameProjectTool) Execute(ctx context.Context, rawArgs any) (ToolResul
 			// retrying with a different new_name.
 			return ToolResult{Text: err.Error(), IsError: true}, nil
 		}
-		return ToolResult{}, err
+		return ToolResult{}, projectNotFound(err, oldLabel)
 	}
 
 	t.followRenameInLastProject(args, dbPath)
@@ -144,7 +146,7 @@ func (t *RenameProjectTool) Execute(ctx context.Context, rawArgs any) (ToolResul
 // the old one. Failures are logged and never block the rename result.
 func (t *RenameProjectTool) followRenameInLastProject(args renameProjectArgs, dbPath string) {
 	err := config.UpdateGlobalConfig(func(c *config.GlobalConfig) {
-		if c.LastProject != args.Project || (c.LastVaultPath != "" && c.LastVaultPath != dbPath) {
+		if c.LastProject != args.Project || (c.LastVaultPath != "" && !samePath(c.LastVaultPath, dbPath)) {
 			return
 		}
 		switch {

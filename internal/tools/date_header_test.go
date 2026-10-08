@@ -17,7 +17,9 @@ package tools
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/oito2/mcp-sync82/internal/store"
 )
@@ -145,5 +147,50 @@ func TestExtractFirstDate_MixedFenceMarkers(t *testing.T) {
 	content := "intro\n```\n~~~\n## 2020-01-01\n```\n## 2026-05-05\n- real"
 	if got := extractFirstDate(content); got != "2026-05-05" {
 		t.Fatalf("extractFirstDate = %q, want 2026-05-05 (the header inside the fence is an example)", got)
+	}
+}
+
+// TestDateHeaderMatches_InlineTripleBackticks verifies that a line opening
+// with an inline ```code``` span doesn't hide the headers after it, while
+// a real fence still does.
+func TestDateHeaderMatches_InlineTripleBackticks(t *testing.T) {
+	content := "```go test``` runs the suite.\n## 2026-01-01\n- did x\n```\n## 2026-01-02\n```\n## 2026-01-03\n- y"
+	var dates []string
+	for _, m := range dateHeaderMatches(content) {
+		dates = append(dates, content[m[2]:m[3]])
+	}
+	if got := strings.Join(dates, ","); got != "2026-01-01,2026-01-03" {
+		t.Errorf("headers = %s, want 2026-01-01,2026-01-03", got)
+	}
+}
+
+// TestDateHeaderMatches_LinearTime checks that about 2 MB of alternating
+// fences and headers is scanned quickly; a scan that rescans the fences
+// for every header takes tens of seconds on it.
+func TestDateHeaderMatches_LinearTime(t *testing.T) {
+	var b strings.Builder
+	for b.Len() < 2<<20 {
+		b.WriteString("```\nx\n```\n## 2026-01-01\n- y\n")
+	}
+	start := time.Now()
+	if n := len(dateHeaderMatches(b.String())); n == 0 {
+		t.Fatal("no header found")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("scanning 2 MB took %s", elapsed)
+	}
+}
+
+// BenchmarkDateHeaderMatches measures the scan of about 1 MB of
+// alternating fences and headers.
+func BenchmarkDateHeaderMatches(b *testing.B) {
+	var sb strings.Builder
+	for sb.Len() < 1<<20 {
+		sb.WriteString("```\nx\n```\n## 2026-01-01\n- y\n")
+	}
+	content := sb.String()
+	b.SetBytes(int64(len(content)))
+	for b.Loop() {
+		dateHeaderMatches(content)
 	}
 }

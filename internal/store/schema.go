@@ -38,6 +38,61 @@ var migrations = []migration{
 	{version: 1, stmts: schemaV1},
 	{version: 2, stmts: lowercaseNamesV2},
 	{version: 3, stmts: fullTextSearchV3},
+	{version: 4, stmts: idsNeverReusedV4},
+}
+
+// idsNeverReusedV4 rebuilds entries and projects with an AUTOINCREMENT key,
+// so the id of a deleted row is never given to a later one: an entry id an
+// agent read earlier can then only name that entry, or none. Every row
+// keeps its id, so entries_fts, keyed by entry ids, and the references
+// between tables stay valid. The indexes and the entries_fts triggers,
+// dropped with the old tables, are created again, and entries_fts is
+// rebuilt from the new table. It runs with foreign keys off (see migrate),
+// so dropping the old tables deletes no row of another table.
+var idsNeverReusedV4 = []string{
+	`DROP TRIGGER IF EXISTS entries_fts_insert`,
+	`DROP TRIGGER IF EXISTS entries_fts_delete`,
+	`DROP TRIGGER IF EXISTS entries_fts_update`,
+	`CREATE TABLE entries_v4 (
+		id            INTEGER PRIMARY KEY AUTOINCREMENT,
+		project_id    INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+		kind          TEXT NOT NULL,
+		entry_date    TEXT NULL,
+		body          TEXT NOT NULL,
+		archived      INTEGER NOT NULL DEFAULT 0,
+		created_at    TEXT NOT NULL,
+		position      INTEGER NOT NULL
+	)`,
+	`INSERT INTO entries_v4 (id, project_id, kind, entry_date, body, archived, created_at, position)
+		SELECT id, project_id, kind, entry_date, body, archived, created_at, position FROM entries`,
+	`DROP TABLE entries`,
+	`ALTER TABLE entries_v4 RENAME TO entries`,
+	`CREATE INDEX idx_entries_lookup ON entries(project_id, kind, archived, entry_date)`,
+	`CREATE INDEX idx_entries_position ON entries(project_id, kind, position)`,
+	`CREATE TRIGGER entries_fts_insert AFTER INSERT ON entries BEGIN
+		INSERT INTO entries_fts(rowid, body) VALUES (new.id, new.body);
+	END`,
+	`CREATE TRIGGER entries_fts_delete AFTER DELETE ON entries BEGIN
+		INSERT INTO entries_fts(entries_fts, rowid, body) VALUES ('delete', old.id, old.body);
+	END`,
+	`CREATE TRIGGER entries_fts_update AFTER UPDATE OF body ON entries BEGIN
+		INSERT INTO entries_fts(entries_fts, rowid, body) VALUES ('delete', old.id, old.body);
+		INSERT INTO entries_fts(rowid, body) VALUES (new.id, new.body);
+	END`,
+	`INSERT INTO entries_fts(entries_fts) VALUES ('rebuild')`,
+
+	`CREATE TABLE projects_v4 (
+		id            INTEGER PRIMARY KEY AUTOINCREMENT,
+		name          TEXT NOT NULL,
+		parent_id     INTEGER NULL REFERENCES projects_v4(id) ON DELETE CASCADE,
+		created_at    TEXT NOT NULL
+	)`,
+	`INSERT INTO projects_v4 (id, name, parent_id, created_at)
+		SELECT id, name, parent_id, created_at FROM projects`,
+	`DROP TABLE projects`,
+	`ALTER TABLE projects_v4 RENAME TO projects`,
+	`CREATE UNIQUE INDEX idx_projects_toplevel_name ON projects(name) WHERE parent_id IS NULL`,
+	`CREATE UNIQUE INDEX idx_projects_child_name ON projects(parent_id, name) WHERE parent_id IS NOT NULL`,
 }
 
 // fullTextSearchV3 adds the full-text indexes searched by the words and
@@ -95,10 +150,8 @@ var fullTextSearchV3 = []string{
 // migration. Entries of a kind are merged with those of its lower-cased
 // spelling, keeping every entry in one log.
 //
-// The guards were widened after release to handle that collision. The
-// change is safe for vaults that already applied version 2, since they
-// never run it again, and it renames exactly the same rows whenever the
-// original statements succeeded.
+// A vault that already recorded version 2 never runs these statements
+// again.
 var lowercaseNamesV2 = []string{
 	`UPDATE projects SET name = lower(name)
 		WHERE name <> lower(name)
@@ -179,8 +232,28 @@ var schemaV1 = []string{
 // on every Open: versions already recorded are skipped. It returns an error
 // when the vault's schema version is newer than the latest known version, or
 // when any statement fails, in which case nothing is applied.
-func migrate(ctx context.Context, db *sql.DB) error {
-	tx, err := db.BeginTx(ctx, nil)
+//
+// The migrations run on one connection with foreign keys off, which SQLite
+// only allows outside a transaction, so a table can be rebuilt without its
+// drop cascading to the rows that reference it. Before committing, every
+// reference is checked with foreign_key_check; foreign keys are turned back
+// on before the connection is returned to the pool.
+func migrate(ctx context.Context, db *sql.DB) (err error) {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("open migration connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		return fmt.Errorf("disable foreign keys for migration: %w", err)
+	}
+	defer func() {
+		if _, ferr := conn.ExecContext(context.WithoutCancel(ctx), `PRAGMA foreign_keys = ON`); ferr != nil && err == nil {
+			err = fmt.Errorf("enable foreign keys after migration: %w", ferr)
+		}
+	}()
+
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin migration: %w", err)
 	}
@@ -218,5 +291,29 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		}
 	}
 
+	if err := checkForeignKeys(ctx, tx); err != nil {
+		return err
+	}
 	return tx.Commit()
+}
+
+// checkForeignKeys returns an error when any row of tx's database refers to
+// a row that does not exist, as reported by PRAGMA foreign_key_check.
+func checkForeignKeys(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return fmt.Errorf("check foreign keys: %w", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		var table string
+		var rowid sql.NullInt64
+		var parent string
+		var fkid int
+		if err := rows.Scan(&table, &rowid, &parent, &fkid); err != nil {
+			return fmt.Errorf("check foreign keys: %w", err)
+		}
+		return fmt.Errorf("check foreign keys: row %d of %s refers to a missing %s row", rowid.Int64, table, parent)
+	}
+	return rows.Err()
 }

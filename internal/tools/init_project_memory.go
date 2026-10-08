@@ -97,11 +97,7 @@ type InitProjectMemoryTool struct {
 // init_project_memory tool; its JSON tags match the property names declared
 // in InputSchema.
 type initProjectMemoryArgs struct {
-	Project              string `json:"project,omitempty"`
-	Subproject           string `json:"subproject,omitempty"`
-	Path                 string `json:"path,omitempty"`
-	WorkspaceRoot        string `json:"workspace_root,omitempty"`
-	SearchParentDirs     bool   `json:"search_parent_dirs,omitempty"`
+	targetArgs
 	AutoDetect           bool   `json:"auto_detect,omitempty"`
 	Description          string `json:"description,omitempty"`
 	Goal                 string `json:"goal,omitempty"`
@@ -127,11 +123,10 @@ func (t *InitProjectMemoryTool) Description() string { return initProjectMemoryD
 func (t *InitProjectMemoryTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
-			"project":               map[string]any{"type": "string", "description": "Project name. If omitted, auto-discovered from workspace_root or the last used project."},
-			"subproject":            map[string]any{"type": "string", "description": "Subproject name, if this is a component of an existing project."},
-			"workspace_root":        map[string]any{"type": "string", "description": "Path to your project folder. Enables .sync82.json auto-discovery for future sessions, and is required when auto_detect is true."},
-			"search_parent_dirs":    map[string]any{"type": "boolean", "description": SearchParentDirsDescription},
+		"properties": targetProperties(targetSchema{
+			Subproject:    "Subproject name, if this is a component of an existing project.",
+			WorkspaceRoot: "Path to your project folder. Enables .sync82.json auto-discovery for future sessions, and is required when auto_detect is true.",
+		}, map[string]any{
 			"auto_detect":           map[string]any{"type": "boolean", "description": "When true, analyzes the files at workspace_root to infer description, languages, frameworks, and infrastructure automatically. Requires workspace_root."},
 			"description":           map[string]any{"type": "string", "description": "What the project does."},
 			"goal":                  map[string]any{"type": "string", "description": "The main goal or objective."},
@@ -142,8 +137,7 @@ func (t *InitProjectMemoryTool) InputSchema() map[string]any {
 			"frameworks":            map[string]any{"type": "string", "description": "Frameworks and libraries used."},
 			"infrastructure":        map[string]any{"type": "string", "description": "Infrastructure and hosting."},
 			"next_steps":            map[string]any{"type": "string", "description": "Immediate next tasks, comma or newline separated."},
-			"path":                  map[string]any{"type": "string", "description": PathDescription},
-		},
+		}),
 	}
 }
 
@@ -156,20 +150,20 @@ func (t *InitProjectMemoryTool) Validate(raw json.RawMessage) (any, error) {
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
-	if args.AutoDetect && args.WorkspaceRoot == "" {
-		return nil, fmt.Errorf("workspace_root is required when auto_detect is true")
+	var problems []string
+	if args.WorkspaceRoot != "" && strings.TrimSpace(args.WorkspaceRoot) == "" {
+		problems = append(problems, `"workspace_root" is blank: pass the path of your project folder, or leave it out`)
+	} else if args.AutoDetect && args.WorkspaceRoot == "" {
+		problems = append(problems, "workspace_root is required when auto_detect is true")
 	}
-	// project/subproject are optional here (resolveTarget falls back to
+	// project/subproject are optional here (resolveInitTarget falls back to
 	// .sync82.json or the global config when they're blank), but when
 	// given explicitly they must match projectNamePattern.
-	if project := strings.TrimSpace(args.Project); project != "" {
-		if err := validateProjectName("project", project); err != nil {
-			return nil, err
-		}
-	}
-	if subproject := strings.TrimSpace(args.Subproject); subproject != "" {
-		if err := validateProjectName("subproject", subproject); err != nil {
-			return nil, err
+	for _, n := range []struct{ field, value string }{{"project", args.Project}, {"subproject", args.Subproject}} {
+		if name := strings.TrimSpace(n.value); name != "" {
+			if err := validateProjectName(n.field, name); err != nil {
+				problems = append(problems, err.Error())
+			}
 		}
 	}
 	total := 0
@@ -177,12 +171,15 @@ func (t *InitProjectMemoryTool) Validate(raw json.RawMessage) (any, error) {
 		total += len(field)
 	}
 	if total > maxContentSize {
-		return nil, fmt.Errorf("the answers exceed the %d byte limit in total", maxContentSize)
+		problems = append(problems, fmt.Sprintf("the answers exceed the %d byte limit in total", maxContentSize))
+	}
+	if err := problemsError(problems); err != nil {
+		return nil, err
 	}
 	return args, nil
 }
 
-// Execute determines the target (see resolveTarget), creates the project
+// Execute determines the target (see Resolver.resolveInitTarget), creates the project
 // when needed and writes the four standard documents that are missing or
 // still blank, filled from the answers and the analyzer's findings. With
 // workspace_root it also writes .sync82.json unless one already maps the
@@ -193,7 +190,7 @@ func (t *InitProjectMemoryTool) Validate(raw json.RawMessage) (any, error) {
 func (t *InitProjectMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(initProjectMemoryArgs)
 
-	project, subproject, dbPath, local, err := t.resolveTarget(args)
+	project, subproject, dbPath, local, err := t.Resolver.resolveInitTarget(args.contextArgs())
 	if err != nil {
 		// A .sync82.json that exists but can't be read is reported instead
 		// of being overwritten by the one this call would write.
@@ -201,6 +198,14 @@ func (t *InitProjectMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolR
 	}
 	if project == "" {
 		return ToolResult{Text: needsProjectMessage}, nil
+	}
+	// A project taken only from the last session may belong to another
+	// session: it is never given this call's answers.
+	fromLastSession := strings.TrimSpace(args.Project) == "" && strings.TrimSpace(args.WorkspaceRoot) == ""
+	if fromLastSession && hasAnswers(args) {
+		return ToolResult{IsError: true, Text: fmt.Sprintf(
+			"Refusing to initialize %q, which was only taken from the last session, with these answers: pass \"project\" or \"workspace_root\" explicitly.",
+			FormatLabel(project, subproject))}, nil
 	}
 	// Names from .sync82.json or the global config reach here unchecked;
 	// a project created under an invalid name could never be reached or
@@ -242,11 +247,11 @@ func (t *InitProjectMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolR
 	for _, tpl := range standardDocumentTemplates {
 		shouldWrite := created
 		if !shouldWrite {
-			blank, err := s.IsBlankOrTemplate(ctx, project, subproject, tpl.kind)
+			content, _, err := s.ReadDocument(ctx, project, subproject, tpl.kind)
 			if err != nil {
 				return ToolResult{}, err
 			}
-			shouldWrite = blank
+			shouldWrite = isUnfilledTemplate(tpl.kind, content, label)
 		}
 		if !shouldWrite {
 			continue
@@ -265,6 +270,12 @@ func (t *InitProjectMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolR
 		// it is left to the user rather than done silently.
 		extra = fmt.Sprintf(" (.sync82.json at %s points to %q and was left unchanged — edit or remove it to point this workspace at %q)",
 			local.ConfigRoot, FormatLabel(local.Config.Project, local.Config.Subproject), label)
+	case local != nil && args.Path != "" && !samePath(dbPath, t.Resolver.vaultPath("", local.Config.Path, local.ConfigRoot)):
+		// The workspace already uses another vault: moving it is left to
+		// the user, so its memory there doesn't disappear from later
+		// sessions.
+		extra = fmt.Sprintf(" (.sync82.json at %s uses the vault %s and was left unchanged — edit it to use %s)",
+			local.ConfigRoot, t.Resolver.vaultPath("", local.Config.Path, local.ConfigRoot), dbPath)
 	default:
 		localCfg := config.LocalConfig{Project: project, Subproject: subproject}
 		switch {
@@ -285,18 +296,26 @@ func (t *InitProjectMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolR
 		if err := config.WriteLocalConfig(args.WorkspaceRoot, localCfg); err != nil {
 			extra = fmt.Sprintf(" (but failed to create .sync82.json: %s)", err.Error())
 		} else {
-			extra = fmt.Sprintf(" and local config \".sync82.json\" created at %s", args.WorkspaceRoot)
+			extra = fmt.Sprintf(" and local config \".sync82.json\" written at %s", args.WorkspaceRoot)
 		}
 	}
 
+	note := ""
+	if fromLastSession {
+		note = ContextNote(ResolvedContext{Project: project, Subproject: subproject, DBPath: dbPath, Source: SourceGlobalConfig})
+	}
 	var message string
 	if len(written) > 0 {
-		message = fmt.Sprintf("Project %q initialized%s. Files written: %s", label, extra, strings.Join(written, ", "))
+		message = fmt.Sprintf("Project %q initialized%s. Files written: %s%s", label, extra, strings.Join(written, ", "), note)
 	} else {
-		message = fmt.Sprintf("Project %q already has content in all files%s. No files were overwritten.", label, extra)
+		message = fmt.Sprintf("Project %q already has content in all files%s. No files were overwritten.%s", label, extra, note)
 	}
 
-	_ = config.UpdateLastProject(project, subproject, dbPath) // best-effort
+	// Remembering the project is best-effort: a failure is logged, as
+	// Resolver.RememberIfExists does, and never fails the call.
+	if err := config.UpdateLastProject(project, subproject, dbPath); err != nil {
+		t.Resolver.Logger.Error("update last project", "project", label, "error", err)
+	}
 
 	if args.AutoDetect {
 		if fields := detectedNonEmptyFieldNames(detected); len(fields) > 0 {
@@ -305,57 +324,6 @@ func (t *InitProjectMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolR
 	}
 
 	return ToolResult{Text: message}, nil
-}
-
-// resolveTarget determines the project, subproject and vault path
-// init_project_memory works on, from args. Unlike Resolver.Resolve, project
-// and subproject are filled in independently from args → local config →
-// global config, rather than all coming from a single winning tier. For
-// example, an explicit "project" argument with no "subproject" still picks
-// up a subproject from .sync82.json if one is found.
-//
-// A .sync82.json naming a different project than an explicit "project"
-// argument contributes neither its subproject nor its vault path. When
-// workspace_root is given, the global config's last-used project is never
-// consulted. local is the .sync82.json found under workspace_root, if any;
-// project is empty when nothing determined one. err is set when a
-// .sync82.json under workspace_root exists but cannot be read or parsed.
-func (t *InitProjectMemoryTool) resolveTarget(args initProjectMemoryArgs) (project, subproject, dbPath string, local *config.LocalConfigResult, err error) {
-	project = NormalizeName(args.Project)
-	subproject = NormalizeName(args.Subproject)
-
-	if args.WorkspaceRoot != "" {
-		localPath, localRoot := "", ""
-		found, err := config.ReadLocalConfig(args.WorkspaceRoot, args.SearchParentDirs)
-		if err != nil {
-			return "", "", "", nil, err
-		}
-		if found != nil && strings.TrimSpace(found.Config.Project) != "" {
-			local = found
-			localProject := NormalizeName(found.Config.Project)
-			if project == "" || project == localProject {
-				project = localProject
-				if subproject == "" {
-					subproject = NormalizeName(found.Config.Subproject)
-				}
-				localPath, localRoot = found.Config.Path, found.ConfigRoot
-			}
-		}
-		return project, subproject, t.Resolver.vaultPath(args.Path, localPath, localRoot), local, nil
-	}
-
-	if project == "" {
-		if globalCfg, err := config.ReadGlobalConfig(); err == nil && globalCfg.LastProject != "" {
-			project = globalCfg.LastProject
-			if subproject == "" {
-				subproject = globalCfg.LastSubproject
-			}
-			if args.Path == "" && globalCfg.LastVaultPath != "" {
-				return project, subproject, absPath(config.ResolvePath(globalCfg.LastVaultPath)), nil, nil
-			}
-		}
-	}
-	return project, subproject, t.Resolver.vaultPath(args.Path, "", ""), nil, nil
 }
 
 // firstNonEmpty returns primary unless it's empty, in which case it
@@ -399,4 +367,11 @@ func detectedNonEmptyFieldNames(d analyzer.Result) []string {
 		fields = append(fields, "components")
 	}
 	return fields
+}
+
+// hasAnswers reports whether args carries any answer to write into the
+// documents, or asks for auto-detection.
+func hasAnswers(a initProjectMemoryArgs) bool {
+	return a.AutoDetect || a.Description != "" || a.Goal != "" || a.Phase != "" || a.ArchitectureOverview != "" ||
+		a.Components != "" || a.Languages != "" || a.Frameworks != "" || a.Infrastructure != "" || a.NextSteps != ""
 }

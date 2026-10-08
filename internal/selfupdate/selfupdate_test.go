@@ -21,15 +21,20 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // TestParseVersion checks parsing of plain, prefixed, pre-release, build
@@ -173,6 +178,9 @@ func TestFindChecksum_SHA256SumOutputVariants(t *testing.T) {
 // can download from a local httptest server.
 func acceptAnyURL(string) error { return nil }
 
+// acceptAnyAsset is the Deps.ValidateAsset counterpart of acceptAnyURL.
+func acceptAnyAsset(string, string) error { return nil }
+
 // reportVersion returns a RunVersion stub reporting v for any binary.
 func reportVersion(v string) func(context.Context, string) (string, error) {
 	return func(context.Context, string) (string, error) { return v, nil }
@@ -225,6 +233,7 @@ func TestValidateAssetURL(t *testing.T) {
 	for _, ok := range []string{
 		"https://github.com/oito2/mcp-sync82/releases/download/v1.0.0/sync82_linux_amd64",
 		"https://objects.githubusercontent.com/github-production-release-asset/1",
+		"https://release-assets.githubusercontent.com/github-production-release-asset/1",
 	} {
 		if err := validateAssetURL(ok); err != nil {
 			t.Errorf("validateAssetURL(%q) = %v, want nil", ok, err)
@@ -235,6 +244,10 @@ func TestValidateAssetURL(t *testing.T) {
 		"https://evil.example/sync82",
 		"https://github.com.evil.example/x",
 		"file:///etc/passwd",
+		"https://raw.githubusercontent.com/someone/repo/main/sync82",
+		"https://gist.githubusercontent.com/someone/1/raw/sync82",
+		"https://github.com:8443/oito2/mcp-sync82/releases/download/v1.0.0/x",
+		"https://user@github.com/oito2/mcp-sync82/releases/download/v1.0.0/x",
 	} {
 		if err := validateAssetURL(bad); err == nil {
 			t.Errorf("validateAssetURL(%q) = nil, want an error", bad)
@@ -352,6 +365,7 @@ func TestRunSelfUpdate_RejectsUnexpectedReleaseTagFormat(t *testing.T) {
 		ExecutablePath: func() (string, error) { return "/should/not/be/used", nil },
 		TempDir:        t.TempDir(),
 		ValidateURL:    acceptAnyURL,
+		ValidateAsset:  acceptAnyAsset,
 		RunVersion:     reportVersion("v2.0.0"),
 	}
 	var stdout, stderr bytes.Buffer
@@ -377,6 +391,7 @@ func TestRunSelfUpdate_AlreadyUpToDate(t *testing.T) {
 		ExecutablePath: func() (string, error) { return "/should/not/be/used", nil },
 		TempDir:        t.TempDir(),
 		ValidateURL:    acceptAnyURL,
+		ValidateAsset:  acceptAnyAsset,
 		RunVersion:     reportVersion("v2.0.0"),
 	}
 	var stdout, stderr bytes.Buffer
@@ -403,6 +418,7 @@ func TestRunSelfUpdate_CheckOnly_ReportsWithoutDownloading(t *testing.T) {
 		ExecutablePath: func() (string, error) { return "/should/not/be/used", nil },
 		TempDir:        t.TempDir(),
 		ValidateURL:    acceptAnyURL,
+		ValidateAsset:  acceptAnyAsset,
 		RunVersion:     reportVersion("v2.0.0"),
 	}
 	var stdout, stderr bytes.Buffer
@@ -431,6 +447,7 @@ func TestRunSelfUpdate_DeclinesConfirmation(t *testing.T) {
 		ExecutablePath: func() (string, error) { return "/should/not/be/used", nil },
 		TempDir:        t.TempDir(),
 		ValidateURL:    acceptAnyURL,
+		ValidateAsset:  acceptAnyAsset,
 		RunVersion:     reportVersion("v2.0.0"),
 	}
 	var stdout, stderr bytes.Buffer
@@ -457,6 +474,7 @@ func TestRunSelfUpdate_ClosedStdinIsAnError(t *testing.T) {
 		ExecutablePath: func() (string, error) { return "/should/not/be/used", nil },
 		TempDir:        t.TempDir(),
 		ValidateURL:    acceptAnyURL,
+		ValidateAsset:  acceptAnyAsset,
 		RunVersion:     reportVersion("v2.0.0"),
 	}
 	var stdout, stderr bytes.Buffer
@@ -484,6 +502,7 @@ func TestRunSelfUpdate_ChecksumMismatch(t *testing.T) {
 		ExecutablePath: func() (string, error) { return "/should/not/be/used", nil },
 		TempDir:        t.TempDir(),
 		ValidateURL:    acceptAnyURL,
+		ValidateAsset:  acceptAnyAsset,
 		RunVersion:     reportVersion("v2.0.0"),
 	}
 	var stdout, stderr bytes.Buffer
@@ -521,6 +540,7 @@ func TestRunSelfUpdate_FullSuccess(t *testing.T) {
 		ExecutablePath: func() (string, error) { return currentExePath, nil },
 		TempDir:        t.TempDir(),
 		ValidateURL:    acceptAnyURL,
+		ValidateAsset:  acceptAnyAsset,
 		RunVersion:     reportVersion("v2.0.0"),
 	}
 	var stdout, stderr bytes.Buffer
@@ -747,6 +767,7 @@ func TestRunSelfUpdate_StagesNextToBinaryByDefault(t *testing.T) {
 		HTTPClient:     srv.Client(),
 		ExecutablePath: func() (string, error) { return exePath, nil },
 		ValidateURL:    acceptAnyURL,
+		ValidateAsset:  acceptAnyAsset,
 		RunVersion: func(_ context.Context, path string) (string, error) {
 			stagedIn = filepath.Dir(filepath.Dir(path))
 			return "v2.0.0", nil
@@ -799,6 +820,7 @@ func TestRunSelfUpdate_RefusesBinaryFailingSmokeTest(t *testing.T) {
 		ExecutablePath: func() (string, error) { return exePath, nil },
 		TempDir:        t.TempDir(),
 		ValidateURL:    acceptAnyURL,
+		ValidateAsset:  acceptAnyAsset,
 		RunVersion:     reportVersion("dev"),
 	}
 	var stdout, stderr bytes.Buffer
@@ -886,8 +908,39 @@ func TestRunSelfUpdate_RejectsUnknownOption(t *testing.T) {
 	if code := RunSelfUpdate(context.Background(), []string{"--chek"}, Deps{Version: "v1.0.0"}, strings.NewReader(""), &stdout, &stderr); code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
-	if !strings.Contains(stderr.String(), "Run 'sync82 --help' for usage.") {
+	if !strings.Contains(stderr.String(), "Run 'sync82 self-update --help' for usage.") {
 		t.Errorf("stderr = %q, want the --help pointer", stderr.String())
+	}
+}
+
+// TestRunSelfUpdate_RejectsConflictingOrRepeatedOptions checks that
+// --rollback can't be combined with --check or --yes, and that an option
+// given twice is refused, before anything is checked or changed: the
+// binary and its backup stay as they are.
+func TestRunSelfUpdate_RejectsConflictingOrRepeatedOptions(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "sync82")
+	for path, content := range map[string]string{exe: "current", backupPath(exe): "previous"} {
+		if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deps := Deps{
+		Version:        "v1.0.0",
+		ExecutablePath: func() (string, error) { return exe, nil },
+		RunVersion:     reportVersion("v0.9.0"),
+	}
+	for _, args := range [][]string{
+		{"--check", "--rollback"}, {"--rollback", "--yes"}, {"--rollback", "-y"},
+		{"--rollback", "--rollback"}, {"--check", "--check"}, {"--yes", "-y"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := RunSelfUpdate(context.Background(), args, deps, strings.NewReader(""), &stdout, &stderr); code != 2 {
+			t.Errorf("%q: exit code = %d, want 2; stdout=%q", args, code, stdout.String())
+		}
+	}
+	if got, _ := os.ReadFile(exe); string(got) != "current" {
+		t.Errorf("binary = %q after refused options, want it unchanged", got)
 	}
 }
 
@@ -906,5 +959,214 @@ func TestFetchLatestRelease_ReportsRateLimit(t *testing.T) {
 	_, err := fetchLatestRelease(context.Background(), srv.Client(), srv.URL, "v1.0.0")
 	if err == nil || !strings.Contains(err.Error(), "rate limit") {
 		t.Fatalf("err = %v, want a rate limit error", err)
+	}
+}
+
+// TestHelperProcess_Sleep is not a real test: run as a child process with
+// SYNC82_TEST_SLEEP=1, it keeps running so its executable stays in use.
+func TestHelperProcess_Sleep(t *testing.T) {
+	if os.Getenv("SYNC82_TEST_SLEEP") != "1" {
+		t.Skip("helper process")
+	}
+	time.Sleep(time.Minute)
+}
+
+// TestReplaceWithBackup_BackupStillRunning starts a copy of the test
+// binary from the backup path, as an MCP client still running the version
+// replaced by the previous update would, and checks that the next update
+// still succeeds. On Windows the running backup is moved aside to
+// "<bak>.old-<n>", which a later update removes.
+func TestReplaceWithBackup_BackupStillRunning(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skip(err)
+	}
+	data, err := os.ReadFile(exe)
+	if err != nil {
+		t.Skip(err)
+	}
+	dir := t.TempDir()
+	currentPath := filepath.Join(dir, "sync82.exe")
+	newPath := filepath.Join(dir, "sync82-new.exe")
+	bak := backupPath(currentPath)
+	for path, content := range map[string][]byte{currentPath: []byte("old"), newPath: []byte("new"), bak: data} {
+		if err := os.WriteFile(path, content, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command(bak, "-test.run=^TestHelperProcess_Sleep$")
+	cmd.Env = append(os.Environ(), "SYNC82_TEST_SLEEP=1")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	stop := func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}
+	t.Cleanup(stop)
+
+	if err := replaceWithBackup(currentPath, newPath); err != nil {
+		t.Fatalf("replaceWithBackup with a running backup: %v", err)
+	}
+	if got, _ := os.ReadFile(currentPath); string(got) != "new" {
+		t.Errorf("current = %q, want new", got)
+	}
+	if got, _ := os.ReadFile(bak); string(got) != "old" {
+		t.Errorf("backup = %q, want old", got)
+	}
+	parked, _ := filepath.Glob(bak + ".old-*")
+	if runtime.GOOS == "windows" && len(parked) != 1 {
+		t.Fatalf("parked backups = %v, want the running one moved aside", parked)
+	}
+
+	stop()
+	if err := clearBackup(bak); err != nil {
+		t.Fatal(err)
+	}
+	if parked, _ := filepath.Glob(bak + ".old-*"); len(parked) != 0 {
+		t.Errorf("leftover backups = %v, want them removed once no longer running", parked)
+	}
+}
+
+// TestClearBackup_InUseIsReported checks that a backup that can be neither
+// removed nor moved aside (here, in a read-only directory) is reported as
+// errBackupInUse, not as a missing privilege.
+func TestClearBackup_InUseIsReported(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs directory permissions that bind the current user")
+	}
+	dir := t.TempDir()
+	bak := filepath.Join(dir, "sync82.bak")
+	if err := os.WriteFile(bak, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	err := clearBackup(bak)
+	if !errors.Is(err, errBackupInUse) || errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("clearBackup = %v, want errBackupInUse without a permission error", err)
+	}
+	var stderr strings.Builder
+	reportReplaceError(&stderr, "/usr/local/bin/sync82", err)
+	if !strings.Contains(stderr.String(), "restart your MCP clients") {
+		t.Errorf("reported %q, want the advice to restart the MCP clients", stderr.String())
+	}
+}
+
+// TestValidateReleaseAsset checks that only an asset of this repository's
+// release of the given tag is accepted.
+func TestValidateReleaseAsset(t *testing.T) {
+	const tag = "v1.2.0"
+	if err := validateReleaseAsset("https://github.com/oito2/mcp-sync82/releases/download/v1.2.0/sync82_linux_amd64", tag); err != nil {
+		t.Errorf("own asset rejected: %v", err)
+	}
+	for _, bad := range []string{
+		"https://github.com/oito2/mcp-sync82/releases/download/v1.1.0/sync82_linux_amd64",
+		"https://github.com/someone/fork/releases/download/v1.2.0/sync82_linux_amd64",
+		"https://github.com/oito2/mcp-sync82/releases/download/v1.2.0/",
+		"https://github.com/oito2/mcp-sync82/releases/download/v1.2.0/../../../evil/x",
+		"https://github.com/oito2/mcp-sync82/releases/download/v1.2.0/x?y=1",
+		"https://objects.githubusercontent.com/github-production-release-asset/1",
+		"http://github.com/oito2/mcp-sync82/releases/download/v1.2.0/sync82_linux_amd64",
+	} {
+		if err := validateReleaseAsset(bad, tag); err == nil {
+			t.Errorf("validateReleaseAsset(%q) = nil, want an error", bad)
+		}
+	}
+}
+
+// TestDownloadToFile_RefusesARedirectToAnotherHost checks that a redirect
+// target is held to the same rule as the first URL.
+func TestDownloadToFile_RefusesARedirectToAnotherHost(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://raw.githubusercontent.com/someone/repo/main/sync82", http.StatusFound)
+	}))
+	defer srv.Close()
+	validate := func(rawURL string) error {
+		if strings.HasPrefix(rawURL, srv.URL) {
+			return nil
+		}
+		return validateAssetURL(rawURL)
+	}
+	err := downloadToFile(context.Background(), srv.Client(), srv.URL+"/asset", filepath.Join(t.TempDir(), "out"), validate)
+	if err == nil || !strings.Contains(err.Error(), "raw.githubusercontent.com") {
+		t.Fatalf("downloadToFile = %v, want the redirect to raw.githubusercontent.com refused", err)
+	}
+}
+
+// TestRunSelfUpdate_RollbackRefusesABackupThatDoesNotRun checks that a
+// backup failing its --version check is not swapped in: the binary and
+// the backup stay as they are.
+func TestRunSelfUpdate_RollbackRefusesABackupThatDoesNotRun(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "sync82")
+	for path, content := range map[string]string{exe: "current", backupPath(exe): "previous"} {
+		if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deps := Deps{
+		Version:        "v1.0.0",
+		ExecutablePath: func() (string, error) { return exe, nil },
+		RunVersion:     func(context.Context, string) (string, error) { return "", errors.New("exec format error") },
+	}
+	var stdout, stderr bytes.Buffer
+	if code := RunSelfUpdate(context.Background(), []string{"--rollback"}, deps, strings.NewReader(""), &stdout, &stderr); code != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "does not run") {
+		t.Errorf("stderr = %q, want the failed check reported", stderr.String())
+	}
+	current, _ := os.ReadFile(exe)
+	previous, _ := os.ReadFile(backupPath(exe))
+	if string(current) != "current" || string(previous) != "previous" {
+		t.Errorf("binary = %q, backup = %q; want both unchanged", current, previous)
+	}
+}
+
+// TestBinaryMode keeps the current binary's permission bits, with the
+// owner's execute bit set, and falls back to 0755.
+func TestBinaryMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission bits are not kept on Windows")
+	}
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "sync82")
+	if err := os.WriteFile(exe, []byte("x"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(exe, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if got := binaryMode(exe); got != 0o750 {
+		t.Errorf("binaryMode = %o, want 750", got)
+	}
+	if got := binaryMode(filepath.Join(dir, "missing")); got != 0o755 {
+		t.Errorf("binaryMode of a missing binary = %o, want 755", got)
+	}
+}
+
+// TestClearBackup_RemovesLeftoversInAPathWithGlobCharacters checks that
+// leftover "<bak>.old-*" files are removed even when the install directory
+// has characters a glob would read as a pattern.
+func TestClearBackup_RemovesLeftoversInAPathWithGlobCharacters(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "tools[2]")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bak := filepath.Join(dir, "sync82.bak")
+	left := bak + ".old-123"
+	for _, p := range []string{bak, left} {
+		if err := os.WriteFile(p, []byte("x"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := clearBackup(bak); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(left); !os.IsNotExist(err) {
+		t.Errorf("leftover %s still exists (stat err = %v)", left, err)
 	}
 }

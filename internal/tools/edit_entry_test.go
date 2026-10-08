@@ -131,7 +131,9 @@ func TestEditEntryTool_EntryOfAnotherProjectIsNotFound(t *testing.T) {
 func TestEditEntryTool_RefusesProjectFromLastSession(t *testing.T) {
 	r, mgr := newToolTestEnv(t)
 	s, first, _ := seedLog(t, r, mgr)
-	if err := config.WriteGlobalConfig(config.GlobalConfig{LastProject: "acme", LastVaultPath: r.DefaultDBPath}); err != nil {
+	if err := config.UpdateGlobalConfig(func(c *config.GlobalConfig) {
+		*c = config.GlobalConfig{LastProject: "acme", LastVaultPath: r.DefaultDBPath}
+	}); err != nil {
 		t.Fatal(err)
 	}
 	result := runTool(t, &EditEntryTool{Resolver: r, Stores: mgr}, map[string]any{"filename": "progress", "entry_id": first, "action": "delete", "confirm": true})

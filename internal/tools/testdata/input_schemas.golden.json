@@ -1,0 +1,808 @@
+{
+  "append_memory": {
+    "properties": {
+      "content": {
+        "description": "The content to append. For \"progress\"/\"decisions\", must contain a \"## YYYY-MM-DD\" header.",
+        "type": "string"
+      },
+      "filename": {
+        "description": "The file/kind to append to (e.g. \"progress\", \"decisions\", or a custom name).",
+        "type": "string"
+      },
+      "path": {
+        "description": "Base path where the memory is stored. If left blank, uses the default vault path. A leading \"~\", \"HOME\" or \"$HOME\" (e.g. \"~/vaults/work.db\", \"HOME/custom-vault\") is expanded to the user's home directory.",
+        "type": "string"
+      },
+      "project": {
+        "description": "Project name. If omitted, auto-discovered from workspace_root or the last used project.",
+        "type": "string"
+      },
+      "search_parent_dirs": {
+        "description": "If true, also look for .sync82.json in parent directories above workspace_root (useful in monorepos, where the marker file lives at the repo root). Defaults to false — only workspace_root itself is checked.",
+        "type": "boolean"
+      },
+      "subproject": {
+        "description": "Subproject name.",
+        "type": "string"
+      },
+      "workspace_root": {
+        "description": "Path to your project folder, used to auto-discover the project via .sync82.json.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "filename",
+      "content"
+    ],
+    "type": "object"
+  },
+  "archive_memory": {
+    "properties": {
+      "dry_run": {
+        "description": "List the entries that would be archived (date and first line) without changing anything.",
+        "type": "boolean"
+      },
+      "filename": {
+        "description": "Which append-only file to archive.",
+        "enum": [
+          "progress",
+          "decisions"
+        ],
+        "type": "string"
+      },
+      "keep_days": {
+        "description": "Entries older than this many days are archived (default 90, maximum 36500).",
+        "maximum": 36500,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "path": {
+        "description": "Base path where the memory is stored. If left blank, uses the default vault path. A leading \"~\", \"HOME\" or \"$HOME\" (e.g. \"~/vaults/work.db\", \"HOME/custom-vault\") is expanded to the user's home directory.",
+        "type": "string"
+      },
+      "project": {
+        "description": "Project name. If omitted, auto-discovered from workspace_root; unlike other tools, the last used project is refused.",
+        "type": "string"
+      },
+      "search_parent_dirs": {
+        "description": "If true, also look for .sync82.json in parent directories above workspace_root (useful in monorepos, where the marker file lives at the repo root). Defaults to false — only workspace_root itself is checked.",
+        "type": "boolean"
+      },
+      "subproject": {
+        "description": "Subproject name.",
+        "type": "string"
+      },
+      "summary": {
+        "description": "A summary of the entries being archived, written by you, added as one new active entry in the same step. Without its own \"## YYYY-MM-DD\" header it gets one dated today; its own header must not be older than the archive cutoff (today minus keep_days). Not written when nothing is archived.",
+        "type": "string"
+      },
+      "workspace_root": {
+        "description": "Path to your project folder, used to auto-discover the project via .sync82.json.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "filename"
+    ],
+    "type": "object"
+  },
+  "check_project_health": {
+    "properties": {
+      "all_projects": {
+        "description": "Check every project and subproject of the vault (the one named by path, or the default vault) instead of one project. Can't be combined with project, subproject or workspace_root.",
+        "type": "boolean"
+      },
+      "format": {
+        "default": "text",
+        "description": "\"text\" (default) for readable text, or \"json\" for a JSON document with the same information, also returned as structured content.",
+        "enum": [
+          "text",
+          "json"
+        ],
+        "type": "string"
+      },
+      "path": {
+        "description": "Base path where the memory is stored. If left blank, uses the default vault path. A leading \"~\", \"HOME\" or \"$HOME\" (e.g. \"~/vaults/work.db\", \"HOME/custom-vault\") is expanded to the user's home directory.",
+        "type": "string"
+      },
+      "project": {
+        "description": "Project name. If omitted, auto-discovered from workspace_root or the last used project.",
+        "type": "string"
+      },
+      "search_parent_dirs": {
+        "description": "If true, also look for .sync82.json in parent directories above workspace_root (useful in monorepos, where the marker file lives at the repo root). Defaults to false — only workspace_root itself is checked.",
+        "type": "boolean"
+      },
+      "stale_days": {
+        "description": "Days after which a current-state file older than the newest progress/decisions entry is reported as possibly out of date (default 30).",
+        "minimum": 1,
+        "type": "integer"
+      },
+      "subproject": {
+        "description": "Subproject name.",
+        "type": "string"
+      },
+      "workspace_root": {
+        "description": "Path to your project folder, used to auto-discover the project via .sync82.json.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "create_project": {
+    "properties": {
+      "path": {
+        "description": "Base path where the memory is stored. If left blank, uses the default vault path. A leading \"~\", \"HOME\" or \"$HOME\" (e.g. \"~/vaults/work.db\", \"HOME/custom-vault\") is expanded to the user's home directory.",
+        "type": "string"
+      },
+      "project": {
+        "description": "Project name (alphanumeric, hyphens, underscores).",
+        "type": "string"
+      },
+      "subproject": {
+        "description": "Subproject name. When provided, creates it under \"project\" instead of at the vault root.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "project"
+    ],
+    "type": "object"
+  },
+  "delete_memory": {
+    "properties": {
+      "confirm": {
+        "description": "Must be true to confirm permanent deletion. Ask the user before setting this.",
+        "type": "boolean"
+      },
+      "filename": {
+        "description": "The custom file/kind to delete.",
+        "type": "string"
+      },
+      "path": {
+        "description": "Base path where the memory is stored. If left blank, uses the default vault path. A leading \"~\", \"HOME\" or \"$HOME\" (e.g. \"~/vaults/work.db\", \"HOME/custom-vault\") is expanded to the user's home directory.",
+        "type": "string"
+      },
+      "project": {
+        "description": "Project name. If omitted, auto-discovered from workspace_root; unlike other tools, the last used project is refused.",
+        "type": "string"
+      },
+      "search_parent_dirs": {
+        "description": "If true, also look for .sync82.json in parent directories above workspace_root (useful in monorepos, where the marker file lives at the repo root). Defaults to false — only workspace_root itself is checked.",
+        "type": "boolean"
+      },
+      "subproject": {
+        "description": "Subproject name.",
+        "type": "string"
+      },
+      "workspace_root": {
+        "description": "Path to your project folder, used to auto-discover the project via .sync82.json.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "filename",
+      "confirm"
+    ],
+    "type": "object"
+  },
+  "delete_project": {
+    "properties": {
+      "confirm": {
+        "description": "Must be true to confirm permanent deletion. Ask the user before setting this.",
+        "type": "boolean"
+      },
+      "path": {
+        "description": "Base path where the memory is stored. If left blank, uses the default vault path. A leading \"~\", \"HOME\" or \"$HOME\" (e.g. \"~/vaults/work.db\", \"HOME/custom-vault\") is expanded to the user's home directory.",
+        "type": "string"
+      },
+      "project": {
+        "description": "Project name to delete.",
+        "type": "string"
+      },
+      "subproject": {
+        "description": "Subproject name. When provided, only that subproject is deleted.",
+        "type": "string"
+      },
+      "subproject_action": {
+        "description": "Required only when deleting a top-level project that has subprojects.",
+        "enum": [
+          "cancel",
+          "promote",
+          "delete_all"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "project",
+      "confirm"
+    ],
+    "type": "object"
+  },
+  "edit_entry": {
+    "properties": {
+      "action": {
+        "description": "\"replace\": rewrite the entry in place. \"supersede\": append content as a new entry and mark the old one as superseded. \"delete\": remove the entry (requires confirm: true).",
+        "enum": [
+          "replace",
+          "supersede",
+          "delete"
+        ],
+        "type": "string"
+      },
+      "confirm": {
+        "description": "Must be true for action delete. Ask the user before setting this.",
+        "type": "boolean"
+      },
+      "content": {
+        "description": "The new entry text, required for replace and supersede. For \"progress\"/\"decisions\", must contain a \"## YYYY-MM-DD\" header.",
+        "type": "string"
+      },
+      "entry_id": {
+        "description": "The entry's id, as shown by read_memory with with_ids: true (\"\u003c!-- entry:N --\u003e\") or by search_memory's JSON output (entry_id).",
+        "minimum": 1,
+        "type": "integer"
+      },
+      "filename": {
+        "description": "The append-only file/kind the entry belongs to (e.g. \"progress\", \"decisions\", or a custom name).",
+        "type": "string"
+      },
+      "path": {
+        "description": "Base path where the memory is stored. If left blank, uses the default vault path. A leading \"~\", \"HOME\" or \"$HOME\" (e.g. \"~/vaults/work.db\", \"HOME/custom-vault\") is expanded to the user's home directory.",
+        "type": "string"
+      },
+      "project": {
+        "description": "Project name. If omitted, auto-discovered from workspace_root; unlike other tools, the last used project is refused.",
+        "type": "string"
+      },
+      "search_parent_dirs": {
+        "description": "If true, also look for .sync82.json in parent directories above workspace_root (useful in monorepos, where the marker file lives at the repo root). Defaults to false — only workspace_root itself is checked.",
+        "type": "boolean"
+      },
+      "subproject": {
+        "description": "Subproject name.",
+        "type": "string"
+      },
+      "workspace_root": {
+        "description": "Path to your project folder, used to auto-discover the project via .sync82.json.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "filename",
+      "entry_id",
+      "action"
+    ],
+    "type": "object"
+  },
+  "export_memory": {
+    "properties": {
+      "output_dir": {
+        "description": "Absolute directory (or starting with ~/ or HOME/) to write the exported .md files into. Required. Not confined to the vault or workspace. Created if missing.",
+        "type": "string"
+      },
+      "overwrite": {
+        "description": "Replace .md files that already exist in output_dir. Without it, the export is refused when any destination file exists, and nothing is written.",
+        "type": "boolean"
+      },
+      "path": {
+        "description": "Base path where the memory is stored. If left blank, uses the default vault path. A leading \"~\", \"HOME\" or \"$HOME\" (e.g. \"~/vaults/work.db\", \"HOME/custom-vault\") is expanded to the user's home directory.",
+        "type": "string"
+      },
+      "project": {
+        "description": "Project name. If omitted, auto-discovered from workspace_root or the last used project.",
+        "type": "string"
+      },
+      "search_parent_dirs": {
+        "description": "If true, also look for .sync82.json in parent directories above workspace_root (useful in monorepos, where the marker file lives at the repo root). Defaults to false — only workspace_root itself is checked.",
+        "type": "boolean"
+      },
+      "subproject": {
+        "description": "Subproject name.",
+        "type": "string"
+      },
+      "workspace_root": {
+        "description": "Path to your project folder, used to auto-discover the project via .sync82.json.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "output_dir"
+    ],
+    "type": "object"
+  },
+  "get_vault_config": {
+    "properties": {
+      "path": {
+        "description": "Base path where the memory is stored. If left blank, uses the default vault path. A leading \"~\", \"HOME\" or \"$HOME\" (e.g. \"~/vaults/work.db\", \"HOME/custom-vault\") is expanded to the user's home directory.",
+        "type": "string"
+      },
+      "search_parent_dirs": {
+        "description": "If true, also look for .sync82.json in parent directories above workspace_root (useful in monorepos, where the marker file lives at the repo root). Defaults to false — only workspace_root itself is checked.",
+        "type": "boolean"
+      },
+      "workspace_root": {
+        "description": "Path to your project folder. If provided, the report also includes the local .sync82.json config for that workspace, if one exists.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "import_memory": {
+    "properties": {
+      "dry_run": {
+        "description": "Report what the import would create and overwrite without writing anything.",
+        "type": "boolean"
+      },
+      "input_dir": {
+        "description": "Absolute directory (or starting with ~/ or HOME/) to read exported .md files from. Required. Not confined to the vault or workspace. Every \"\u003ckind\u003e.md\" file present is imported; files that aren't valid kind names, are empty, or are README/CHANGELOG/LICENSE/CONTRIBUTING/CODE_OF_CONDUCT are skipped.",
+        "type": "string"
+      },
+      "path": {
+        "description": "Base path where the memory is stored. If left blank, uses the default vault path. A leading \"~\", \"HOME\" or \"$HOME\" (e.g. \"~/vaults/work.db\", \"HOME/custom-vault\") is expanded to the user's home directory.",
+        "type": "string"
+      },
+      "project": {
+        "description": "Project name. If omitted, auto-discovered from workspace_root; unlike other tools, the last used project is refused.",
+        "type": "string"
+      },
+      "search_parent_dirs": {
+        "description": "If true, also look for .sync82.json in parent directories above workspace_root (useful in monorepos, where the marker file lives at the repo root). Defaults to false — only workspace_root itself is checked.",
+        "type": "boolean"
+      },
+      "subproject": {
+        "description": "Subproject name.",
+        "type": "string"
+      },
+      "workspace_root": {
+        "description": "Path to your project folder, used to auto-discover the project via .sync82.json.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "input_dir"
+    ],
+    "type": "object"
+  },
+  "init_project_memory": {
+    "properties": {
+      "architecture_overview": {
+        "description": "Brief architecture description.",
+        "type": "string"
+      },
+      "auto_detect": {
+        "description": "When true, analyzes the files at workspace_root to infer description, languages, frameworks, and infrastructure automatically. Requires workspace_root.",
+        "type": "boolean"
+      },
+      "components": {
+        "description": "Main components, comma-separated.",
+        "type": "string"
+      },
+      "description": {
+        "description": "What the project does.",
+        "type": "string"
+      },
+      "frameworks": {
+        "description": "Frameworks and libraries used.",
+        "type": "string"
+      },
+      "goal": {
+        "description": "The main goal or objective.",
+        "type": "string"
+      },
+      "infrastructure": {
+        "description": "Infrastructure and hosting.",
+        "type": "string"
+      },
+      "languages": {
+        "description": "Programming languages used.",
+        "type": "string"
+      },
+      "next_steps": {
+        "description": "Immediate next tasks, comma or newline separated.",
+        "type": "string"
+      },
+      "path": {
+        "description": "Base path where the memory is stored. If left blank, uses the default vault path. A leading \"~\", \"HOME\" or \"$HOME\" (e.g. \"~/vaults/work.db\", \"HOME/custom-vault\") is expanded to the user's home directory.",
+        "type": "string"
+      },
+      "phase": {
+        "description": "Current phase: planning / mvp / active / maintenance.",
+        "type": "string"
+      },
+      "project": {
+        "description": "Project name. If omitted, auto-discovered from workspace_root or the last used project.",
+        "type": "string"
+      },
+      "search_parent_dirs": {
+        "description": "If true, also look for .sync82.json in parent directories above workspace_root (useful in monorepos, where the marker file lives at the repo root). Defaults to false — only workspace_root itself is checked.",
+        "type": "boolean"
+      },
+      "subproject": {
+        "description": "Subproject name, if this is a component of an existing project.",
+        "type": "string"
+      },
+      "workspace_root": {
+        "description": "Path to your project folder. Enables .sync82.json auto-discovery for future sessions, and is required when auto_detect is true.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "list_files": {
+    "properties": {
+      "format": {
+        "default": "text",
+        "description": "\"text\" (default) for readable text, or \"json\" for a JSON document with the same information, also returned as structured content.",
+        "enum": [
+          "text",
+          "json"
+        ],
+        "type": "string"
+      },
+      "metadata": {
+        "description": "When true, include size, estimated tokens, and last-modified date per file.",
+        "type": "boolean"
+      },
+      "path": {
+        "description": "Base path where the memory is stored. If left blank, uses the default vault path. A leading \"~\", \"HOME\" or \"$HOME\" (e.g. \"~/vaults/work.db\", \"HOME/custom-vault\") is expanded to the user's home directory.",
+        "type": "string"
+      },
+      "project": {
+        "description": "Project name. If omitted, auto-discovered from workspace_root or the last used project.",
+        "type": "string"
+      },
+      "search_parent_dirs": {
+        "description": "If true, also look for .sync82.json in parent directories above workspace_root (useful in monorepos, where the marker file lives at the repo root). Defaults to false — only workspace_root itself is checked.",
+        "type": "boolean"
+      },
+      "subproject": {
+        "description": "Subproject name.",
+        "type": "string"
+      },
+      "workspace_root": {
+        "description": "Path to your project folder, used to auto-discover the project via .sync82.json.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "list_projects": {
+    "properties": {
+      "format": {
+        "default": "text",
+        "description": "\"text\" (default) for readable text, or \"json\" for a JSON document with the same information, also returned as structured content.",
+        "enum": [
+          "text",
+          "json"
+        ],
+        "type": "string"
+      },
+      "path": {
+        "description": "Base path where the memory is stored. If left blank, uses the default vault path. A leading \"~\", \"HOME\" or \"$HOME\" (e.g. \"~/vaults/work.db\", \"HOME/custom-vault\") is expanded to the user's home directory.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "load_project_context": {
+    "properties": {
+      "files": {
+        "description": "Only load these specific files/kinds, instead of everything.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "max_bytes": {
+        "description": "Cut the response at this many bytes (default 40960, i.e. 40 KB, in summary mode; 204800, i.e. 200 KB, in full mode), with a note when it is cut.",
+        "maximum": 52428800,
+        "minimum": 1024,
+        "type": "integer"
+      },
+      "max_entries": {
+        "description": "Only include the most recent N dated entries per append-only kind (summary mode default: 10). Overwrite-style files are unaffected.",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "mode": {
+        "description": "\"summary\" (default): the 10 most recent dated entries per log, cut at 40 KB. \"full\": every entry, cut at 200 KB. since, max_entries and max_bytes override these defaults.",
+        "enum": [
+          "summary",
+          "full"
+        ],
+        "type": "string"
+      },
+      "path": {
+        "description": "Base path where the memory is stored. If left blank, uses the default vault path. A leading \"~\", \"HOME\" or \"$HOME\" (e.g. \"~/vaults/work.db\", \"HOME/custom-vault\") is expanded to the user's home directory.",
+        "type": "string"
+      },
+      "project": {
+        "description": "Project name. If omitted, auto-discovered from workspace_root or the last used project.",
+        "type": "string"
+      },
+      "search_parent_dirs": {
+        "description": "If true, also look for .sync82.json in parent directories above workspace_root (useful in monorepos, where the marker file lives at the repo root). Defaults to false — only workspace_root itself is checked.",
+        "type": "boolean"
+      },
+      "since": {
+        "description": "Only include dated entries (progress, decisions, custom append kinds) on or after this date (\"YYYY-MM-DD\"). Undated entries are always included. Overwrite-style files are unaffected. In summary mode, giving since lifts the default 10-entry limit.",
+        "type": "string"
+      },
+      "subproject": {
+        "description": "Subproject name.",
+        "type": "string"
+      },
+      "workspace_root": {
+        "description": "Path to your project folder, used to auto-discover the project via .sync82.json.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "read_memory": {
+    "properties": {
+      "filename": {
+        "description": "The file/kind to read (e.g. \"memory\", \"progress\", or a custom name).",
+        "type": "string"
+      },
+      "max_bytes": {
+        "description": "Size cap of the response in bytes (default 1048576, i.e. 1 MB). Longer content is cut at a line break, with a note.",
+        "maximum": 52428800,
+        "minimum": 1024,
+        "type": "integer"
+      },
+      "path": {
+        "description": "Base path where the memory is stored. If left blank, uses the default vault path. A leading \"~\", \"HOME\" or \"$HOME\" (e.g. \"~/vaults/work.db\", \"HOME/custom-vault\") is expanded to the user's home directory.",
+        "type": "string"
+      },
+      "project": {
+        "description": "Project name. If omitted, auto-discovered from workspace_root or the last used project.",
+        "type": "string"
+      },
+      "search_parent_dirs": {
+        "description": "If true, also look for .sync82.json in parent directories above workspace_root (useful in monorepos, where the marker file lives at the repo root). Defaults to false — only workspace_root itself is checked.",
+        "type": "boolean"
+      },
+      "subproject": {
+        "description": "Subproject name.",
+        "type": "string"
+      },
+      "with_ids": {
+        "description": "Put a \"\u003c!-- entry:N --\u003e\" line before each entry of an append-only kind, with the id edit_entry takes. No effect on overwrite-style files.",
+        "type": "boolean"
+      },
+      "workspace_root": {
+        "description": "Path to your project folder, used to auto-discover the project via .sync82.json.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "filename"
+    ],
+    "type": "object"
+  },
+  "rename_project": {
+    "properties": {
+      "new_name": {
+        "description": "The new name (alphanumeric, hyphens, underscores).",
+        "type": "string"
+      },
+      "path": {
+        "description": "Base path where the memory is stored. If left blank, uses the default vault path. A leading \"~\", \"HOME\" or \"$HOME\" (e.g. \"~/vaults/work.db\", \"HOME/custom-vault\") is expanded to the user's home directory.",
+        "type": "string"
+      },
+      "project": {
+        "description": "The project to rename. When \"subproject\" is also given, renames that subproject instead of the top-level project.",
+        "type": "string"
+      },
+      "subproject": {
+        "description": "The subproject to rename, if renaming a subproject rather than the top-level project.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "project",
+      "new_name"
+    ],
+    "type": "object"
+  },
+  "search_memory": {
+    "properties": {
+      "context_lines": {
+        "description": "Number of surrounding lines to include per match (0-20, default 0).",
+        "maximum": 20,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "format": {
+        "default": "text",
+        "description": "\"text\" (default) for readable text, or \"json\" for a JSON document with the same information, also returned as structured content.",
+        "enum": [
+          "text",
+          "json"
+        ],
+        "type": "string"
+      },
+      "kinds": {
+        "description": "Only search these files/kinds (e.g. [\"decisions\"]).",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "limit": {
+        "description": "Maximum number of results to return (1-1000, default 100).",
+        "maximum": 1000,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "match": {
+        "description": "\"words\" (default): every word, any order, accents and case ignored, ranked by relevance, \"word*\" for a prefix. \"phrase\": the words in that order. \"exact\": a literal case-insensitive substring, in file order.",
+        "enum": [
+          "words",
+          "phrase",
+          "exact"
+        ],
+        "type": "string"
+      },
+      "offset": {
+        "description": "Number of results to skip, for pagination (default 0).",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "path": {
+        "description": "Base path where the memory is stored. If left blank, uses the default vault path. A leading \"~\", \"HOME\" or \"$HOME\" (e.g. \"~/vaults/work.db\", \"HOME/custom-vault\") is expanded to the user's home directory.",
+        "type": "string"
+      },
+      "project": {
+        "description": "Limit the search to this project (and its subprojects, unless subproject is also given).",
+        "type": "string"
+      },
+      "query": {
+        "description": "What to search for, on a single line: words (match \"words\", the default), a phrase (match \"phrase\") or a literal substring (match \"exact\").",
+        "type": "string"
+      },
+      "search_parent_dirs": {
+        "description": "If true, also look for .sync82.json in parent directories above workspace_root (useful in monorepos, where the marker file lives at the repo root). Defaults to false — only workspace_root itself is checked.",
+        "type": "boolean"
+      },
+      "since": {
+        "description": "Only search dated entries on or after this date (\"YYYY-MM-DD\"); documents and undated entries are left out.",
+        "type": "string"
+      },
+      "subproject": {
+        "description": "Limit the search to this specific subproject (requires project or workspace_root).",
+        "type": "string"
+      },
+      "until": {
+        "description": "Only search dated entries on or before this date (\"YYYY-MM-DD\"); documents and undated entries are left out.",
+        "type": "string"
+      },
+      "workspace_root": {
+        "description": "Path to your project folder, used to auto-discover the project via .sync82.json when project isn't given.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "query"
+    ],
+    "type": "object"
+  },
+  "update_project_memory": {
+    "properties": {
+      "architecture": {
+        "description": "Overwrites architecture with the full updated content.",
+        "type": "string"
+      },
+      "custom": {
+        "description": "Custom files outside the six standard ones, each with its own write mode.",
+        "items": {
+          "properties": {
+            "content": {
+              "description": "Content for this file.",
+              "type": "string"
+            },
+            "filename": {
+              "description": "Custom file/kind name.",
+              "type": "string"
+            },
+            "mode": {
+              "description": "Defaults to \"append\".",
+              "enum": [
+                "append",
+                "write"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "filename",
+            "content"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "decisions": {
+        "description": "Appended to decisions. Must contain a \"## YYYY-MM-DD\" date header.",
+        "type": "string"
+      },
+      "memory": {
+        "description": "Overwrites memory with the full updated content.",
+        "type": "string"
+      },
+      "next_steps": {
+        "description": "Overwrites next_steps with the full updated content.",
+        "type": "string"
+      },
+      "path": {
+        "description": "Base path where the memory is stored. If left blank, uses the default vault path. A leading \"~\", \"HOME\" or \"$HOME\" (e.g. \"~/vaults/work.db\", \"HOME/custom-vault\") is expanded to the user's home directory.",
+        "type": "string"
+      },
+      "progress": {
+        "description": "Appended to progress. Must contain a \"## YYYY-MM-DD\" date header.",
+        "type": "string"
+      },
+      "project": {
+        "description": "Project name. If omitted, auto-discovered from workspace_root or the last used project; the last used project is refused when any field overwrites.",
+        "type": "string"
+      },
+      "search_parent_dirs": {
+        "description": "If true, also look for .sync82.json in parent directories above workspace_root (useful in monorepos, where the marker file lives at the repo root). Defaults to false — only workspace_root itself is checked.",
+        "type": "boolean"
+      },
+      "stack": {
+        "description": "Overwrites stack with the full updated content.",
+        "type": "string"
+      },
+      "subproject": {
+        "description": "Subproject name.",
+        "type": "string"
+      },
+      "workspace_root": {
+        "description": "Path to your project folder, used to auto-discover the project via .sync82.json.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "write_memory": {
+    "properties": {
+      "content": {
+        "description": "The new full content.",
+        "type": "string"
+      },
+      "filename": {
+        "description": "The file/kind to overwrite (e.g. \"memory\", \"progress\", or a custom name).",
+        "type": "string"
+      },
+      "path": {
+        "description": "Base path where the memory is stored. If left blank, uses the default vault path. A leading \"~\", \"HOME\" or \"$HOME\" (e.g. \"~/vaults/work.db\", \"HOME/custom-vault\") is expanded to the user's home directory.",
+        "type": "string"
+      },
+      "project": {
+        "description": "Project name. If omitted, auto-discovered from workspace_root; unlike other tools, the last used project is refused.",
+        "type": "string"
+      },
+      "search_parent_dirs": {
+        "description": "If true, also look for .sync82.json in parent directories above workspace_root (useful in monorepos, where the marker file lives at the repo root). Defaults to false — only workspace_root itself is checked.",
+        "type": "boolean"
+      },
+      "subproject": {
+        "description": "Subproject name.",
+        "type": "string"
+      },
+      "workspace_root": {
+        "description": "Path to your project folder, used to auto-discover the project via .sync82.json.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "filename",
+      "content"
+    ],
+    "type": "object"
+  }
+}

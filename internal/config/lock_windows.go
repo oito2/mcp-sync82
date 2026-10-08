@@ -18,6 +18,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"syscall"
 	"unsafe"
@@ -33,14 +34,18 @@ var (
 	procUnlockFileEx = modkernel32.NewProc("UnlockFileEx")
 )
 
-// lockFile blocks until it holds an exclusive LockFileEx lock on the
-// whole addressable byte range of f. Closing f also releases it. It
+// lockFile blocks until it holds a LockFileEx lock, exclusive or shared,
+// on the whole addressable byte range of f. Closing f also releases it. It
 // returns the Windows error when the lock cannot be taken.
-func lockFile(f *os.File) error {
+func lockFile(f *os.File, exclusive bool) error {
+	var flags uintptr
+	if exclusive {
+		flags = lockfileExclusiveLock
+	}
 	var ol syscall.Overlapped
 	r1, _, err := procLockFileEx.Call(
 		f.Fd(),
-		lockfileExclusiveLock,
+		flags,
 		0,
 		0xFFFFFFFF,
 		0xFFFFFFFF,
@@ -67,4 +72,13 @@ func unlockFile(f *os.File) error {
 		return err
 	}
 	return nil
+}
+
+// errorWriteProtect is the Windows ERROR_WRITE_PROTECT code.
+const errorWriteProtect syscall.Errno = 19
+
+// isReadOnlyFS reports whether err comes from a write to write-protected
+// media (ERROR_WRITE_PROTECT).
+func isReadOnlyFS(err error) bool {
+	return errors.Is(err, errorWriteProtect)
 }

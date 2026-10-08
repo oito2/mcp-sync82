@@ -17,14 +17,17 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/oito2/mcp-sync82/internal/fsutil"
 	"github.com/oito2/mcp-sync82/internal/store"
 )
 
@@ -109,8 +112,13 @@ func readRegularFile(path string, limit int64) (data []byte, ok bool, err error)
 	if info.Size() > limit {
 		return nil, false, nil
 	}
-	f, err := os.Open(path)
+	// Opened without following a symlink and without blocking on a FIFO,
+	// either of which may have replaced the file since the Lstat above.
+	f, err := os.OpenFile(path, os.O_RDONLY|fsutil.OpenNonblock|fsutil.OpenNoFollow, 0)
 	if err != nil {
+		if now, lerr := os.Lstat(path); lerr == nil && !now.Mode().IsRegular() {
+			return nil, false, errNotRegularFile
+		}
 		return nil, false, err
 	}
 	defer f.Close()
@@ -146,6 +154,20 @@ func importProjectCore(ctx context.Context, s *store.Store, project, subproject,
 		names = append(names, e.Name())
 	}
 	sort.Strings(names) // deterministic order — easier to reason about and to test
+	// The manifest of an export says how each kind was stored; it decides
+	// the storage of a kind the project doesn't have yet.
+	manifest, err := readKindsManifest(filepath.Join(inputDir, kindsManifestName))
+	if err != nil {
+		return report, err
+	}
+	// A kind with a "<kind>.archived.md" file is a log: its "<kind>.md"
+	// holds its active entries, not a document.
+	hasArchive := map[string]bool{}
+	for _, name := range names {
+		if base, ok := strings.CutSuffix(name, archivedSuffix); ok {
+			hasArchive[strings.ToLower(base)] = true
+		}
+	}
 	if len(names) > maxImportFiles {
 		return report, fmt.Errorf("input directory %s has %d .md files; at most %d are imported at once", inputDir, len(names), maxImportFiles)
 	}
@@ -219,9 +241,12 @@ func importProjectCore(ctx context.Context, s *store.Store, project, subproject,
 		}
 		write := store.KindWrite{Kind: kind}
 		switch {
+		case archived && mode == store.KindStorageDocument:
+			return ImportReport{}, fmt.Errorf("%s: %q is an overwrite-style document, which has no archived entries", name, kind)
 		case archived:
 			write.Sections, write.Archived = splitByDateHeader(content), true
-		case isAppendOnlyKind(kind) || mode == store.KindStorageEntries:
+		case isAppendOnlyKind(kind) || mode == store.KindStorageEntries ||
+			(mode == store.KindStorageNone && (hasArchive[kind] || manifest[kind] == kindStorageLog)):
 			write.Sections = splitByDateHeader(content)
 		default:
 			write.Document = &content
@@ -273,4 +298,35 @@ func FormatImportReport(r ImportReport, target, inputDir string, dryRun bool) st
 		text += "\nSkipped (not a valid kind name, empty, too large, or not a regular file): " + strings.Join(r.Skipped, ", ")
 	}
 	return text
+}
+
+// readKindsManifest reads the kindsManifest at path and returns its kinds,
+// lower-cased, mapped to "log" or "document". A missing manifest, as in a
+// folder an older version exported or one written by hand, gives an empty
+// map. It returns an error for a manifest that is not a regular file, is
+// larger than 1 MB, isn't valid JSON, or has another format version.
+func readKindsManifest(path string) (map[string]string, error) {
+	data, ok, err := readRegularFile(path, 1<<20)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return map[string]string{}, nil
+	case errors.Is(err, errNotRegularFile):
+		return nil, fmt.Errorf("%s is not a regular file", kindsManifestName)
+	case err != nil:
+		return nil, fmt.Errorf("read %s: %w", kindsManifestName, err)
+	case !ok:
+		return nil, fmt.Errorf("%s is larger than 1 MB", kindsManifestName)
+	}
+	var m kindsManifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("%s is not valid: %w", kindsManifestName, err)
+	}
+	if m.Version != kindsManifestVersion {
+		return nil, fmt.Errorf("%s has format version %d; this sync82 reads version %d", kindsManifestName, m.Version, kindsManifestVersion)
+	}
+	kinds := make(map[string]string, len(m.Kinds))
+	for kind, storage := range m.Kinds {
+		kinds[strings.ToLower(kind)] = storage
+	}
+	return kinds, nil
 }

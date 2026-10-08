@@ -17,6 +17,7 @@ package installer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -72,29 +73,50 @@ func uninstallCLITarget(ctx context.Context, t Target, env Env, stdout, stderr i
 }
 
 // uninstallFileTarget deletes sync82's entry from each of a file target's
-// remove paths that holds one. It returns ResultSkip when none does and
-// ResultFail when any file could not be cleaned.
+// remove paths that holds one. It returns ResultSkip when none does,
+// ResultFail when any file could not be read or cleaned, and ResultManual
+// when the only problem is a file with comments, left for the user to edit.
 func uninstallFileTarget(t Target, env Env, stdout, stderr io.Writer) Result {
 	var found []string
+	unreadable := false
 	for _, path := range t.removePaths(env) {
-		if fileHasEntry(path, t.Shape) {
+		has, err := fileHasEntry(path, t.Shape)
+		if err != nil {
+			fmt.Fprintf(stderr, "[%s] %v\n", t.Name, err)
+			unreadable = true
+			continue
+		}
+		if has {
 			found = append(found, path)
 		}
+	}
+	if unreadable && len(found) == 0 {
+		return reportFailed(stdout, t.Name)
 	}
 	if len(found) == 0 {
 		return reportNotConfigured(stdout, t.Name)
 	}
 
 	fmt.Fprintf(stdout, "\nRemoving from %s...\n", t.Name)
-	failed := false
+	failed, manual := unreadable, false
 	for _, path := range found {
-		if err := removeEntry(t.Shape, path); err != nil {
+		err := removeEntry(t.Shape, path)
+		if err != nil {
 			fmt.Fprintf(stderr, "[%s] %v\n", t.Name, err)
+		}
+		var manualErr *manualEditError
+		switch {
+		case errors.As(err, &manualErr):
+			manual = true
+		case err != nil:
 			failed = true
 		}
 	}
 	if failed {
 		return reportFailed(stdout, t.Name)
+	}
+	if manual {
+		return reportManual(stdout, t.Name)
 	}
 	fmt.Fprintf(stdout, "  ✓  %s — removed.\n", t.Name)
 	return ResultOK
@@ -103,7 +125,7 @@ func uninstallFileTarget(t Target, env Env, stdout, stderr io.Writer) Result {
 // removeEntry deletes the sync82 key from the shape's object in the config
 // file at path, keeping every other key, the file mode and a symlink at
 // path. A file with comments or trailing commas is left unchanged and the
-// error says what to remove by hand.
+// error, a *manualEditError, says what to remove by hand.
 func removeEntry(shape Shape, path string) error {
 	cfg, strict, err := readConfig(path)
 	if err != nil {
@@ -117,7 +139,7 @@ func removeEntry(shape Shape, path string) error {
 		return nil
 	}
 	if !strict {
-		return fmt.Errorf("%s contains comments or trailing commas, so it was left unchanged. Remove the %q entry from its %q object by hand", path, serverName, shape.Key)
+		return &manualEditError{fmt.Sprintf("%s contains comments or trailing commas, so it was left unchanged. Remove the %q entry from its %q object by hand", path, serverName, shape.Key)}
 	}
 	delete(servers, serverName)
 	return writeConfig(path, cfg)

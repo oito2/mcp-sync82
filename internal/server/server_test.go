@@ -79,15 +79,22 @@ func (f *fakeTool) Execute(_ context.Context, args any) (tools.ToolResult, error
 	return f.execResult, nil
 }
 
-// connect starts a real sync82 server with registeredTools and a real SDK
-// client over an in-memory transport pair, and returns the client session. The
-// tests therefore exercise the actual wire behavior. Sessions are closed on
-// test cleanup; connection failures fail the test.
+// connect starts a real sync82 server with registeredTools and the
+// tools.Prompts prompts, connected to a real SDK client; see connectWith.
 func connect(t *testing.T, registeredTools []tools.Tool) *mcp.ClientSession {
+	t.Helper()
+	return connectWith(t, server.Options{Tools: registeredTools, Prompts: tools.Prompts})
+}
+
+// connectWith starts a real sync82 server built from opts and a real SDK
+// client over an in-memory transport pair, and returns the client session.
+// The tests therefore exercise the actual wire behavior. Sessions are
+// closed on test cleanup; connection failures fail the test.
+func connectWith(t *testing.T, opts server.Options) *mcp.ClientSession {
 	t.Helper()
 
 	logger := slog.New(slog.DiscardHandler)
-	s := server.New("sync82-test", "v0.0.0-test", logger, registeredTools, nil)
+	s := server.New("sync82-test", "v0.0.0-test", logger, opts)
 
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	ctx := context.Background()
@@ -363,5 +370,83 @@ func TestServerInfo_AdvertisesIcon(t *testing.T) {
 	info := cs.InitializeResult().ServerInfo
 	if len(info.Icons) != 1 || !strings.HasPrefix(info.Icons[0].Source, "data:image/png;base64,") || info.Icons[0].Sizes[0] != "64x64" {
 		t.Fatalf("serverInfo icons = %+v, want the embedded 64x64 PNG", info.Icons)
+	}
+}
+
+// TestNew_ServesTheGivenPrompts verifies that the server lists and renders
+// exactly the prompts passed in Options, and offers no resources or
+// completion without Options.Resources.
+func TestNew_ServesTheGivenPrompts(t *testing.T) {
+	cs := connectWith(t, server.Options{Prompts: []tools.PromptDefinition{{
+		Name:      "fake_prompt",
+		Arguments: []tools.PromptArgument{{Name: "who", Required: true}},
+		Render:    func(args map[string]string) (string, error) { return "hello " + args["who"], nil },
+	}}})
+	ctx := context.Background()
+
+	list, err := cs.ListPrompts(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListPrompts: %v", err)
+	}
+	if len(list.Prompts) != 1 || list.Prompts[0].Name != "fake_prompt" {
+		t.Fatalf("prompts = %+v, want only fake_prompt", list.Prompts)
+	}
+	got, err := cs.GetPrompt(ctx, &mcp.GetPromptParams{Name: "fake_prompt", Arguments: map[string]string{"who": "world"}})
+	if err != nil {
+		t.Fatalf("GetPrompt: %v", err)
+	}
+	if text := got.Messages[0].Content.(*mcp.TextContent).Text; text != "hello world" {
+		t.Errorf("rendered prompt = %q, want %q", text, "hello world")
+	}
+	if caps := cs.InitializeResult().Capabilities; caps.Resources != nil || caps.Completions != nil {
+		t.Errorf("capabilities = %+v, want no resources or completions without Options.Resources", caps)
+	}
+}
+
+// fakeOutputTool is a fakeTool that declares an output schema.
+type fakeOutputTool struct {
+	*fakeTool
+}
+
+// OutputSchema returns a fixed object schema.
+func (f fakeOutputTool) OutputSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{"n": map[string]any{"type": "integer"}}, "required": []string{"n"}}
+}
+
+// TestOutputSchema_AdvertisedAndEnforced verifies that tools/list carries
+// a tool's output schema, that its structured content is returned, and
+// that a successful result without structured content is turned into an
+// error result, since clients reject it.
+func TestOutputSchema_AdvertisedAndEnforced(t *testing.T) {
+	tool := fakeOutputTool{&fakeTool{
+		name:       "out_tool",
+		schema:     map[string]any{"type": "object"},
+		execResult: tools.ToolResult{Text: "n is 3", Structured: map[string]any{"n": 3}},
+	}}
+	cs := connect(t, []tools.Tool{tool})
+	ctx := context.Background()
+
+	list, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if list.Tools[0].OutputSchema == nil {
+		t.Fatal("tools/list has no outputSchema for a tool that declares one")
+	}
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "out_tool"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError || res.StructuredContent == nil {
+		t.Errorf("result = %+v, want a successful result with structured content", res)
+	}
+
+	tool.execResult = tools.ToolResult{Text: "please name a project"}
+	res, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "out_tool"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError {
+		t.Error("a result without structured content from a tool with an output schema should be an error result")
 	}
 }

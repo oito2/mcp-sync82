@@ -54,16 +54,12 @@ type LoadProjectContextTool struct {
 // load_project_context tool; its JSON tags match the property names declared
 // in InputSchema.
 type loadProjectContextArgs struct {
-	Project          string   `json:"project,omitempty"`
-	Subproject       string   `json:"subproject,omitempty"`
-	Path             string   `json:"path,omitempty"`
-	WorkspaceRoot    string   `json:"workspace_root,omitempty"`
-	SearchParentDirs bool     `json:"search_parent_dirs,omitempty"`
-	Files            []string `json:"files,omitempty"`
-	Since            string   `json:"since,omitempty"`
-	MaxEntries       int      `json:"max_entries,omitempty"`
-	MaxBytes         int      `json:"max_bytes,omitempty"`
-	Mode             string   `json:"mode,omitempty"`
+	targetArgs
+	Files      []string `json:"files,omitempty"`
+	Since      string   `json:"since,omitempty"`
+	MaxEntries int      `json:"max_entries,omitempty"`
+	MaxBytes   int      `json:"max_bytes,omitempty"`
+	Mode       string   `json:"mode,omitempty"`
 }
 
 // The values of the "mode" argument.
@@ -107,18 +103,13 @@ func (t *LoadProjectContextTool) Description() string {
 func (t *LoadProjectContextTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
-			"project":            map[string]any{"type": "string", "description": "Project name. If omitted, auto-discovered from workspace_root or the last used project."},
-			"subproject":         map[string]any{"type": "string", "description": "Subproject name."},
-			"workspace_root":     map[string]any{"type": "string", "description": "Path to your project folder, used to auto-discover the project via .sync82.json."},
-			"search_parent_dirs": map[string]any{"type": "boolean", "description": SearchParentDirsDescription},
-			"files":              map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Only load these specific files/kinds, instead of everything."},
-			"mode":               map[string]any{"type": "string", "enum": []string{contextModeSummary, contextModeFull}, "description": "\"summary\" (default): the 10 most recent dated entries per log, cut at 40 KB. \"full\": every entry, cut at 200 KB. since, max_entries and max_bytes override these defaults."},
-			"since":              map[string]any{"type": "string", "description": "Only include dated entries (progress, decisions, custom append kinds) on or after this date (\"YYYY-MM-DD\"). Undated entries are always included. Overwrite-style files are unaffected. In summary mode, giving since lifts the default 10-entry limit."},
-			"max_entries":        map[string]any{"type": "integer", "minimum": 0, "description": "Only include the most recent N dated entries per append-only kind (summary mode default: 10). Overwrite-style files are unaffected."},
-			"max_bytes":          map[string]any{"type": "integer", "minimum": minContextBytes, "maximum": maxContextBytes, "description": "Cut the response at this many bytes (default 40960, i.e. 40 KB, in summary mode; 204800, i.e. 200 KB, in full mode), with a note when it is cut."},
-			"path":               map[string]any{"type": "string", "description": PathDescription},
-		},
+		"properties": targetProperties(targetSchema{}, map[string]any{
+			"files":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Only load these specific files/kinds, instead of everything."},
+			"mode":        map[string]any{"type": "string", "enum": []string{contextModeSummary, contextModeFull}, "description": "\"summary\" (default): the 10 most recent dated entries per log, cut at 40 KB. \"full\": every entry, cut at 200 KB. since, max_entries and max_bytes override these defaults."},
+			"since":       map[string]any{"type": "string", "description": "Only include dated entries (progress, decisions, custom append kinds) on or after this date (\"YYYY-MM-DD\"). Undated entries are always included. Overwrite-style files are unaffected. In summary mode, giving since lifts the default 10-entry limit."},
+			"max_entries": map[string]any{"type": "integer", "minimum": 0, "description": "Only include the most recent N dated entries per append-only kind (summary mode default: 10). Overwrite-style files are unaffected."},
+			"max_bytes":   map[string]any{"type": "integer", "minimum": minContextBytes, "maximum": maxContextBytes, "description": "Cut the response at this many bytes (default 40960, i.e. 40 KB, in summary mode; 204800, i.e. 200 KB, in full mode), with a note when it is cut."},
+		}),
 	}
 }
 
@@ -134,27 +125,35 @@ func (t *LoadProjectContextTool) Validate(raw json.RawMessage) (any, error) {
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
+	var problems []string
 	for i, f := range args.Files {
 		kind, err := validateKind(f)
 		if err != nil {
-			return nil, err
+			problems = append(problems, err.Error())
+			continue
 		}
 		args.Files[i] = kind
 	}
 	if args.Since != "" {
 		if _, err := time.Parse("2006-01-02", args.Since); err != nil {
-			return nil, fmt.Errorf(`"since" must be a valid date in the format "YYYY-MM-DD", got %q`, args.Since)
+			problems = append(problems, fmt.Sprintf(`"since" must be a valid date in the format "YYYY-MM-DD", got %q`, args.Since))
 		}
 	}
 	if args.MaxEntries < 0 {
-		return nil, fmt.Errorf(`"max_entries" must be >= 0`)
+		problems = append(problems, `"max_entries" must be >= 0`)
 	}
 	switch args.Mode {
 	case "":
 		args.Mode = contextModeSummary
 	case contextModeSummary, contextModeFull:
 	default:
-		return nil, fmt.Errorf(`"mode" must be %q or %q, got %q`, contextModeSummary, contextModeFull, args.Mode)
+		problems = append(problems, fmt.Sprintf(`"mode" must be %q or %q, got %q`, contextModeSummary, contextModeFull, args.Mode))
+	}
+	if args.MaxBytes != 0 && (args.MaxBytes < minContextBytes || args.MaxBytes > maxContextBytes) {
+		problems = append(problems, fmt.Sprintf(`"max_bytes" must be between %d and %d`, minContextBytes, maxContextBytes))
+	}
+	if err := problemsError(problems); err != nil {
+		return nil, err
 	}
 	if args.Mode == contextModeSummary && args.Since == "" && args.MaxEntries == 0 {
 		args.MaxEntries = summaryMaxEntries
@@ -164,8 +163,6 @@ func (t *LoadProjectContextTool) Validate(raw json.RawMessage) (any, error) {
 		if args.Mode == contextModeSummary {
 			args.MaxBytes = summaryContextBytes
 		}
-	} else if args.MaxBytes < minContextBytes || args.MaxBytes > maxContextBytes {
-		return nil, fmt.Errorf(`"max_bytes" must be between %d and %d`, minContextBytes, maxContextBytes)
 	}
 	return args, nil
 }
@@ -178,10 +175,7 @@ func (t *LoadProjectContextTool) Validate(raw json.RawMessage) (any, error) {
 // included. Store failures are returned as errors.
 func (t *LoadProjectContextTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(loadProjectContextArgs)
-	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, ContextArgs{
-		Project: args.Project, Subproject: args.Subproject, Path: args.Path,
-		WorkspaceRoot: args.WorkspaceRoot, SearchParentDirs: args.SearchParentDirs,
-	})
+	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, args.contextArgs())
 	if ready != nil {
 		return *ready, nil
 	}
@@ -214,6 +208,9 @@ func projectContext(ctx context.Context, s *store.Store, project, subproject str
 		return "", err
 	}
 
+	// A requested file that doesn't exist is named in the response, so a
+	// misspelled name doesn't read as a project without content.
+	var unknown []string
 	if len(args.Files) > 0 {
 		wanted := make(map[string]bool, len(args.Files))
 		for _, f := range args.Files {
@@ -223,16 +220,31 @@ func projectContext(ctx context.Context, s *store.Store, project, subproject str
 		for _, k := range kinds {
 			if wanted[k] {
 				filtered = append(filtered, k)
+				delete(wanted, k)
 			}
 		}
 		kinds = filtered
+		for _, f := range args.Files {
+			if wanted[f] {
+				unknown = append(unknown, f)
+				delete(wanted, f)
+			}
+		}
+	}
+	unknownNote := ""
+	if len(unknown) > 0 {
+		unknownNote = fmt.Sprintf("[no file named: %s]", namedKinds(unknown))
 	}
 	kinds = currentStateFirst(kinds)
 
+	modes, err := s.KindModes(ctx, project, subproject)
+	if err != nil {
+		return "", err
+	}
 	var sections []contextSection
 	var omitted []omittedHistory
 	for _, k := range kinds {
-		fc, err := filteredContent(ctx, s, project, subproject, k, args.Since, args.MaxEntries)
+		fc, err := filteredContent(ctx, s, project, subproject, k, modes[k], args.Since, args.MaxEntries)
 		if err != nil {
 			return "", err
 		}
@@ -256,9 +268,16 @@ func projectContext(ctx context.Context, s *store.Store, project, subproject str
 	}
 
 	if len(sections) == 0 {
+		if unknownNote != "" {
+			return fmt.Sprintf("# Context: %s\n\n%s", label, unknownNote), nil
+		}
 		return fmt.Sprintf("# Context: %s\n\n(no content yet)", label), nil
 	}
-	return buildContext(label, sections, omittedFooter(omitted, args.MaxBytes), args.MaxBytes), nil
+	footer := omittedFooter(omitted, args.MaxBytes)
+	if unknownNote != "" {
+		footer = strings.TrimSpace(unknownNote + "\n" + footer)
+	}
+	return buildContext(label, sections, footer, args.MaxBytes), nil
 }
 
 // contextSection is one kind's part of a load_project_context response:
@@ -428,26 +447,26 @@ type kindContent struct {
 }
 
 // filteredContent returns the content of kind in the given project and
-// subproject of s. When since and maxEntries are both zero it behaves like
-// store.ReadContent. Otherwise an overwrite-style document is still
-// returned in full, since it has no dated history, while an entries-backed
-// kind is narrowed through Store.ReadEntriesSince: since (a "YYYY-MM-DD"
-// date) keeps dated entries on or after that date and always keeps undated
-// ones, and maxEntries (when positive) keeps only the most recent N of what
-// remains, in ascending date and insertion order. Store failures are
-// returned as errors.
-func filteredContent(ctx context.Context, s *store.Store, project, subproject, kind, since string, maxEntries int) (kindContent, error) {
+// subproject of s, reading only the table mode (the kind's
+// store.KindStorage) names. An overwrite-style document is returned in
+// full, since it has no dated history. An entries-backed kind is returned
+// whole when since and maxEntries are both zero, and otherwise narrowed
+// through Store.ReadEntriesSince: since (a "YYYY-MM-DD" date) keeps dated
+// entries on or after that date and always keeps undated ones, and
+// maxEntries (when positive) keeps only the most recent N of what remains,
+// in ascending date and insertion order. Store failures are returned as
+// errors.
+func filteredContent(ctx context.Context, s *store.Store, project, subproject, kind string, mode store.KindStorage, since string, maxEntries int) (kindContent, error) {
+	switch mode {
+	case store.KindStorageNone:
+		return kindContent{}, nil
+	case store.KindStorageDocument:
+		content, ok, err := s.ReadDocument(ctx, project, subproject, kind)
+		return kindContent{content: content, ok: ok}, err
+	}
 	if since == "" && maxEntries == 0 {
 		content, ok, err := s.ReadContent(ctx, project, subproject, kind)
 		return kindContent{content: content, ok: ok}, err
-	}
-
-	docContent, found, err := s.ReadDocument(ctx, project, subproject, kind)
-	if err != nil {
-		return kindContent{}, err
-	}
-	if found {
-		return kindContent{content: docContent, ok: true}, nil
 	}
 
 	entries, err := s.ReadEntriesSince(ctx, project, subproject, kind, since, maxEntries)

@@ -23,6 +23,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/oito2/mcp-sync82/internal/store"
 )
 
 // TestImportProjectCore_RoundTripsWithExport verifies that exporting a project
@@ -336,5 +338,65 @@ func TestImportProjectCore_RefusesMoreThanTheTotalLimit(t *testing.T) {
 	}
 	if exists, err := s.ProjectExists(ctx, "acme", ""); err != nil || exists {
 		t.Fatalf("project created by a refused import (exists=%v, err=%v)", exists, err)
+	}
+}
+
+// TestImportProject_CustomLogWithArchiveStaysALog exports a custom log
+// kind with an archived entry and imports it into a new project: the kind
+// comes back as a log, with its active and archived entries, and accepts
+// appends.
+func TestImportProject_CustomLogWithArchiveStaysALog(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	ctx := context.Background()
+	s, err := mgr.Get(ctx, r.DefaultDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.EnsureProject(ctx, "src", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{"2020-01-01", "2026-01-01"} {
+		if err := s.AppendEntry(ctx, "src", "", "api", d, "## "+d+"\n- change"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.ArchiveEntries(ctx, "src", "", "api", "2021-01-01", nil); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if _, err := ExportProject(ctx, s, "src", "", dir, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ImportProject(ctx, s, "dst", "", dir, false); err != nil {
+		t.Fatal(err)
+	}
+	if mode, err := s.KindMode(ctx, "dst", "", "api"); err != nil || mode != store.KindStorageEntries {
+		t.Fatalf("api after import: mode %v, %v; want entries", mode, err)
+	}
+	all, _ := s.ReadEntries(ctx, "dst", "", "api", true)
+	if len(all) != 2 {
+		t.Errorf("api after import: %d entries, want 2 (one archived)", len(all))
+	}
+}
+
+// TestImportProject_ArchiveForADocumentKindIsRefused checks that a
+// "<kind>.archived.md" for a kind stored as a document is refused, so the
+// kind never ends up with both storages.
+func TestImportProject_ArchiveForADocumentKindIsRefused(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	ctx := context.Background()
+	s, _ := mgr.Get(ctx, r.DefaultDBPath)
+	if _, _, err := s.EnsureProject(ctx, "p", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteDocument(ctx, "p", "", "notes", "doc"); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "notes.archived.md"), []byte("## 2020-01-01\n- old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ImportProject(ctx, s, "p", "", dir, false); err == nil || !strings.Contains(err.Error(), "has no archived entries") {
+		t.Fatalf("import = %v, want the archive refused", err)
 	}
 }

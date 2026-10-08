@@ -29,7 +29,7 @@ import (
 // incoming text into dated sections and replaces the whole entries
 // collection; overwriting a document kind replaces it in place, keeping no
 // history. Validation and execution delegate to validateWriteInput and
-// writeMemoryCore, shared with update_project_memory.
+// writeMemoryCore, whose planWrite update_project_memory also uses.
 type WriteMemoryTool struct {
 	Resolver *Resolver
 	Stores   *store.Manager
@@ -38,13 +38,9 @@ type WriteMemoryTool struct {
 // writeMemoryArgs holds the decoded arguments of the write_memory tool; its
 // JSON tags match the property names declared in InputSchema.
 type writeMemoryArgs struct {
-	Project          string `json:"project,omitempty"`
-	Subproject       string `json:"subproject,omitempty"`
-	Filename         string `json:"filename"`
-	Content          string `json:"content"`
-	Path             string `json:"path,omitempty"`
-	WorkspaceRoot    string `json:"workspace_root,omitempty"`
-	SearchParentDirs bool   `json:"search_parent_dirs,omitempty"`
+	targetArgs
+	Filename string `json:"filename"`
+	Content  string `json:"content"`
 }
 
 // Name returns the MCP tool name, "write_memory".
@@ -62,15 +58,10 @@ func (t *WriteMemoryTool) Description() string {
 func (t *WriteMemoryTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
-			"project":            map[string]any{"type": "string", "description": "Project name. If omitted, auto-discovered from workspace_root; unlike other tools, the last used project is refused."},
-			"subproject":         map[string]any{"type": "string", "description": "Subproject name."},
-			"filename":           map[string]any{"type": "string", "description": "The file/kind to overwrite (e.g. \"memory\", \"progress\", or a custom name)."},
-			"content":            map[string]any{"type": "string", "description": "The new full content."},
-			"workspace_root":     map[string]any{"type": "string", "description": "Path to your project folder, used to auto-discover the project via .sync82.json."},
-			"search_parent_dirs": map[string]any{"type": "boolean", "description": SearchParentDirsDescription},
-			"path":               map[string]any{"type": "string", "description": PathDescription},
-		},
+		"properties": targetProperties(targetSchema{Project: projectRefusesLastDescription}, map[string]any{
+			"filename": map[string]any{"type": "string", "description": "The file/kind to overwrite (e.g. \"memory\", \"progress\", or a custom name)."},
+			"content":  map[string]any{"type": "string", "description": "The new full content."},
+		}),
 		"required": []string{"filename", "content"},
 	}
 }
@@ -100,10 +91,7 @@ func (t *WriteMemoryTool) Validate(raw json.RawMessage) (any, error) {
 // missing project, are returned as errors.
 func (t *WriteMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(writeMemoryArgs)
-	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, ContextArgs{
-		Project: args.Project, Subproject: args.Subproject, Path: args.Path,
-		WorkspaceRoot: args.WorkspaceRoot, SearchParentDirs: args.SearchParentDirs,
-	})
+	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, args.contextArgs())
 	if ready != nil {
 		return *ready, nil
 	}

@@ -19,10 +19,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/oito2/mcp-sync82/internal/config"
 	"github.com/oito2/mcp-sync82/internal/store"
 )
 
@@ -358,5 +360,144 @@ func TestCheckProjectHealthTool_ValidateStaleDays(t *testing.T) {
 	}
 	if _, err := tool.Validate(mustJSON(t, map[string]any{"project": "acme", "stale_days": -1})); err == nil {
 		t.Fatal("a negative stale_days should be rejected")
+	}
+}
+
+// TestCheckProjectHealthTool_AllProjects checks a vault holding a healthy
+// project, an unhealthy subproject and a project with a warning only: one
+// status line each, details for the two that aren't plainly healthy, an
+// error result because one is unhealthy, and the same verdicts in JSON.
+func TestCheckProjectHealthTool_AllProjects(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	ctx := context.Background()
+	s := seedHealthyProject(t, r, mgr, time.Now().UTC().Format("2006-01-02"))
+	if _, _, err := s.EnsureProject(ctx, "acme", "api"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteDocument(ctx, "acme", "api", "memory", "# api"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.EnsureProject(ctx, "beta", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range standardKinds {
+		if err := s.WriteDocument(ctx, "beta", "", k, "# "+k+"\n\nreal content"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.WriteDocument(ctx, "beta", "", "stack", ""); err != nil {
+		t.Fatal(err)
+	}
+	tool := &CheckProjectHealthTool{Resolver: r, Stores: mgr}
+
+	res := runTool(t, tool, map[string]any{"all_projects": true})
+	if !res.IsError {
+		t.Error("an unhealthy subproject should make the vault report an error result")
+	}
+	for _, want := range []string{
+		"- acme: HEALTHY ✅", "- acme/api: UNHEALTHY ❌ (3 missing)", "- beta: WARNINGS ⚠️ (1)",
+		"3 projects: 1 healthy, 1 unhealthy, 1 with warnings only.",
+		"acme/api:\n- missing: architecture, stack, next_steps", "beta:\n- stack: still empty",
+	} {
+		if !strings.Contains(res.Text, want) {
+			t.Errorf("text report lacks %q:\n%s", want, res.Text)
+		}
+	}
+	if _, ok := res.Structured.(VaultHealthReport); !ok {
+		t.Errorf("structured content = %T, want VaultHealthReport", res.Structured)
+	}
+
+	var report VaultHealthReport
+	if err := json.Unmarshal([]byte(runTool(t, tool, map[string]any{"all_projects": true, "format": "json"}).Text), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Vault != r.DefaultDBPath || report.Healthy || len(report.Projects) != 3 {
+		t.Fatalf("report = %+v", report)
+	}
+	api := report.Projects[1]
+	if api.Project != "acme" || api.Subproject != "api" || api.Healthy || len(api.Missing) != 3 {
+		t.Errorf("acme/api entry = %+v", api)
+	}
+	if beta := report.Projects[2]; !beta.Healthy || len(beta.Warnings) != 1 || beta.Missing == nil {
+		t.Errorf("beta entry = %+v, want healthy, one warning and an empty missing list", beta)
+	}
+}
+
+// TestCheckProjectHealthTool_AllProjectsEmptyVault reports an empty vault
+// as healthy, in text and JSON.
+func TestCheckProjectHealthTool_AllProjectsEmptyVault(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	tool := &CheckProjectHealthTool{Resolver: r, Stores: mgr}
+	res := runTool(t, tool, map[string]any{"all_projects": true})
+	if res.IsError || !strings.Contains(res.Text, "No projects in the vault.") {
+		t.Errorf("empty vault: %+v", res)
+	}
+	if text := runTool(t, tool, map[string]any{"all_projects": true, "format": "json"}).Text; !strings.Contains(text, `"projects": []`) || !strings.Contains(text, `"healthy": true`) {
+		t.Errorf("empty vault JSON = %s", text)
+	}
+}
+
+// TestCheckProjectHealthTool_AllProjectsConflicts rejects all_projects
+// combined with an argument naming one project, and never falls back to
+// the last-used project.
+func TestCheckProjectHealthTool_AllProjectsConflicts(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	tool := &CheckProjectHealthTool{Resolver: r, Stores: mgr}
+	for _, arg := range []string{"project", "subproject", "workspace_root"} {
+		if _, err := tool.Validate(mustJSON(t, map[string]any{"all_projects": true, arg: "x"})); err == nil || !strings.Contains(err.Error(), arg) {
+			t.Errorf("all_projects with %s: err = %v", arg, err)
+		}
+	}
+	if err := config.UpdateLastProject("ghost", "", filepath.Join(t.TempDir(), "other.db")); err != nil {
+		t.Fatal(err)
+	}
+	res := runTool(t, tool, map[string]any{"all_projects": true})
+	if !strings.Contains(res.Text, r.DefaultDBPath) {
+		t.Errorf("all_projects should check the default vault, not the last session's: %s", res.Text)
+	}
+}
+
+// TestCheckProjectHealthTool_AllProjectsMissingVault reports a path with no
+// vault as an error result without creating it.
+func TestCheckProjectHealthTool_AllProjectsMissingVault(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	tool := &CheckProjectHealthTool{Resolver: r, Stores: mgr}
+	missing := filepath.Join(t.TempDir(), "none.db")
+	res := runTool(t, tool, map[string]any{"all_projects": true, "path": missing})
+	if !res.IsError || !strings.Contains(res.Text, "No vault exists") {
+		t.Errorf("missing vault: %+v", res)
+	}
+}
+
+// TestCheckProjectHealthTool_FreshProjectIsHealthy checks that a project
+// just set up by init_project_memory, whose logs have no entry yet, is
+// healthy, with an empty_log warning for each log and the logs shown as
+// empty rather than missing.
+func TestCheckProjectHealthTool_FreshProjectIsHealthy(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	runTool(t, &InitProjectMemoryTool{Resolver: r, Stores: mgr}, map[string]any{"project": "fresh"})
+	tool := &CheckProjectHealthTool{Resolver: r, Stores: mgr}
+	res := runTool(t, tool, map[string]any{"project": "fresh"})
+	if res.IsError || !strings.Contains(res.Text, "Status: HEALTHY") || !strings.Contains(res.Text, "- progress: EMPTY (no entry yet)") {
+		t.Fatalf("fresh project: isError=%v\n%s", res.IsError, res.Text)
+	}
+	var report healthReport
+	if err := json.Unmarshal([]byte(runTool(t, tool, map[string]any{"project": "fresh", "format": "json"}).Text), &report); err != nil {
+		t.Fatal(err)
+	}
+	empty := 0
+	for _, w := range report.Warnings {
+		if w.Check == checkEmptyLog {
+			empty++
+		}
+	}
+	if !report.Healthy || report.Files["progress"] || report.Files["decisions"] || empty != 2 {
+		t.Errorf("report = %+v, want healthy, logs not present and two empty_log warnings", report)
+	}
+
+	runTool(t, &CreateProjectTool{Resolver: r, Stores: mgr}, map[string]any{"project": "bare"})
+	res = runTool(t, tool, map[string]any{"project": "bare"})
+	if !res.IsError || !strings.Contains(res.Text, "Use init_project_memory to write the missing files") {
+		t.Errorf("a bare project: isError=%v\n%s", res.IsError, res.Text)
 	}
 }

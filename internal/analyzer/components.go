@@ -61,6 +61,11 @@ func shouldSkipComponentDir(name string) bool {
 func detectComponents(root string, r *Result) {
 	var monorepoEntries []string
 	for _, dir := range monorepoDirs {
+		// A symlink is not followed: it could list directories outside
+		// the workspace.
+		if info, err := os.Lstat(filepath.Join(root, dir)); err != nil || !info.IsDir() {
+			continue
+		}
 		entries, err := os.ReadDir(filepath.Join(root, dir))
 		if err != nil {
 			continue

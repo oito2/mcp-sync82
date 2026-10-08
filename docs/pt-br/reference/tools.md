@@ -14,11 +14,11 @@ O sync82 expõe 19 tools via MCP. Toda tool que opera sobre um projeto específi
 | `subproject` | string | Nome do subprojeto, para um componente de um projeto existente. |
 | `workspace_root` | string | Caminho da pasta do seu projeto, usado para auto-descobrir o projeto via `.sync82.json`. |
 | `search_parent_dirs` | boolean | Se `true`, também procura `.sync82.json` em diretórios acima de `workspace_root` (útil em monorepos, onde o arquivo de marcador fica na raiz do repositório). O padrão é `false` — só `workspace_root` é checado, já que um `.sync82.json` encontrado em um ancestral que você não controla poderia redirecionar silenciosamente para onde a memória é armazenada. |
-| `path` | string | Caminho base onde a memória é armazenada. Se deixado em branco, usa o caminho padrão do vault. Um `~`, `HOME` ou `$HOME` no início (ex. `"~/vaults/trabalho.db"`, `"HOME/vault-customizado"`) é expandido para o diretório do usuário. |
+| `path` | string | Caminho base onde a memória é armazenada. Se deixado em branco, usa o caminho padrão do vault. Um `~`, `HOME` ou `$HOME` no início (ex. `"~/vaults/trabalho.db"`, `"HOME/vault-customizado"` e, no Windows, também `"~\\vaults\\trabalho.db"`) é expandido para o diretório do usuário. |
 
 Se nenhum de `project`, `subproject`, `workspace_root` resolver para um projeto e não houver um último projeto usado registrado, a tool retorna uma mensagem pedindo ao agente chamador um nome de projeto ou `workspace_root`, em vez de falhar.
 
-Nomes de projeto e subprojeto — passados, lidos do `.sync82.json` ou lembrados — precisam começar com letra ou dígito e conter só letras, dígitos, hífens e underscores; qualquer outro nome é recusado com um resultado de erro. Nomes não diferenciam maiúsculas de minúsculas: nomes de projeto, subprojeto e kind (`filename`) têm os espaços das pontas removidos e são convertidos para minúsculas em todo lugar, então `Acme` e `acme` são o mesmo projeto e `Memory` e `memory` o mesmo arquivo, e eles sempre aparecem em minúsculas (vaults existentes são migrados — veja [Armazenamento — Nomes](../architecture/storage.md#nomes)). Só `create_project`, `init_project_memory` e `import_memory` (exceto num dry run) criam um arquivo de vault; toda outra tool reporta um `path` (ou caminho do `.sync82.json`/`set-vault`) onde não existe vault, em vez de criar um vault vazio lá.
+Nomes de projeto e subprojeto — passados, lidos do `.sync82.json` ou lembrados — precisam começar com letra ou dígito, conter só letras, dígitos, hífens e underscores e ter no máximo 128 caracteres — a mesma regra dos nomes de kind (`filename`); qualquer outro nome é recusado com um resultado de erro. Nomes não diferenciam maiúsculas de minúsculas: nomes de projeto, subprojeto e kind (`filename`) têm os espaços das pontas removidos e são convertidos para minúsculas em todo lugar, então `Acme` e `acme` são o mesmo projeto e `Memory` e `memory` o mesmo arquivo, e eles sempre aparecem em minúsculas (vaults existentes são migrados — veja [Armazenamento — Nomes](../architecture/storage.md#nomes)). Só `create_project`, `init_project_memory` e `import_memory` (exceto num dry run) criam um arquivo de vault; toda outra tool reporta um `path` (ou caminho do `.sync82.json`/`set-vault`) onde não existe vault, em vez de criar um vault vazio lá.
 
 Toda tool recusa argumentos que ela não define — ex. `keepDays` em vez de `keep_days` — com um resultado de erro, e o schema de entrada dela define `additionalProperties: false`.
 
@@ -67,6 +67,8 @@ Apaga permanentemente um projeto ou subprojeto do vault. **Exige `confirm: true`
 
 Se um projeto de nível superior tem subprojetos e `subproject_action` não é dado, a tool não apaga nada — retorna a lista de subprojetos e pergunta qual ação tomar: `cancel` (abortar), `promote` (mover cada subprojeto pra raiz do vault como projeto próprio), ou `delete_all` (apagar tudo).
 
+`subproject_action` também pode ser passado na primeira chamada, junto com `confirm: true`: `delete_all` então apaga o projeto e todos os subprojetos sem listá-los antes. Pergunte ao usuário antes de passá-lo.
+
 ---
 
 ### `rename_project`
@@ -77,7 +79,7 @@ Renomeia um projeto ou subprojeto no lugar.
 |---|---|---|---|
 | `project` | string | ✅ | O projeto a renomear. Quando `subproject` também é dado, renomeia esse subprojeto em vez disso. |
 | `subproject` | string | ❌ | O subprojeto a renomear, se estiver renomeando um subprojeto em vez do projeto de nível superior. |
-| `new_name` | string | ✅ | O novo nome (letras, dígitos, hífens, underscores — deve começar com letra ou dígito). |
+| `new_name` | string | ✅ | O novo nome (letras, dígitos, hífens, underscores — deve começar com letra ou dígito, no máximo 128 caracteres). O nome atual é recusado. |
 | `path` | string | ❌ | Override do caminho do vault. |
 
 Não mexe em nenhum `.sync82.json` em outro lugar do disco que já aponte pro nome antigo — eles continuam se referindo a ele até serem reinicializados (`init_project_memory`) ou editados manualmente.
@@ -87,6 +89,8 @@ Não mexe em nenhum `.sync82.json` em outro lugar do disco que já aponte pro no
 ### `get_vault_config`
 
 Reporta a configuração efetiva atual do vault: caminho ativo do vault, config global, e (se `workspace_root` for dado) a config local `.sync82.json` daquele workspace.
+
+O relatório JSON também traz `last_vault_path`, o vault em que o último projeto usado foi lembrado (onde uma chamada que depende da última sessão o abre), e, em `local_config`, `vault`, o vault para o qual aquele workspace resolve.
 
 | Argumento | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
@@ -120,6 +124,7 @@ Lê o conteúdo de um arquivo de memória. Para um kind só-anexa (`progress`, `
 | `project`, `subproject`, `workspace_root`, `search_parent_dirs` | — | ❌ | Argumentos de contexto padrão. |
 | `filename` | string | ✅ | O arquivo/kind a ler (ex. `"memory"`, `"progress"`, ou um nome customizado). |
 | `with_ids` | boolean | ❌ | Coloca uma linha `<!-- entry:N -->` antes de cada entrada de um kind só-anexa, com o id que o [`edit_entry`](#edit_entry) recebe. Não muda nada em arquivos de sobrescrita. |
+| `max_bytes` | integer | ❌ | Limite de tamanho da resposta em bytes (1024 a 52428800, padrão 1048576 — 1 MB). Um conteúdo maior é cortado numa quebra de linha e termina com `[cut: N of M bytes shown; …]`; o [`load_project_context`](#load_project_context) com `since` ou `max_entries` lê parte de um log longo. |
 | `path` | string | ❌ | Override do caminho do vault. |
 
 As linhas `<!-- entry:N -->` nunca são gravadas: `write_memory`, `append_memory`, `update_project_memory`, `edit_entry` e `import_memory` removem linhas inteiras nesse formato do conteúdo que recebem, então um conteúdo lido com ids pode ser gravado de volta como está.
@@ -187,7 +192,7 @@ Altera uma entrada de um arquivo de memória só-anexa (`progress`, `decisions`,
 | `supersede` | Anexa `content` como uma nova entrada e acrescenta uma linha `> Superseded by entry N on YYYY-MM-DD.` à antiga, numa única transação. O texto antigo continua no histórico, marcado. Prefira quando uma decisão mudou, e não quando foi registrada errada. |
 | `delete` | Remove a entrada permanentemente. |
 
-Os ids de entrada são únicos dentro de um vault e não mudam enquanto a entrada existir. Reescrever um arquivo inteiro (`write_memory`, `update_project_memory`) ou importá-lo (`import_memory`) cria entradas novas, com ids novos, então leia os ids de novo depois disso. Entradas arquivadas também podem ser editadas, mas o `read_memory` não as mostra.
+Os ids de entrada são únicos dentro de um vault e não mudam enquanto a entrada existir. Reescrever um arquivo inteiro (`write_memory`, `update_project_memory`) ou importá-lo (`import_memory`) cria entradas novas, com ids novos, então leia os ids de novo depois disso. Um id nunca é dado a outra entrada, nem depois que a entrada dele é apagada, então um id antigo é reportado como não encontrado em vez de alterar outra entrada. Entradas arquivadas também podem ser editadas, mas o `read_memory` não as mostra. Substituir (`supersede`) uma entrada arquivada a marca no arquivo morto e acrescenta a substituta como entrada ativa.
 
 ---
 
@@ -237,13 +242,13 @@ Busca nos arquivos de memória. Por padrão encontra os documentos e entradas qu
 
 | `match` | Encontra | Ordem |
 |---|---|---|
-| `words` (padrão) | Documentos e entradas que têm **todas** as palavras da consulta, em qualquer lugar e em qualquer ordem. Maiúsculas/minúsculas e os acentos de letras latinas são ignorados (`sessao` encontra `Sessão`). Uma palavra terminada em `*` casa como prefixo (`instal*` encontra `instalador`). Pontuação só separa palavras: `edit_entry` busca `edit` e `entry`, e `"`, `NEAR`, `OR`, `:` ou `-` não têm significado especial. | Relevância (melhores primeiro) |
+| `words` (padrão) | Documentos e entradas que têm **todas** as palavras da consulta, em qualquer lugar e em qualquer ordem. Maiúsculas/minúsculas e os acentos de letras latinas são ignorados (`sessao` encontra `Sessão`). Uma palavra terminada em `*` casa como prefixo (`instal*` encontra `instalador`). Pontuação só separa palavras: `edit_entry` busca `edit` e `entry`, e `"`, `NEAR`, `OR`, `:` ou `-` não têm significado especial. As palavras seguem o tokenizer `unicode61` do SQLite, então uma palavra com um símbolo recente (`100₽`) pode precisar de `exact`. | Relevância (melhores primeiro) |
 | `phrase` | Documentos e entradas que têm as palavras **nessa ordem**, com as mesmas regras do `words` (`sobre o instal*` funciona). | Relevância (melhores primeiro) |
 | `exact` | Linhas que têm a consulta como substring literal, sem diferenciar maiúsculas/minúsculas mas diferenciando acentos (`decisão` encontra `DECISÃO`, não `decisao`). Use para caminhos, identificadores ou pontuação (`100%`, `foo_bar`, `v1.0`). | Ordem do arquivo |
 
 No modo `words`, cada linha que tem uma das palavras é reportada, então um documento com as palavras em linhas diferentes mostra cada uma dessas linhas. Uma frase que continua na linha seguinte é reportada pelas linhas que têm as palavras dela. Uma consulta sem letras nem números é recusada nos modos `words` e `phrase` — use `exact` para ela.
 
-Cada resultado é rotulado `project/file:line`, ou `project/file[YYYY-MM-DD]:line` para uma entrada de um log datado (a linha é contada dentro daquela entrada). Os resultados vêm numa ordem estável — por relevância nos modos `words`/`phrase`, com empates resolvidos por projeto, arquivo e ordem de leitura; por projeto, arquivo e ordem de leitura no modo `exact` —, então as páginas de `offset` são consistentes. Cada linha encontrada ou de contexto é cortada em 4 KB, terminando em `…`. A resposta é limitada a cerca de 1 MB; passando disso, ela termina com uma nota dizendo para continuar com `offset`. Num vault muito grande, a varredura para depois de 5000 linhas (por tabela no modo `exact`) ou 64 MB de conteúdo, e o resultado avisa.
+Cada resultado é rotulado `project/file:line`, ou `project/file[YYYY-MM-DD]:line` para uma entrada de um log datado (a linha é contada dentro daquela entrada). Os resultados vêm numa ordem estável — por relevância nos modos `words`/`phrase`, com empates resolvidos por projeto, arquivo e ordem de leitura; por projeto, arquivo e ordem de leitura no modo `exact` —, então as páginas de `offset` são consistentes. No formato texto, uma busca sem resultado responde `No results for "<consulta>"`, e um `offset` depois do último resultado `No more results for "<consulta>" at offset N`. Cada linha encontrada ou de contexto é cortada em 4 KB, terminando em `…`. A resposta é limitada a cerca de 1 MB como enviada, somando o texto e o conteúdo estruturado (com o escape do JSON); passando disso, ela termina com uma nota dizendo para continuar com `offset`. Num vault muito grande, a varredura para depois de 5000 linhas (por tabela no modo `exact`) ou 64 MB de conteúdo, e o resultado avisa.
 
 > `search_memory` deliberadamente nunca cai sozinha no "último projeto usado" como as outras tools fazem — uma busca sem escopo deve buscar o vault inteiro, não adivinhar um projeto silenciosamente. Com `workspace_root` e sem `project`, um workspace sem `.sync82.json` também busca o vault inteiro, enquanto um `.sync82.json` que não pode ser lido ou que nomeia um projeto inválido dá um resultado de erro em vez de uma busca.
 
@@ -258,7 +263,7 @@ Carrega a memória de um projeto (todo arquivo não-vazio) concatenada num únic
 | Argumento | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
 | `project`, `subproject`, `workspace_root`, `search_parent_dirs` | — | ❌ | Argumentos de contexto padrão. |
-| `files` | array de strings | ❌ | Carrega só esses arquivos/kinds específicos, em vez de tudo. |
+| `files` | array de strings | ❌ | Carrega só esses arquivos/kinds específicos, em vez de tudo. Um nome sem arquivo aparece como `[no file named: …]`. |
 | `mode` | string (`summary` \| `full`) | ❌ | `summary` (padrão): as 10 entradas datadas mais recentes por kind append-only, resposta cortada em 40 KB. `full`: todas as entradas, resposta cortada em 200 KB. `since`, `max_entries` e `max_bytes` substituem esses padrões. |
 | `since` | string (`YYYY-MM-DD`) | ❌ | Inclui só entradas datadas (`progress`, `decisions`, ou um kind customizado de anexação) nessa data ou depois. Entradas sem data são sempre incluídas. Arquivos de sobrescrita não são afetados. No modo `summary`, informar `since` remove o limite padrão de 10 entradas. |
 | `max_entries` | integer | ❌ | Inclui só as N entradas datadas mais recentes por kind append-only (padrão 10 no modo `summary`). Entradas sem data (como um título antes da primeira entrada datada) são sempre incluídas e não contam para N. Arquivos de sobrescrita não são afetados. |
@@ -279,11 +284,12 @@ Uma resposta nunca passa de `max_bytes`, contando as notas. Quando passaria, o c
 
 ### `check_project_health`
 
-Reporta quais dos seis arquivos de memória padrão existem para um projeto, além de avisos sobre memória que pode estar desatualizada (veja abaixo). Retorna um resultado de erro (`isError: true`) quando o projeto está não-saudável — um sinal deliberado pro agente chamador agir, não uma falha. Isso vale também para `format: "json"`.
+Reporta quais dos seis arquivos de memória padrão existem para um projeto, além de avisos sobre memória que pode estar desatualizada (veja abaixo). O projeto está **não-saudável** quando falta um arquivo de estado atual (`memory`, `architecture`, `stack`, `next_steps`); `progress` e `decisions` ainda sem entrada aparecem como `EMPTY (no entry yet)` e só geram o aviso `empty_log`, então um projeto que o `init_project_memory` acabou de criar está saudável. Retorna um resultado de erro (`isError: true`) quando o projeto está não-saudável — um sinal deliberado pro agente chamador agir, não uma falha — e recomenda o `init_project_memory`, que só grava os arquivos que faltam. Isso vale também para `format: "json"`.
 
 | Argumento | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
 | `project`, `subproject`, `workspace_root`, `search_parent_dirs` | — | ❌ | Argumentos de contexto padrão. |
+| `all_projects` | boolean | ❌ | Verifica todo projeto e subprojeto do vault (o indicado por `path`, ou o vault padrão) em vez de um projeto só. Não pode ser combinado com `project`, `subproject` ou `workspace_root`, e nunca usa o último projeto usado. |
 | `path` | string | ❌ | Override do caminho do vault. |
 | `format` | string (`text` \| `json`) | ❌ | `text` (padrão) para texto legível; `json` para um documento JSON com a mesma informação, devolvido como texto e como conteúdo estruturado — veja [Saída JSON](#saída-json). |
 | `stale_days` | integer | ❌ | Dias depois dos quais um arquivo de estado atual mais antigo que a entrada mais nova de `progress`/`decisions` é reportado como possivelmente desatualizado (≥ 1, padrão 30). |
@@ -296,14 +302,17 @@ Também reporta **avisos** — memória que pode estar desatualizada. Avisos nun
 | `template` | Um arquivo de estado atual está vazio, ou ainda igual ao template em branco que o `init_project_memory` grava quando nenhuma resposta é dada (a data da linha `Last updated` não conta). |
 | `undated_entries` | `progress` ou `decisions` tem entradas sem data — um título antes da primeira entrada datada não conta. O `archive_memory` nunca as arquiva; o `edit_entry` pode dar a elas um cabeçalho `## YYYY-MM-DD`. |
 | `large_history` | `progress` ou `decisions` tem mais de 200 entradas datadas ativas — o `archive_memory` mantém pequeno o contexto carregado. |
+| `empty_log` | `progress` ou `decisions` ainda não tem nenhuma entrada — registre o trabalho com `update_project_memory` ou `append_memory`. |
 
 No relatório em texto, os avisos vêm depois da lista de arquivos, sob `Warnings:`, uma linha `- <arquivo>: <mensagem>` cada.
+
+Com `all_projects: true`, o relatório em texto tem uma linha por projeto e subprojeto — `HEALTHY ✅`, `UNHEALTHY ❌ (N missing)` ou `WARNINGS ⚠️ (N)` —, depois uma contagem de cada, depois os arquivos ausentes e avisos de todo projeto que não está plenamente saudável. O resultado é de erro quando algum projeto está não-saudável. Um vault vazio é saudável (`No projects in the vault.`).
 
 ---
 
 ### `init_project_memory`
 
-Inicialização guiada da memória de um projeto. A descrição dessa tool funciona como um roteiro pro agente — ele deve determinar se o alvo é um projeto ou subprojeto (perguntando ao usuário se não estiver claro), e então auto-detectar os dados do projeto a partir do código ou perguntar ao usuário um conjunto fixo de perguntas. Só arquivos vazios ou que ainda contêm o template em branco são escritos — rodar de novo num projeto já inicializado não sobrescreve conteúdo existente. Com `workspace_root`, ela grava o `.sync82.json` lá — a menos que já exista um apontando para outro projeto, que é mantido sem alteração e reportado. Um `path` dado como `~/…`, `HOME/…` ou caminho absoluto é registrado no `.sync82.json` como foi dado. Quando `workspace_root` é dado, o último projeto usado nunca é usado como alternativa.
+Inicialização guiada da memória de um projeto. A descrição dessa tool funciona como um roteiro pro agente — ele deve determinar se o alvo é um projeto ou subprojeto (perguntando ao usuário se não estiver claro), e então auto-detectar os dados do projeto a partir do código ou perguntar ao usuário um conjunto fixo de perguntas. Só arquivos vazios ou que ainda contêm o template em branco são escritos — rodar de novo num projeto já inicializado não sobrescreve conteúdo existente. Com `workspace_root`, ela grava o `.sync82.json` lá — a menos que já exista um apontando para outro projeto, ou para outro vault que não o `path` dado na chamada; esse arquivo é mantido sem alteração e reportado, para que a memória do workspace não mude de lugar. Um `path` dado como `~/…`, `HOME/…` ou caminho absoluto é registrado no `.sync82.json` como foi dado. Quando `workspace_root` é dado, o último projeto usado nunca é usado como alternativa. Sem `project` e `workspace_root`, ela pode inicializar o último projeto usado — o resultado então o identifica —, mas se recusa a gravar nele qualquer resposta (ou `auto_detect`).
 
 | Argumento | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
@@ -358,10 +367,14 @@ Exporta a memória de um projeto para arquivos Markdown simples (um por kind, ex
 |---|---|---|---|
 | `project`, `subproject`, `workspace_root`, `search_parent_dirs` | — | ❌ | Argumentos de contexto padrão. |
 | `output_dir` | string | ✅ | Pasta onde escrever os arquivos `.md` exportados. Precisa ser absoluta (ou começar com `~/` ou `HOME/`); fora isso, qualquer pasta em que o processo do servidor possa escrever — não é confinada ao vault ou workspace. Criada (privada ao usuário) se não existir. |
-| `overwrite` | boolean | ❌ | Substitui arquivos `.md` que já existem em `output_dir`. Sem ele, a exportação é recusada — e nada é escrito — quando algum arquivo de destino existe. Um destino que seja symlink ou arquivo especial é sempre recusado. |
+| `overwrite` | boolean | ❌ | Substitui arquivos `.md` que já existem em `output_dir`. Sem ele, a exportação é recusada — e nada é escrito — quando algum arquivo de destino existe. Um destino que seja symlink ou arquivo especial é sempre recusado. Com `overwrite`, um projeto que veio só da última sessão é recusado: passe `project` ou `workspace_root`. |
 | `path` | string | ❌ | Override do caminho do vault. |
 
-Um kind com entradas arquivadas também ganha um arquivo `<kind>.archived.md` com elas, então a exportação mantém o histórico inteiro. Também existe um comando de CLI `sync82 export` que faz a mesma coisa sem passar por um cliente MCP, mais um modo `--all` que exporta todo projeto/subprojeto do vault de uma vez — veja [Referência da CLI — export](./cli.md#export).
+Um kind com entradas arquivadas também ganha um arquivo `<kind>.archived.md` com elas, então a exportação mantém o histórico inteiro. Um kind cujo nome não pode ser nome de arquivo (gravado por uma versão anterior, por exemplo com mais de 128 caracteres) fica de fora e aparece como pulado.
+
+Quando grava algum arquivo, a exportação grava também `.sync82-kinds.json`, um manifesto que diz se cada kind é um `log` (append-only, guardado como entradas) ou um `document`, para que uma importação restaure um log personalizado como log. Ele não conta como arquivo exportado. Depois de gravar, o resultado lista os arquivos `.md` que já estavam em `output_dir`, que esta exportação não gravou e que são nomes de kind válidos — deixados por uma exportação anterior de um arquivo que o projeto não tem mais. Eles não são apagados: uma importação da pasta os traria de volta, então apague-os se esses arquivos foram removidos de propósito.
+
+Também existe um comando de CLI `sync82 export` que faz a mesma coisa sem passar por um cliente MCP, mais um modo `--all` que exporta todo projeto/subprojeto do vault de uma vez — veja [Referência da CLI — export](./cli.md#export).
 
 ---
 
@@ -372,7 +385,7 @@ Importa a memória de um projeto a partir de arquivos Markdown simples previamen
 | Argumento | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
 | `project`, `subproject`, `workspace_root`, `search_parent_dirs` | — | ❌ | Argumentos de contexto padrão. |
-| `input_dir` | string | ✅ | Pasta de onde ler os arquivos `.md` exportados. Precisa ser absoluta (ou começar com `~/` ou `HOME/`); fora isso, qualquer pasta que o processo do servidor possa ler — não é confinada ao vault ou workspace. Todo arquivo `"<kind>.md"` presente é importado, e um arquivo `"<kind>.archived.md"` restaura as entradas arquivadas daquele kind; arquivos que não são nomes de kind válidos, estão vazios, passam de 10 MB, ou são symlinks ou arquivos especiais são pulados e reportados. No máximo 256 arquivos `.md` são lidos por importação. |
+| `input_dir` | string | ✅ | Pasta de onde ler os arquivos `.md` exportados. Precisa ser absoluta (ou começar com `~/` ou `HOME/`); fora isso, qualquer pasta que o processo do servidor possa ler — não é confinada ao vault ou workspace. Todo arquivo `"<kind>.md"` presente é importado, e um arquivo `"<kind>.archived.md"` restaura as entradas arquivadas daquele kind; arquivos que não são nomes de kind válidos, estão vazios, passam de 10 MB, ou são symlinks ou arquivos especiais são pulados e reportados. No máximo 256 arquivos `.md` são lidos por importação. Um manifesto `.sync82-kinds.json` gravado pela exportação, quando presente, diz quais kinds novos são logs; ele precisa ser um arquivo regular de no máximo 1 MB com versão `1`, ou a importação falha. |
 | `dry_run` | boolean | ❌ | Quando `true`, reporta o que a importação criaria e sobrescreveria, sem escrever nada — nem um arquivo de vault ausente é criado. |
 | `path` | string | ❌ | Override do caminho do vault. |
 
@@ -416,6 +429,8 @@ As tools "somente leitura" ainda registram o último projeto usado em `~/.sync82
 
 `list_projects`, `list_files`, `check_project_health` e `search_memory` aceitam `format: "json"`. O texto do resultado passa a ser um documento JSON indentado, e o mesmo objeto é devolvido como o `structuredContent` do resultado MCP. Qualquer outro valor de `format` é rejeitado com um resultado de erro. Notas de contexto (`[project: ..., from ..., vault: ...]`) não são adicionadas no modo JSON — o campo `vault` traz o caminho resolvido. Um resultado vazio é um array vazio (`[]`), nunca uma frase de "nada encontrado". Mensagens que não são resultados — um pedido de `project`, um vault ausente (exceto no `list_projects`), um argumento inválido — continuam em texto simples.
 
+Essas quatro tools declaram um **output schema** (`outputSchema` no `tools/list`) que descreve os objetos abaixo, e todo resultado de sucesso traz o objeto correspondente como `structuredContent`, **qualquer que seja o `format`**: no formato `text`, o texto continua legível e o conteúdo estruturado traz a mesma informação. O cliente escolhe qual dos dois o agente vê: o Claude Code (2.1) entrega ao agente o conteúdo estruturado quando o resultado tem um, então nele essas tools respondem em JSON qualquer que seja o `format`. Um resultado que não tem esse objeto — um pedido de `project` ou `workspace_root`, um vault ausente — é devolvido com `isError: true`, já que os clientes rejeitam um resultado de sucesso sem conteúdo estruturado de uma tool que declara output schema.
+
 **`list_projects`**
 
 | Campo | Tipo | Descrição |
@@ -446,6 +461,19 @@ As tools "somente leitura" ainda registram o último projeto usado em `~/.sync82
 | `healthy` | boolean | `true` quando os seis arquivos padrão existem (caso contrário o resultado é marcado como `isError`). |
 | `files` | object | Um boolean por arquivo padrão: `memory`, `architecture`, `stack`, `decisions`, `progress`, `next_steps`. |
 | `warnings` | array | Um objeto por aviso, com `file`, `check` (`stale`, `template`, `undated_entries`, `large_history`) e `message` — omitido quando não há nenhum. |
+
+Com `all_projects: true`:
+
+| Campo | Tipo | Descrição |
+|---|---|---|
+| `vault` | string | Caminho do vault verificado. |
+| `healthy` | boolean | `true` quando todo projeto está saudável, ou o vault está vazio. |
+| `projects` | array | Um objeto por projeto e subprojeto, cada projeto seguido dos subprojetos dele, em ordem de nome (`[]` num vault vazio). |
+| `projects[].project` | string | Nome do projeto de nível superior. |
+| `projects[].subproject` | string | Nome do subprojeto — omitido para um projeto de nível superior. |
+| `projects[].healthy` | boolean | `true` quando os seis arquivos padrão existem. |
+| `projects[].missing` | array of strings | Os arquivos padrão que não existem (`[]` quando nenhum). |
+| `projects[].warnings` | array | Os avisos dele, no formato acima (`[]` quando nenhum). |
 
 **`search_memory`**
 

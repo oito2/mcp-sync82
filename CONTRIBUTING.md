@@ -28,10 +28,10 @@ go vet ./...
 go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run ./...   # must report "0 issues."
 go build ./...
 go test ./... -race
-go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 ```
 
-All six must pass — [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs them on every push and pull request against `main` and will block merge otherwise. The tests run on Linux, macOS and Windows (formatting, golangci-lint and `govulncheck` on Linux only). golangci-lint uses the repository's `.golangci.yml` and the version pinned by `GOLANGCI_LINT_VERSION` in the workflows — bump it there and in the command above together; a few tests build the real binary and talk to it over stdio — `go test -short ./...` skips those. CI also builds a full set of release artifacts with `scripts/release` (the program the release workflow uses), checks that `self-update` can find, verify and run its binaries, and validates `server.json` with `mcp-publisher` — see [Releasing](#releasing).
+All six must pass — [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs them on every push and pull request against `main` and will block merge otherwise. The tests run on Linux, macOS and Windows (formatting and `govulncheck` on Linux only; golangci-lint runs on Linux for the Linux, Windows and macOS targets, so the files built only for one of them are linted too). golangci-lint uses the repository's `.golangci.yml` and the version pinned by `GOLANGCI_LINT_VERSION` in the workflows, and govulncheck the version pinned by `GOVULNCHECK_VERSION` — bump each there and in the commands above together; a few tests build the real binary and talk to it over stdio — `go test -short ./...` skips those. A test that runs `install` or `uninstall` through `run` must call `isolateClients` (in `cmd/sync82/main_test.go`) first: client detection looks at `PATH` as well as at the home directory, so a temporary `HOME` alone would still let it see, and change, the MCP clients installed on your machine. CI also builds a full set of release artifacts with `scripts/release` (the program the release workflow uses), checks that `self-update` can find, verify and run its binaries, and validates `server.json` with `mcp-publisher` — see [Releasing](#releasing).
 
 ## Making a change
 
@@ -80,13 +80,23 @@ git push origin v1.2.3
 | Job | What it does |
 |---|---|
 | `validate` | Rejects a tag that isn't exactly `vMAJOR.MINOR.PATCH`. |
-| `checks` | Runs the CI checks (gofmt, vet, golangci-lint, build, `go test -race`, govulncheck) on the tagged commit. |
-| `release` | Runs `go run ./scripts/release <tag>`, validates `server.json` with `mcp-publisher validate`, signs `checksums.txt` with `cosign sign-blob` (keyless) into `checksums.txt.sigstore.json`, records build provenance attestations for `dist/sync82_*` and `dist/sync82.mcpb`, and creates the GitHub release with every file in `dist/`. |
+| `checks` | Runs the CI checks on the tagged commit, on Linux, macOS and Windows (gofmt, golangci-lint and govulncheck on Linux only): vet, build, `go test -race`. |
+| `build` | Read-only. Runs `go run ./scripts/release <tag>`, checks that `sync82_linux_amd64 --version` prints the tag, runs the self-update contract test (`TestReleaseContract`) on `dist/`, validates `server.json` with `mcp-publisher validate`, and uploads `dist/` as a workflow artifact. |
+| `sign-publish` | The only job with `contents: write`, `id-token: write` and `attestations: write`; it checks out and runs no repository code. Downloads `dist/` (the download fails on a digest mismatch), checks every asset with `sha256sum --check checksums.txt`, signs `checksums.txt` with `cosign sign-blob` (keyless) into `checksums.txt.sigstore.json`, records build provenance attestations for `dist/sync82_*` and `dist/sync82.mcpb`, and creates the GitHub release with every file in `dist/`. |
 | `publish-registry` | Downloads `server.json` from the release, logs in to the MCP Registry with GitHub OIDC and publishes it. |
 
-`publish-registry` is a separate job so it can be re-run on its own (e.g. after a registry outage) without re-creating the release.
+Building and signing are separate jobs so that the code the build runs (the repository, its dependencies and `mcp-publisher`) never holds the permissions that sign, attest or publish. A run that fails before `sign-publish` publishes nothing and can be re-run; a failed `sign-publish` can be re-run on its own for 7 days, while the build artifact exists, and with "Re-run all jobs" after that. `publish-registry` is a separate job so it can be re-run on its own (e.g. after a registry outage) without re-creating the release.
 
-**Updating `mcp-publisher`** — the version is pinned by `MCP_PUBLISHER_VERSION` and the SHA-256 of its `mcp-publisher_linux_amd64.tar.gz` by `MCP_PUBLISHER_SHA256`, in both `release.yml` and `ci.yml`. Bump the two together, in both files; a mismatched hash fails the download check.
+**Pinned tool versions** — before a release, check whether these pins need a bump; Dependabot updates the actions and Go modules, but not these:
+
+| Pin | Where |
+|---|---|
+| `GOLANGCI_LINT_VERSION` | `env` in `ci.yml` and `release.yml` |
+| `GOVULNCHECK_VERSION` | `env` in `ci.yml` and `release.yml` (and the command under [Development setup](#development-setup)) |
+| `MCP_PUBLISHER_VERSION`, `MCP_PUBLISHER_SHA256` | the local action `.github/actions/install-mcp-publisher/action.yml` |
+| `cosign-release` | the `sigstore/cosign-installer` step of `release.yml` |
+
+**Updating `mcp-publisher`** — the version is pinned by `MCP_PUBLISHER_VERSION` and the SHA-256 of its `mcp-publisher_linux_amd64.tar.gz` by `MCP_PUBLISHER_SHA256`, in the local action [`.github/actions/install-mcp-publisher/action.yml`](.github/actions/install-mcp-publisher/action.yml), which `ci.yml` and `release.yml` both use. Bump the two together; a mismatched hash fails the download check.
 
 ## Reporting bugs and requesting features
 

@@ -505,8 +505,8 @@ func TestOpenCode_InstallUsesExistingJSONC(t *testing.T) {
 	original := "{\n  // keep\n  \"$schema\": \"https://opencode.ai/config.json\"\n}\n"
 	writeFile(t, jsoncPath, original, 0o644)
 	got, _, errOut := install(t, target, env)
-	if got != ResultFail || !strings.Contains(errOut, `"mcp"`) || !strings.Contains(errOut, `"enabled": true`) {
-		t.Fatalf("install = %q, stderr %q; want a failure with the entry to add", got, errOut)
+	if got != ResultManual || !strings.Contains(errOut, `"mcp"`) || !strings.Contains(errOut, `"enabled": true`) {
+		t.Fatalf("install = %q, stderr %q; want a manual step with the entry to add", got, errOut)
 	}
 	if data, _ := os.ReadFile(jsoncPath); string(data) != original {
 		t.Errorf("opencode.jsonc = %q, want it untouched", data)
@@ -608,5 +608,48 @@ func TestCline_InstallsIntoEveryPresentLocation(t *testing.T) {
 		if _, ok := readJSON(t, p)["mcpServers"].(map[string]any)["sync82"]; !ok {
 			t.Errorf("%s lacks the sync82 entry", p)
 		}
+	}
+}
+
+// TestClaudeDesktop_MSIXPackage checks that, on Windows, the config of an
+// MSIX-packaged Claude Desktop — the copy under
+// %LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude that the
+// app reads — is detected, written and cleaned, together with the classic
+// %APPDATA%\Claude one when that exists too.
+func TestClaudeDesktop_MSIXPackage(t *testing.T) {
+	home := t.TempDir()
+	local := filepath.Join(home, "local")
+	msix := filepath.Join(local, "Packages", "Claude_pzs8sxrjxfjjc", "LocalCache", "Roaming", "Claude")
+	if err := os.MkdirAll(msix, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := testEnv("windows", home, map[string]string{"LOCALAPPDATA": local, "APPDATA": filepath.Join(home, "roaming")})
+	target := mustFind(t, "claude-desktop")
+	if !target.Detected(env) {
+		t.Fatal("an MSIX-only Claude Desktop is not detected")
+	}
+	msixConfig := filepath.Join(msix, "claude_desktop_config.json")
+	if got := target.configPaths(env); len(got) != 1 || got[0] != msixConfig {
+		t.Fatalf("config paths = %v, want only %s", got, msixConfig)
+	}
+	if got, _, _ := install(t, target, env); got != ResultOK {
+		t.Fatalf("install = %q", got)
+	}
+	if has, _ := fileHasEntry(msixConfig, target.Shape); !has {
+		t.Fatal("the MSIX config holds no sync82 entry after install")
+	}
+
+	classic := filepath.Join(home, "roaming", "Claude")
+	if err := os.MkdirAll(classic, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := target.configPaths(env); len(got) != 2 {
+		t.Errorf("config paths with both installs = %v, want both", got)
+	}
+	if got, _, _ := uninstall(t, target, env); got != ResultOK {
+		t.Errorf("uninstall = %q", got)
+	}
+	if has, _ := fileHasEntry(msixConfig, target.Shape); has {
+		t.Error("the MSIX entry must be removed")
 	}
 }

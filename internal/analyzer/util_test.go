@@ -18,6 +18,7 @@ package analyzer
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -103,5 +104,19 @@ func TestSetDescription_CollapsesManifestDescriptions(t *testing.T) {
 	}
 	if n := len([]rune(r.Description)); n > 200 {
 		t.Fatalf("Description has %d runes, want at most 200", n)
+	}
+}
+
+// TestReadMarkerFile_DropsByteOrderMark checks that a marker file starting
+// with a UTF-8 byte order mark is read without it, so package.json still
+// parses.
+func TestReadMarkerFile_DropsByteOrderMark(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte("\xef\xbb\xbf{\"dependencies\": {\"react\": \"18\"}}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := AnalyzeProject(root)
+	if !slices.Contains(r.Frameworks, "React") {
+		t.Errorf("Frameworks = %v, want React from a package.json with a BOM", r.Frameworks)
 	}
 }

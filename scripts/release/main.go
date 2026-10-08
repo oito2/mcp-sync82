@@ -29,12 +29,9 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,6 +39,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/oito2/mcp-sync82/internal/fsutil"
 	"github.com/oito2/mcp-sync82/internal/selfupdate"
 )
 
@@ -56,17 +54,6 @@ const (
 	authorName = "OITO2"
 	distDir    = "dist"
 )
-
-// platforms is the set of GOOS/GOARCH combinations built for every
-// release. Each entry yields an asset named by selfupdate.AssetName.
-var platforms = [][2]string{
-	{"linux", "amd64"},
-	{"linux", "arm64"},
-	{"darwin", "amd64"},
-	{"darwin", "arm64"},
-	{"windows", "amd64"},
-	{"windows", "arm64"},
-}
 
 // semverTagPattern accepts a strict release tag. The version is placed
 // verbatim inside the -ldflags value passed to `go build`, so anything
@@ -115,6 +102,7 @@ func main() {
 		fatal(fmt.Errorf("create %s: %w", dist, err))
 	}
 
+	platforms := selfupdate.ReleasePlatforms()
 	checksums := make(map[string]string, len(platforms)+1)
 	for _, p := range platforms {
 		goos, goarch := p[0], p[1]
@@ -124,7 +112,7 @@ func main() {
 		if err := buildOne(repoRoot, goos, goarch, version, out); err != nil {
 			fatal(fmt.Errorf("build %s: %w", name, err))
 		}
-		sum, err := sha256File(out)
+		sum, err := fsutil.SHA256File(out)
 		if err != nil {
 			fatal(fmt.Errorf("checksum %s: %w", name, err))
 		}
@@ -136,7 +124,7 @@ func main() {
 	if err := buildBundle(repoRoot, dist, version, bundlePath); err != nil {
 		fatal(fmt.Errorf("package %s: %w", bundleName, err))
 	}
-	bundleSum, err := sha256File(bundlePath)
+	bundleSum, err := fsutil.SHA256File(bundlePath)
 	if err != nil {
 		fatal(fmt.Errorf("checksum %s: %w", bundleName, err))
 	}
@@ -213,33 +201,18 @@ func releaseLDFlags(version string) string {
 }
 
 // buildOne cross-compiles ./cmd/sync82 from repoRoot for goos/goarch into
-// out, stamping version, with cgo disabled and -trimpath so the binary does
-// not embed local paths. Compiler output goes to the process's stdout and
+// out, stamping version, with the pinned environment of releaseBuildEnv
+// and -trimpath so the binary does not embed local paths. Compiler output goes to the process's stdout and
 // stderr. It returns the error from the go build command.
 func buildOne(repoRoot, goos, goarch, version, out string) error {
 	cmd := exec.Command("go", "build", "-trimpath",
 		"-ldflags", releaseLDFlags(version),
 		"-o", out, "./cmd/sync82")
 	cmd.Dir = repoRoot
-	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=0")
+	cmd.Env = append(os.Environ(), releaseBuildEnv(goos, goarch)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
-}
-
-// sha256File returns the lowercase hex-encoded SHA-256 digest of the file
-// at path, or an error if it cannot be read.
-func sha256File(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // writeChecksumsFile writes `sha256sum` output ("<hex digest>  <name>" per
@@ -359,4 +332,16 @@ func writeServerJSON(path, version, bundleSHA256 string) error {
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "Error:", err)
 	os.Exit(1)
+}
+
+// releaseBuildEnv returns the environment entries that pin a release build
+// of goos/goarch, appended after the caller's environment so they win:
+// cgo off, the baseline CPU level of each architecture, and no GOFLAGS or
+// GOEXPERIMENT, so a local build gives the same binaries as CI whatever the
+// developer's shell sets.
+func releaseBuildEnv(goos, goarch string) []string {
+	return []string{
+		"GOOS=" + goos, "GOARCH=" + goarch, "CGO_ENABLED=0",
+		"GOAMD64=v1", "GOARM64=v8.0", "GOFLAGS=", "GOEXPERIMENT=",
+	}
 }

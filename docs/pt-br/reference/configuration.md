@@ -24,10 +24,12 @@ Toda fonte de configuração que o sync82 lê. O sync82 **não tem flags de linh
 
 | Variável | Padrão | Descrição |
 |---|---|---|
-| `SYNC82_DB_PATH` | `~/.sync82/knowledge.db` | Arquivo de vault usado quando nenhum argumento `path`, `path` do `.sync82.json` ou `vaultPath` global se aplica. Um `~`, `~/`, `HOME`, `HOME/`, `$HOME` ou `$HOME/` no início é expandido para o diretório home. Lida uma vez, quando o servidor (ou `export`/`import`) inicia. |
+| `SYNC82_DB_PATH` | `~/.sync82/knowledge.db` | Arquivo de vault usado quando nenhum argumento `path`, `path` do `.sync82.json` ou `vaultPath` global se aplica. Um `~`, `~/`, `HOME`, `HOME/`, `$HOME` ou `$HOME/` no início é expandido para o diretório home, e um valor relativo vira absoluto em relação ao diretório onde o processo inicia (cada cliente MCP pode iniciá-lo num lugar diferente, então prefira um caminho absoluto). Lida uma vez, quando o servidor (ou um comando da CLI) inicia. |
 | `XDG_CONFIG_HOME` | `~/.config` | Só `install`/`uninstall` — onde os arquivos de configuração do Claude Desktop (Linux), OpenCode, Zed e Cline são procurados. Usada só quando é um caminho absoluto. |
 | `APPDATA` | `<home>/AppData/Roaming` | Só `install`/`uninstall`, no Windows — onde os arquivos de configuração do Claude Desktop, Zed e Cline são procurados. |
+| `LOCALAPPDATA` | `<home>/AppData/Local` | Só `install`/`uninstall`, no Windows — onde o pacote MSIX do Claude Desktop guarda a configuração dele (`Packages\Claude_<id>\LocalCache\Roaming\Claude`). |
 | `CLINE_DATA_DIR` | `~/.cline` | Só `install`/`uninstall` — o diretório de dados da CLI do Cline. |
+| `CLINE_DIR` | `~/.cline` | Só `install`/`uninstall` — o diretório de configuração da Cline CLI, usado no lugar de `~/.cline` quando é um caminho absoluto (o `CLINE_DATA_DIR` ainda tem precedência). |
 | `CLINE_MCP_SETTINGS_PATH` | — | Só `install`/`uninstall` — um caminho absoluto para o arquivo de configurações MCP do Cline, usado no lugar dos padrões. |
 
 Para defini-la em um cliente, adicione-a à entrada do servidor naquele cliente, ex. numa config no estilo `mcpServers`:
@@ -72,7 +74,7 @@ Todo campo é omitido quando vazio. Exemplo:
 
 **`config.lock`** — toda atualização do `config.json` segura um lock consultivo exclusivo em `~/.sync82/config.lock` (criado com modo `0600`), então vários processos do sync82 (um por cliente MCP, mais a CLI) nunca sobrescrevem a atualização um do outro. Uma atualização que não muda nada não reescreve o arquivo.
 
-**Recuperação de arquivo corrompido** — quando uma atualização encontra um `config.json` vazio, só com espaços ou que não é JSON válido, ela o renomeia para `config.json.corrupt-<timestamp-unix>` (mantendo as permissões) e continua a partir de uma config vazia. Até a próxima atualização, as tools que só leem o arquivo registram o erro de parse no log e pulam as camadas globais. Veja [Solução de Problemas](../troubleshooting/common-issues.md#um-arquivo-configjsoncorrupt--apareceu-em-sync82).
+**Recuperação de arquivo corrompido** — quando uma atualização encontra um `config.json` vazio, só com espaços ou que não é JSON válido, ela o renomeia para `config.json.corrupt-<timestamp-unix>` (mantendo as permissões) e continua a partir de uma config vazia. Um `config.json` que é symlink (um setup de dotfiles) mantém o link: o conteúdo dele é copiado para `config.json.corrupt-<timestamp-unix>` no lugar, e a atualização é gravada através do link. Até a próxima atualização, as tools que só leem o arquivo registram o erro de parse no log e pulam as camadas globais. Veja [Solução de Problemas](../troubleshooting/common-issues.md#um-arquivo-configjsoncorrupt--apareceu-em-sync82).
 
 ---
 
@@ -118,7 +120,7 @@ Quando o próprio projeto veio de `lastProject`, o `lastVaultPath` dele é usado
 
 O sync82 serve MCP **somente via stdio**: rodar `sync82` sem argumentos inicia o servidor. Não há transporte HTTP, SSE ou Streamable HTTP, nem flag ou variável para ativar um.
 
-O servidor suporta as revisões do protocolo MCP de `2024-11-05` a `2026-07-28` e negocia a mais nova que o cliente também suporta. Uma única mensagem JSON-RPC recebida pode ter no máximo **64 MiB**, o suficiente para a maior chamada de tool válida (10 MB de conteúdo) mesmo depois do escape do JSON; uma mensagem maior encerra a conexão.
+O servidor suporta as revisões do protocolo MCP de `2024-11-05` a `2026-07-28` e negocia a mais nova que o cliente também suporta. Uma única mensagem JSON-RPC recebida pode ter no máximo **64 MiB**, o suficiente para a maior chamada de tool válida (10 MB de conteúdo) mesmo depois do escape do JSON; uma mensagem maior não pode ser lida, então não recebe um erro JSON-RPC: o servidor encerra a sessão, e o cliente o vê sair.
 
 ---
 

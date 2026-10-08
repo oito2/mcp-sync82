@@ -15,15 +15,18 @@
 
 package logging
 
-import "testing"
+import (
+	"bytes"
+	"strings"
+	"testing"
+)
 
-// TestNew_ReturnsNonNilLogger is a smoke test verifying that New returns a
-// non-nil logger that can log without panicking.
-func TestNew_ReturnsNonNilLogger(t *testing.T) {
-	logger := New()
-	if logger == nil {
-		t.Fatal("New() returned nil")
+// TestNew_WritesToTheGivenWriter verifies that New's logger writes its
+// records to the writer it was given.
+func TestNew_WritesToTheGivenWriter(t *testing.T) {
+	var buf bytes.Buffer
+	New(&buf).Info("smoke test", "key", "value")
+	if got := buf.String(); !strings.Contains(got, "msg=\"smoke test\"") || !strings.Contains(got, "key=value") {
+		t.Errorf("logged %q, want the record with its attribute", got)
 	}
-	// Must not panic when actually logging.
-	logger.Info("smoke test", "key", "value")
 }

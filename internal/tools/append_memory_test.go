@@ -130,3 +130,14 @@ func TestAppendMemoryTool_RejectsOverwriteStyleStandardKind(t *testing.T) {
 		t.Fatal("expected a validation error when appending to memory")
 	}
 }
+
+// TestAppendMemoryTool_MarkerOnlyContentIsRefused checks that content
+// holding only entry id markers is refused in Validate, like empty
+// content, instead of failing later in Execute.
+func TestAppendMemoryTool_MarkerOnlyContentIsRefused(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	tool := &AppendMemoryTool{Resolver: r, Stores: mgr}
+	if _, err := tool.Validate(mustJSON(t, map[string]any{"project": "acme", "filename": "notes", "content": "<!-- entry:3 -->\n"})); err == nil {
+		t.Error("content made only of an entry marker was accepted")
+	}
+}

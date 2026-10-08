@@ -40,12 +40,25 @@ type Result string
 
 // Result values: ResultOK means the registration was written or removed,
 // ResultSkip means the target was unsupported, not detected or had nothing
-// to remove, and ResultFail means the operation failed.
+// to remove, ResultManual means a config file holds comments or trailing
+// commas, so it was left unchanged and the entry printed to add by hand,
+// and ResultFail means the operation failed.
 const (
-	ResultOK   Result = "ok"
-	ResultSkip Result = "skip"
-	ResultFail Result = "fail"
+	ResultOK     Result = "ok"
+	ResultSkip   Result = "skip"
+	ResultManual Result = "manual"
+	ResultFail   Result = "fail"
 )
+
+// manualEditError reports a config file left unchanged because it holds
+// comments or trailing commas, which writing it back would lose; its
+// message tells the user what to add by hand.
+type manualEditError struct {
+	msg string
+}
+
+// Error returns the message for the user.
+func (e *manualEditError) Error() string { return e.msg }
 
 // InstallTarget installs sync82 into a single target, dispatching by kind,
 // and prints "configured." for a new registration or "updated." when one
@@ -90,6 +103,13 @@ func reportInstalled(stdout io.Writer, name string, updated bool) {
 		return
 	}
 	fmt.Fprintf(stdout, "  ✓  %s — configured.\n", name)
+}
+
+// reportManual prints the line of an install that left a config file for
+// the user to edit.
+func reportManual(stdout io.Writer, name string) Result {
+	fmt.Fprintf(stdout, "  !  %s — manual step needed\n", name)
+	return ResultManual
 }
 
 // reportFailed prints the failure line of an install or uninstall.
@@ -138,16 +158,22 @@ func installCLITarget(ctx context.Context, t Target, binaryPath string, stdout, 
 // installFileTarget merges sync82's entry into every config file of a file
 // target, printing errors to stderr and the status line to stdout. It
 // returns ResultFail when the target has no config location or any file
-// could not be written, otherwise ResultOK.
+// could not be written, ResultManual when the only problem is a file left
+// for the user to edit by hand, otherwise ResultOK.
 func installFileTarget(t Target, env Env, binaryPath string, stdout, stderr io.Writer) Result {
 	paths := t.configPaths(env)
 	if len(paths) == 0 {
 		fmt.Fprintf(stderr, "[%s] no configuration location found\n", t.Name)
 		return reportFailed(stdout, t.Name)
 	}
-	updated, failed := false, false
+	updated, failed, manual := false, false, false
 	for _, path := range paths {
 		existed, err := writeEntry(t.Shape, path, binaryPath)
+		if manualErr := (*manualEditError)(nil); errors.As(err, &manualErr) {
+			fmt.Fprintf(stderr, "[%s] %v\n", t.Name, err)
+			manual = true
+			continue
+		}
 		if err != nil {
 			fmt.Fprintf(stderr, "[%s] %v\n", t.Name, err)
 			failed = true
@@ -158,6 +184,9 @@ func installFileTarget(t Target, env Env, binaryPath string, stdout, stderr io.W
 	if failed {
 		return reportFailed(stdout, t.Name)
 	}
+	if manual {
+		return reportManual(stdout, t.Name)
+	}
 	reportInstalled(stdout, t.Name, updated)
 	return ResultOK
 }
@@ -165,8 +194,9 @@ func installFileTarget(t Target, env Env, binaryPath string, stdout, stderr io.W
 // writeEntry merges sync82's entry into the shape's object in the config
 // file at path, keeping every other key, the file mode and a symlink at
 // path. existed reports whether an entry for sync82 was already there. A
-// file with comments or trailing commas is left unchanged and the error
-// carries the entry to add by hand.
+// file that already holds the wanted entry is left unchanged. Otherwise, a
+// file with comments or trailing commas is left unchanged and the error,
+// a *manualEditError, carries the entry to add by hand.
 func writeEntry(shape Shape, path, binaryPath string) (existed bool, err error) {
 	if shape.Entry == nil {
 		return false, fmt.Errorf("%s: no entry format defined", path)
@@ -183,11 +213,16 @@ func writeEntry(shape Shape, path, binaryPath string) (existed bool, err error) 
 		}
 	}
 	servers := asObject(cfg[shape.Key])
-	_, existed = servers[serverName]
+	current, existed := servers[serverName]
 	entry := shape.Entry(binaryPath)
+	if existed && entryMatches(current, entry) {
+		// Already registered as wanted: the file stays as it is, comments
+		// included.
+		return true, nil
+	}
 	if !strict {
 		snippet, _ := json.MarshalIndent(map[string]any{shape.Key: map[string]any{serverName: entry}}, "", "  ")
-		return existed, fmt.Errorf("%s contains comments or trailing commas, so it was left unchanged. Add this entry to it by hand:\n%s", path, snippet)
+		return existed, &manualEditError{fmt.Sprintf("%s contains comments or trailing commas, so it was left unchanged. Add this entry to it by hand:\n%s", path, snippet)}
 	}
 	servers[serverName] = entry
 	cfg[shape.Key] = servers
@@ -210,18 +245,19 @@ func writeConfig(path string, cfg map[string]any) error {
 }
 
 // fileHasEntry reports whether the config file at path holds an entry
-// for sync82 under the shape's key. A missing or unreadable file holds
-// none.
-func fileHasEntry(path string, shape Shape) bool {
+// for sync82 under the shape's key. A missing file holds none. It returns
+// the error of a file that exists but can't be read or parsed, so the
+// caller reports it instead of taking the file for one without sync82.
+func fileHasEntry(path string, shape Shape) (bool, error) {
 	if !fileExists(path) {
-		return false
+		return false, nil
 	}
 	cfg, _, err := readConfig(path)
 	if err != nil {
-		return false
+		return false, err
 	}
 	_, ok := asObject(cfg[shape.Key])[serverName]
-	return ok
+	return ok, nil
 }
 
 // errUnparsableConfig reports a config file whose content is not a JSON
@@ -243,6 +279,9 @@ func readConfig(path string) (cfg map[string]any, strict bool, err error) {
 	if err != nil {
 		return nil, false, err
 	}
+	// A UTF-8 byte order mark, which some Windows editors write, is not
+	// JSON; it is left out, and a rewrite drops it.
+	raw = bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf"))
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return map[string]any{}, true, nil
 	}
@@ -278,4 +317,22 @@ func asObject(v any) map[string]any {
 		return m
 	}
 	return map[string]any{}
+}
+
+// entryMatches reports whether current, an existing sync82 entry, holds
+// every key of want with an equal JSON value. Keys the user added to the
+// entry, such as env or cwd, are allowed.
+func entryMatches(current any, want map[string]any) bool {
+	cur, ok := current.(map[string]any)
+	if !ok {
+		return false
+	}
+	for k, v := range want {
+		a, errA := json.Marshal(cur[k])
+		b, errB := json.Marshal(v)
+		if errA != nil || errB != nil || !bytes.Equal(a, b) {
+			return false
+		}
+	}
+	return true
 }

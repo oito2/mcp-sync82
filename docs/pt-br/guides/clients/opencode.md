@@ -30,7 +30,7 @@ O OpenCode é detectado quando o comando `opencode` está no `PATH`; caso contr�
 }
 ```
 
-Um arquivo com comentários ou vírgulas sobrando (comum no `opencode.jsonc`) nunca é reescrito: o target falha e imprime a entrada para adicionar à mão.
+Um arquivo com comentários ou vírgulas sobrando (comum no `opencode.jsonc`) nunca é reescrito: o target reporta `manual step needed` e imprime a entrada para adicionar à mão.
 
 Como alternativa, registre-o com a própria CLI do OpenCode, usando o caminho absoluto impresso por `which sync82`:
 

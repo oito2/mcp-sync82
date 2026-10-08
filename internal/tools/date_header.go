@@ -39,30 +39,42 @@ var fencePattern = regexp.MustCompile("(?m)^[ \t]*(```|~~~)")
 // group) of every "## YYYY-MM-DD" header in content outside fenced code
 // blocks, where such a line is example text rather than a header. A block
 // opened by ``` closes only at the next ```, and one opened by ~~~ only at
-// the next ~~~, so the other marker inside a block is just text.
+// the next ~~~, so the other marker inside a block is just text. A line
+// starting with ``` that has another backtick after it, such as
+// "```go test``` runs", is inline code and opens no block. Headers and
+// fences are walked together once, so the cost is linear in content.
 func dateHeaderMatches(content string) [][]int {
 	fences := fencePattern.FindAllStringSubmatchIndex(content, -1)
-	inFence := func(pos int) bool {
-		marker := ""
-		for _, f := range fences {
-			if f[0] > pos {
-				break
-			}
-			if m := content[f[2]:f[3]]; marker == "" {
-				marker = m
-			} else if marker == m {
+	var out [][]int
+	marker, next := "", 0
+	for _, m := range dateHeaderPattern.FindAllStringSubmatchIndex(content, -1) {
+		for ; next < len(fences) && fences[next][0] <= m[0]; next++ {
+			f := fences[next]
+			switch mk := content[f[2]:f[3]]; {
+			case marker == "" && mk == "```" && strings.ContainsRune(lineRest(content, f[3]), '`'):
+				// Not a fence: a backtick fence's info string can't
+				// contain a backtick.
+			case marker == "":
+				marker = mk
+			case marker == mk:
 				marker = ""
 			}
 		}
-		return marker != ""
-	}
-	var out [][]int
-	for _, m := range dateHeaderPattern.FindAllStringSubmatchIndex(content, -1) {
-		if !inFence(m[0]) {
+		if marker == "" {
 			out = append(out, m)
 		}
 	}
 	return out
+}
+
+// lineRest returns content from pos up to, not including, the next line
+// break.
+func lineRest(content string, pos int) string {
+	rest := content[pos:]
+	if i := strings.IndexByte(rest, '\n'); i >= 0 {
+		return rest[:i]
+	}
+	return rest
 }
 
 // extractFirstDate returns the date of the first "## YYYY-MM-DD" header

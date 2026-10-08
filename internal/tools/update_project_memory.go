@@ -97,18 +97,14 @@ type customMemoryItem struct {
 // string (non-nil), which Execute uses to decide whether any content was
 // provided.
 type updateProjectMemoryArgs struct {
-	Project          string             `json:"project,omitempty"`
-	Subproject       string             `json:"subproject,omitempty"`
-	WorkspaceRoot    string             `json:"workspace_root,omitempty"`
-	SearchParentDirs bool               `json:"search_parent_dirs,omitempty"`
-	Path             string             `json:"path,omitempty"`
-	Progress         *string            `json:"progress,omitempty"`
-	Decisions        *string            `json:"decisions,omitempty"`
-	NextSteps        *string            `json:"next_steps,omitempty"`
-	Memory           *string            `json:"memory,omitempty"`
-	Architecture     *string            `json:"architecture,omitempty"`
-	Stack            *string            `json:"stack,omitempty"`
-	Custom           []customMemoryItem `json:"custom,omitempty"`
+	targetArgs
+	Progress     *string            `json:"progress,omitempty"`
+	Decisions    *string            `json:"decisions,omitempty"`
+	NextSteps    *string            `json:"next_steps,omitempty"`
+	Memory       *string            `json:"memory,omitempty"`
+	Architecture *string            `json:"architecture,omitempty"`
+	Stack        *string            `json:"stack,omitempty"`
+	Custom       []customMemoryItem `json:"custom,omitempty"`
 }
 
 // Name returns the MCP tool name, "update_project_memory".
@@ -123,17 +119,15 @@ func (t *UpdateProjectMemoryTool) Description() string { return updateProjectMem
 func (t *UpdateProjectMemoryTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
-			"project":            map[string]any{"type": "string", "description": "Project name. If omitted, auto-discovered from workspace_root or the last used project; the last used project is refused when any field overwrites."},
-			"subproject":         map[string]any{"type": "string", "description": "Subproject name."},
-			"workspace_root":     map[string]any{"type": "string", "description": "Path to your project folder, used to auto-discover the project via .sync82.json."},
-			"search_parent_dirs": map[string]any{"type": "boolean", "description": SearchParentDirsDescription},
-			"progress":           map[string]any{"type": "string", "description": "Appended to progress. Must contain a \"## YYYY-MM-DD\" date header."},
-			"decisions":          map[string]any{"type": "string", "description": "Appended to decisions. Must contain a \"## YYYY-MM-DD\" date header."},
-			"next_steps":         map[string]any{"type": "string", "description": "Overwrites next_steps with the full updated content."},
-			"memory":             map[string]any{"type": "string", "description": "Overwrites memory with the full updated content."},
-			"architecture":       map[string]any{"type": "string", "description": "Overwrites architecture with the full updated content."},
-			"stack":              map[string]any{"type": "string", "description": "Overwrites stack with the full updated content."},
+		"properties": targetProperties(targetSchema{
+			Project: "Project name. If omitted, auto-discovered from workspace_root or the last used project; the last used project is refused when any field overwrites.",
+		}, map[string]any{
+			"progress":     map[string]any{"type": "string", "description": "Appended to progress. Must contain a \"## YYYY-MM-DD\" date header."},
+			"decisions":    map[string]any{"type": "string", "description": "Appended to decisions. Must contain a \"## YYYY-MM-DD\" date header."},
+			"next_steps":   map[string]any{"type": "string", "description": "Overwrites next_steps with the full updated content."},
+			"memory":       map[string]any{"type": "string", "description": "Overwrites memory with the full updated content."},
+			"architecture": map[string]any{"type": "string", "description": "Overwrites architecture with the full updated content."},
+			"stack":        map[string]any{"type": "string", "description": "Overwrites stack with the full updated content."},
 			"custom": map[string]any{
 				"type": "array",
 				"items": map[string]any{
@@ -147,8 +141,7 @@ func (t *UpdateProjectMemoryTool) InputSchema() map[string]any {
 				},
 				"description": "Custom files outside the six standard ones, each with its own write mode.",
 			},
-			"path": map[string]any{"type": "string", "description": PathDescription},
-		},
+		}),
 	}
 }
 
@@ -188,21 +181,31 @@ func (t *UpdateProjectMemoryTool) Validate(raw json.RawMessage) (any, error) {
 		return nil, fmt.Errorf("the content of one call exceeds the %d byte limit in total", maxContentSize)
 	}
 
+	var problems []string
+	validCustom := make([]bool, len(args.Custom))
+	seen := make(map[string]bool, len(args.Custom))
 	for i, item := range args.Custom {
 		kind, err := validateKind(item.Filename)
-		if err != nil {
-			return nil, err
+		switch {
+		case err != nil:
+			problems = append(problems, err.Error())
+		case isStandardKind(kind):
+			problems = append(problems, fmt.Sprintf(`custom item %q: standard files must use their own field (%s), not "custom"`, kind, strings.Join(standardKinds, ", ")))
+		case seen[kind]:
+			// Two items for one file would write it twice in one call,
+			// possibly once as a document and once as a log.
+			problems = append(problems, fmt.Sprintf(`custom item %q is given more than once; give each file once`, kind))
+		case item.Mode != "" && item.Mode != "append" && item.Mode != "write":
+			problems = append(problems, fmt.Sprintf(`custom item %q: "mode" must be "append" or "write"`, item.Filename))
+		default:
+			args.Custom[i].Filename = kind
+			validCustom[i] = true
 		}
-		if isStandardKind(kind) {
-			return nil, fmt.Errorf(`custom item %q: standard files must use their own field (%s), not "custom"`, kind, strings.Join(standardKinds, ", "))
-		}
-		args.Custom[i].Filename = kind
-		if item.Mode != "" && item.Mode != "append" && item.Mode != "write" {
-			return nil, fmt.Errorf(`custom item %q: "mode" must be "append" or "write"`, item.Filename)
+		if err == nil {
+			seen[kind] = true
 		}
 	}
 
-	var problems []string
 	check := func(name string, content *string, isAppend bool) {
 		if content == nil {
 			return
@@ -225,7 +228,9 @@ func (t *UpdateProjectMemoryTool) Validate(raw json.RawMessage) (any, error) {
 	check("architecture", args.Architecture, false)
 	check("stack", args.Stack, false)
 	for i := range args.Custom {
-		check(args.Custom[i].Filename, &args.Custom[i].Content, args.Custom[i].Mode != "write")
+		if validCustom[i] {
+			check(args.Custom[i].Filename, &args.Custom[i].Content, args.Custom[i].Mode != "write")
+		}
 	}
 	if len(problems) > 0 {
 		return nil, fmt.Errorf("invalid arguments (nothing was written):\n- %s", strings.Join(problems, "\n- "))
@@ -258,10 +263,7 @@ func (t *UpdateProjectMemoryTool) Execute(ctx context.Context, rawArgs any) (Too
 		return ToolResult{Text: "Nothing to update: no content fields were provided (progress, decisions, next_steps, memory, architecture, stack, custom)."}, nil
 	}
 
-	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, ContextArgs{
-		Project: args.Project, Subproject: args.Subproject, Path: args.Path,
-		WorkspaceRoot: args.WorkspaceRoot, SearchParentDirs: args.SearchParentDirs,
-	})
+	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, args.contextArgs())
 	if ready != nil {
 		return *ready, nil
 	}

@@ -274,6 +274,13 @@ Pedidos que você pode digitar para o seu agente de IA, em linguagem natural, pa
   > "A memória deste projeto está em dia? Tem algo que parece desatualizado ou que nunca foi preenchido?"
 - **Resultado esperado:** `check_project_health` (com `stale_days` se você deu um número de dias). A lista `Warnings:` aponta arquivos de estado atual mais antigos que as entradas mais novas de progresso/decisões, arquivos ainda vazios ou com o template em branco, entradas de log sem data e logs grandes o bastante para arquivar. O agente pode então oferecer atualizar cada arquivo, por exemplo reescrevendo `architecture` a partir do que as decisões recentes dizem.
 
+### Verificar todos os projetos de uma vez
+
+- **Parâmetros esperados:** nenhum; opcionalmente outro vault.
+- **Exemplo:**
+  > "Verifique a saúde da memória de todos os projetos do meu vault. Quais precisam de atenção?"
+- **Resultado esperado:** `check_project_health` com `all_projects: true`: uma linha `HEALTHY`, `UNHEALTHY` ou `WARNINGS` por projeto e subprojeto, uma contagem de cada, depois os arquivos ausentes e os avisos dos que precisam de atenção. É um resultado de erro quando algum projeto está não-saudável.
+
 ### Confirmar a conexão depois de instalar
 
 - **Parâmetros esperados:** nenhum.

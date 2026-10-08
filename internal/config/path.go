@@ -21,47 +21,52 @@ import (
 	"strings"
 )
 
-// dbPathEnvVar names the environment variable overriding the default vault
+// DBPathEnvVar names the environment variable overriding the default vault
 // path; defaultVaultDir and defaultVaultFile locate the default vault under
 // the home directory.
 const (
-	dbPathEnvVar     = "SYNC82_DB_PATH"
+	DBPathEnvVar     = "SYNC82_DB_PATH"
 	defaultVaultDir  = ".sync82"
 	defaultVaultFile = "knowledge.db"
 )
 
 // ResolvePath expands a leading HOME, $HOME, or ~ token in raw (alone or
-// followed by a slash) to the user's home directory. Any other value, or
-// any value when the home directory cannot be determined, is returned
-// unchanged.
+// followed by a slash, or on Windows also by a backslash) to the user's
+// home directory. Any other value, or any value when the home directory
+// cannot be determined, is returned unchanged.
 func ResolvePath(raw string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return raw
 	}
 
-	switch {
-	case raw == "HOME" || raw == "$HOME" || raw == "~":
-		return home
-	case strings.HasPrefix(raw, "HOME/"):
-		return filepath.Join(home, strings.TrimPrefix(raw, "HOME/"))
-	case strings.HasPrefix(raw, "$HOME/"):
-		return filepath.Join(home, strings.TrimPrefix(raw, "$HOME/"))
-	case strings.HasPrefix(raw, "~/"):
-		return filepath.Join(home, strings.TrimPrefix(raw, "~/"))
-	default:
-		return raw
+	for _, token := range []string{"HOME", "$HOME", "~"} {
+		if raw == token {
+			return home
+		}
+		rest, ok := strings.CutPrefix(raw, token)
+		if ok && rest != "" && (rest[0] == '/' || rest[0] == filepath.Separator) {
+			return filepath.Join(home, rest[1:])
+		}
 	}
+	return raw
 }
 
 // DefaultVaultPath returns the vault path used when no tool argument,
 // local config, or global config supplies one: the SYNC82_DB_PATH
-// environment variable (with ResolvePath applied) if set, otherwise
+// environment variable (with ResolvePath applied, then made absolute
+// against the current directory) if set, otherwise
 // ~/.sync82/knowledge.db. When the home directory is unknown, the default
 // is relative to the current directory.
 func DefaultVaultPath() string {
-	if env := os.Getenv(dbPathEnvVar); env != "" {
-		return ResolvePath(env)
+	if env := os.Getenv(DBPathEnvVar); env != "" {
+		// Made absolute once, so every later use names the same file
+		// whatever the working directory is then.
+		p := ResolvePath(env)
+		if abs, err := filepath.Abs(p); err == nil {
+			p = abs
+		}
+		return p
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {

@@ -89,40 +89,47 @@ func (t *ListProjectsTool) Execute(ctx context.Context, rawArgs any) (ToolResult
 		if args.Format == "json" {
 			return jsonResult(projectList{Vault: dbPath, Projects: []projectEntry{}}, false)
 		}
-		return ToolResult{Text: fmt.Sprintf("No projects found: no vault exists at %s yet. Use create_project to add one.", dbPath)}, nil
+		return ToolResult{Text: fmt.Sprintf("No projects found: no vault exists at %s yet. Use create_project to add one.", dbPath),
+			Structured: projectList{Vault: dbPath, Projects: []projectEntry{}}}, nil
 	}
 	if err != nil {
 		return ToolResult{}, err
 	}
 
-	projects, err := s.ListTopLevelProjects(ctx)
+	tree, err := s.ProjectTree(ctx)
 	if err != nil {
 		return ToolResult{}, err
 	}
-	if len(projects) == 0 && args.Format != "json" {
-		return ToolResult{Text: "No projects found. Use create_project to add one."}, nil
+	if len(tree) == 0 && args.Format != "json" {
+		return ToolResult{Text: "No projects found. Use create_project to add one.", Structured: projectList{Vault: dbPath, Projects: []projectEntry{}}}, nil
 	}
 
 	list := projectList{Vault: dbPath, Projects: []projectEntry{}}
 	var lines []string
-	for _, p := range projects {
-		entry := projectEntry{Name: p.Name, Subprojects: []string{}}
+	for _, p := range tree {
 		lines = append(lines, "- "+p.Name)
-		subs, err := s.ListSubprojects(ctx, p.ID)
-		if err != nil {
-			return ToolResult{}, err
+		for _, sub := range p.Subprojects {
+			lines = append(lines, "  └─ "+sub)
 		}
-		for _, sub := range subs {
-			lines = append(lines, "  └─ "+sub.Name)
-			entry.Subprojects = append(entry.Subprojects, sub.Name)
-		}
-		list.Projects = append(list.Projects, entry)
+		list.Projects = append(list.Projects, projectEntry{Name: p.Name, Subprojects: p.Subprojects})
 	}
 
 	if args.Format == "json" {
 		return jsonResult(list, false)
 	}
-	return ToolResult{Text: "Projects in vault:\n" + strings.Join(lines, "\n")}, nil
+	return ToolResult{Text: "Projects in vault:\n" + strings.Join(lines, "\n"), Structured: list}, nil
+}
+
+// OutputSchema returns the JSON Schema of projectList, the structured
+// content of every list_projects result.
+func (t *ListProjectsTool) OutputSchema() map[string]any {
+	return schemaObject(map[string]any{
+		"vault": schemaString(),
+		"projects": schemaArray(schemaObject(map[string]any{
+			"name":        schemaString(),
+			"subprojects": schemaArray(schemaString()),
+		}, "name", "subprojects")),
+	}, "vault", "projects")
 }
 
 // projectList is list_projects' JSON result: the vault path and its

@@ -22,6 +22,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 
 	"github.com/oito2/mcp-sync82/internal/config"
@@ -65,21 +66,16 @@ const usageExitCode = 2
 // usageError writes msg to stderr as "Error: ..." followed by a pointer to
 // --help, and returns usageExitCode.
 func usageError(stderr io.Writer, msg string) int {
-	fmt.Fprintf(stderr, "Error: %s\nRun 'sync82 --help' for usage.\n", msg)
+	fmt.Fprintf(stderr, "Error: %s\nRun 'sync82 config --help' for usage.\n", msg)
 	return usageExitCode
 }
 
 // runSetVault implements "config set-vault <path>": it resolves args[0] to an
-// absolute path and stores it as the global vault path. It prints the stored
-// path to stdout and returns 0, or prints usage or the failure to stderr and
-// returns 1 when the path is missing or empty, cannot be resolved, or cannot
-// be saved.
+// absolute path and stores it as the global vault path. args holds exactly
+// one non-empty path, which RunConfig checks. It prints the stored path to
+// stdout and returns 0, or prints the failure to stderr and returns 1 when
+// the path cannot be resolved or saved.
 func runSetVault(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 || args[0] == "" {
-		fmt.Fprintln(stderr, "Usage: sync82 config set-vault <path>")
-		return 1
-	}
-
 	// Stored absolute: every MCP client starts the server from its own
 	// working directory, so a relative path would point each one at a
 	// different file.
@@ -100,7 +96,8 @@ func runSetVault(args []string, stdout, stderr io.Writer) int {
 }
 
 // runGetVault implements "config get-vault": it prints the configured global
-// vault path, or a notice that the default is used, to stdout and returns 0.
+// vault path or, when none is set, the vault used instead — the
+// SYNC82_DB_PATH variable's or the default path — to stdout and returns 0.
 // It prints to stderr and returns 1 when the configuration cannot be read.
 func runGetVault(stdout, stderr io.Writer) int {
 	cfg, err := config.ReadGlobalConfig()
@@ -111,7 +108,11 @@ func runGetVault(stdout, stderr io.Writer) int {
 	if cfg.VaultPath != "" {
 		fmt.Fprintf(stdout, "Global vault path: %s\n", cfg.VaultPath)
 	} else {
-		fmt.Fprintln(stdout, "No global vault configured. Using default.")
+		source := "the default"
+		if os.Getenv(config.DBPathEnvVar) != "" {
+			source = config.DBPathEnvVar
+		}
+		fmt.Fprintf(stdout, "No global vault configured. Using %s: %s\n", source, config.DefaultVaultPath())
 	}
 	return 0
 }

@@ -24,13 +24,14 @@ import (
 	"strings"
 
 	"github.com/oito2/mcp-sync82/internal/installer"
+	"github.com/oito2/mcp-sync82/internal/prompt"
 )
 
 // RunInstall implements "sync82 install [target]". With no target given, it
 // lists the detected targets and asks for confirmation before installing
 // into all of them. It returns the process exit code: 0 on success or when
-// the user declines, 1 on an unknown target, a closed stdin at the prompt or
-// any failed installation, 2 on a usage error (a flag or more than one
+// the user declines, 1 on an unknown target, a closed stdin at the prompt,
+// any failed installation or one left for a manual edit, 2 on a usage error (a flag or more than one
 // target).
 //
 // binaryPath is the absolute path every client is configured to launch.
@@ -44,14 +45,13 @@ func RunInstall(ctx context.Context, args []string, stdin io.Reader, stdout, std
 // runInstall is RunInstall with the host environment env passed in, so tests
 // can substitute a fake one.
 func runInstall(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, env installer.Env, binaryPath string, targets []installer.Target) int {
-	fmt.Fprintf(stdout, "Registering %s — run \"sync82 install\" again after moving the binary.\n", binaryPath)
-
 	if len(args) > 1 {
-		return usageError(stderr, fmt.Errorf("install takes one target at a time (got %d arguments)", len(args)))
+		return commandUsageError(stderr, "install", fmt.Errorf("install takes one target at a time (got %d arguments)", len(args)))
 	}
 	if len(args) == 1 && strings.HasPrefix(args[0], "-") {
-		return usageError(stderr, fmt.Errorf("unknown install flag %q", args[0]))
+		return commandUsageError(stderr, "install", fmt.Errorf("unknown install flag %q", args[0]))
 	}
+	fmt.Fprintf(stdout, "Registering %s — run \"sync82 install\" again after moving the binary.\n", binaryPath)
 	targetName := ""
 	if len(args) > 0 {
 		targetName = strings.ToLower(strings.TrimSpace(args[0]))
@@ -63,35 +63,38 @@ func runInstall(ctx context.Context, args []string, stdin io.Reader, stdout, std
 			fmt.Fprintf(stderr, "Unknown target: %q\nAvailable: %s\n", targetName, strings.Join(installer.TargetNamesIn(targets), ", "))
 			return 1
 		}
-		if installer.InstallTarget(ctx, target, env, binaryPath, stdout, stderr) == installer.ResultFail {
+		switch installer.InstallTarget(ctx, target, env, binaryPath, stdout, stderr) {
+		case installer.ResultFail, installer.ResultManual:
 			return 1
 		}
 		return 0
 	}
 
 	detected := installer.DetectedIn(targets, env)
-	confirmed, err := confirmDetected(bufio.NewReader(stdin), stdout, targets, detected, "Install sync82 into all %d detected client(s)? [y/N] ")
+	confirmed, err := confirmDetected(ctx, bufio.NewReader(stdin), stdout, targets, detected, "Install sync82 into all %d detected client(s)? [y/N] ")
 	if err != nil {
-		fmt.Fprintf(stderr, "Error: %v; run \"sync82 install <target>\" to install without asking.\n", err)
+		reportPromptError(stderr, err, "run \"sync82 install <target>\" to install without asking")
 		return 1
 	}
 	if !confirmed {
 		return 0
 	}
 
-	var ok, skipped, failed int
+	var ok, skipped, manual, failed int
 	for _, target := range detected {
 		switch installer.InstallTarget(ctx, target, env, binaryPath, stdout, stderr) {
 		case installer.ResultOK:
 			ok++
 		case installer.ResultSkip:
 			skipped++
+		case installer.ResultManual:
+			manual++
 		default:
 			failed++
 		}
 	}
-	fmt.Fprintf(stdout, "\nDone. %d installed, %d skipped, %d failed.\n", ok, skipped, failed)
-	if failed > 0 {
+	fmt.Fprintf(stdout, "\nDone. %d installed, %d skipped, %d need a manual step, %d failed.\n", ok, skipped, manual, failed)
+	if failed > 0 || manual > 0 {
 		return 1
 	}
 	return 0
@@ -101,7 +104,7 @@ func runInstall(ctx context.Context, args []string, stdin io.Reader, stdout, std
 // with their count, reporting whether the answer read from in was yes. A
 // refusal prints "Aborted.". With no target detected it prints the names of
 // all targets instead and returns false without asking.
-func confirmDetected(in *bufio.Reader, stdout io.Writer, targets, detected []installer.Target, prompt string) (bool, error) {
+func confirmDetected(ctx context.Context, in *bufio.Reader, stdout io.Writer, targets, detected []installer.Target, question string) (bool, error) {
 	if len(detected) == 0 {
 		fmt.Fprintf(stdout, "No supported MCP clients detected. Supported targets: %s\n", strings.Join(installer.TargetNamesIn(targets), ", "))
 		return false, nil
@@ -111,7 +114,7 @@ func confirmDetected(in *bufio.Reader, stdout io.Writer, targets, detected []ins
 		fmt.Fprintf(stdout, "  - %s\n", name)
 	}
 	fmt.Fprintln(stdout)
-	yes, err := askYes(in, stdout, fmt.Sprintf(prompt, len(detected)))
+	yes, err := prompt.AskYes(ctx, in, stdout, fmt.Sprintf(question, len(detected)))
 	if err != nil {
 		return false, err
 	}
@@ -122,24 +125,13 @@ func confirmDetected(in *bufio.Reader, stdout io.Writer, targets, detected []ins
 	return true, nil
 }
 
-// errNoAnswer is returned by askYes when stdin ends before any answer is
-// read, as with a closed or redirected-from-/dev/null stdin.
-var errNoAnswer = errors.New("no answer to the confirmation prompt: stdin is closed")
-
-// askYes prints prompt and reports whether the next line read from in is
-// "y" or "yes", ignoring case and surrounding spaces. It returns
-// errNoAnswer when in ends before a non-empty answer, and the read error
-// for any other read failure.
-func askYes(in *bufio.Reader, stdout io.Writer, prompt string) (bool, error) {
-	fmt.Fprint(stdout, prompt)
-	line, err := in.ReadString('\n')
-	answer := strings.ToLower(strings.TrimSpace(line))
-	if err != nil && answer == "" {
-		fmt.Fprintln(stdout)
-		if errors.Is(err, io.EOF) {
-			return false, errNoAnswer
-		}
-		return false, err
+// reportPromptError prints the error of a confirmation prompt to stderr:
+// "Interrupted; nothing was changed." when the command was interrupted
+// (Ctrl-C) while it waited, otherwise the error followed by hint.
+func reportPromptError(stderr io.Writer, err error, hint string) {
+	if errors.Is(err, context.Canceled) {
+		fmt.Fprintln(stderr, "Interrupted; nothing was changed.")
+		return
 	}
-	return answer == "y" || answer == "yes", nil
+	fmt.Fprintf(stderr, "Error: %v; %s.\n", err, hint)
 }

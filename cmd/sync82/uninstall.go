@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/oito2/mcp-sync82/internal/installer"
+	"github.com/oito2/mcp-sync82/internal/prompt"
 )
 
 // uninstallUsage is the help text printed for "sync82 uninstall --help" and for invalid
@@ -69,7 +70,7 @@ func runUninstall(ctx context.Context, args []string, stdin io.Reader, stdout, s
 		return 0
 	}
 	if err != nil {
-		return usageError(stderr, err)
+		return commandUsageError(stderr, "uninstall", err)
 	}
 
 	in := bufio.NewReader(stdin)
@@ -80,36 +81,43 @@ func runUninstall(ctx context.Context, args []string, stdin io.Reader, stdout, s
 			fmt.Fprintf(stderr, "Unknown target: %q\nAvailable: %s\n", targetName, strings.Join(installer.TargetNamesIn(targets), ", "))
 			return 1
 		}
-		if installer.UninstallTarget(ctx, target, env, stdout, stderr) == installer.ResultFail {
+		switch installer.UninstallTarget(ctx, target, env, stdout, stderr) {
+		case installer.ResultFail, installer.ResultManual:
 			failed++
 		}
 	} else {
-		detected := installer.DetectedIn(targets, env)
-		confirmed, err := confirmDetected(in, stdout, targets, detected, "Remove sync82 from all %d detected client(s)? [y/N] ")
+		detected := installer.UninstallCandidatesIn(targets, env)
+		confirmed, err := confirmDetected(ctx, in, stdout, targets, detected, "Remove sync82 from all %d detected client(s)? [y/N] ")
 		if err != nil {
-			fmt.Fprintf(stderr, "Error: %v; run \"sync82 uninstall <target>\" to remove without asking.\n", err)
+			reportPromptError(stderr, err, "run \"sync82 uninstall <target>\" to remove without asking")
 			return 1
 		}
 		if !confirmed && len(detected) > 0 {
+			if purge {
+				fmt.Fprintln(stdout, "--purge skipped too: nothing was removed or deleted.")
+			}
 			return 0
 		}
 		if confirmed {
-			var removed, skipped int
+			var removed, skipped, manual int
 			for _, target := range detected {
 				switch installer.UninstallTarget(ctx, target, env, stdout, stderr) {
 				case installer.ResultOK:
 					removed++
 				case installer.ResultSkip:
 					skipped++
+				case installer.ResultManual:
+					manual++
 				default:
 					failed++
 				}
 			}
-			fmt.Fprintf(stdout, "\nDone. %d removed, %d skipped, %d failed.\n", removed, skipped, failed)
+			fmt.Fprintf(stdout, "\nDone. %d removed, %d skipped, %d need a manual step, %d failed.\n", removed, skipped, manual, failed)
+			failed += manual
 		}
 	}
 
-	if purge && !runPurge(in, stdout, stderr, env, cwd) {
+	if purge && !runPurge(ctx, in, stdout, stderr, env, cwd) {
 		failed++
 	}
 	if failed > 0 {
@@ -148,7 +156,7 @@ func parseUninstallArgs(args []string) (target string, purge, help bool, err err
 // configured elsewhere (which is left untouched), and deletes the listed
 // files after a "Delete these files? [y/N]" confirmation read from in. It
 // returns false when a file could not be deleted.
-func runPurge(in *bufio.Reader, stdout, stderr io.Writer, env installer.Env, cwd string) bool {
+func runPurge(ctx context.Context, in *bufio.Reader, stdout, stderr io.Writer, env installer.Env, cwd string) bool {
 	files := installer.PurgeCandidates(env.HomeDir)
 	vaults := installer.ConfiguredVaults(env, cwd)
 
@@ -168,9 +176,9 @@ func runPurge(in *bufio.Reader, stdout, stderr io.Writer, env installer.Env, cwd
 	for _, f := range files {
 		fmt.Fprintf(stdout, "  - %s\n", f)
 	}
-	yes, err := askYes(in, stdout, "Delete these files? [y/N] ")
+	yes, err := prompt.AskYes(ctx, in, stdout, "Delete these files? [y/N] ")
 	if err != nil {
-		fmt.Fprintf(stderr, "Error: %v; nothing was deleted.\n", err)
+		reportPromptError(stderr, err, "nothing was deleted")
 		return false
 	}
 	if !yes {

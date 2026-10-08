@@ -19,6 +19,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/oito2/mcp-sync82/internal/fsutil"
 )
 
 // maxAnalyzedFileSize caps how large a single marker file (Cargo.toml,
@@ -47,7 +49,9 @@ func readMarkerFile(root, name string) (string, bool) {
 	if err != nil || !info.Mode().IsRegular() || info.Size() > maxAnalyzedFileSize {
 		return "", false
 	}
-	f, err := r.Open(name)
+	// The file is checked again once open, since another file (a FIFO)
+	// may have replaced it after the Stat.
+	f, err := openMarker(r, name)
 	if err != nil {
 		return "", false
 	}
@@ -60,7 +64,16 @@ func readMarkerFile(root, name string) (string, bool) {
 	if err != nil || len(data) > maxAnalyzedFileSize {
 		return "", false
 	}
-	return string(data), true
+	// A UTF-8 byte order mark, which some Windows editors write, is not
+	// content: it would break JSON parsing and README headings.
+	return strings.TrimPrefix(string(data), "\ufeff"), true
+}
+
+// openMarker opens name in r for reading without blocking, so a FIFO with
+// no writer is opened at once instead of waiting for one. It returns the
+// open error.
+func openMarker(r *os.Root, name string) (*os.File, error) {
+	return r.OpenFile(name, os.O_RDONLY|fsutil.OpenNonblock, 0)
 }
 
 // appendUnique appends value to *slice unless it's already present —

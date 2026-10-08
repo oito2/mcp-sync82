@@ -135,15 +135,15 @@ func TestUninstallTarget_File_MissingFileOrKey(t *testing.T) {
 }
 
 // TestUninstallTarget_File_LeavesJSONCUnchanged checks that a config with
-// comments holding sync82 is not rewritten and the target fails with
-// instructions.
+// comments holding sync82 is not rewritten and the target needs a manual
+// step, with instructions.
 func TestUninstallTarget_File_LeavesJSONCUnchanged(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	original := "{\n  // keep me\n  \"mcpServers\": {\"sync82\": {\"command\": \"/opt/sync82\"}}\n}\n"
 	writeFile(t, path, original, 0o644)
 	got, _, errOut := uninstall(t, fileTargetAt(path), testEnv("linux", t.TempDir(), nil))
-	if got != ResultFail || !strings.Contains(errOut, `Remove the "sync82" entry`) {
-		t.Fatalf("UninstallTarget() = %q, stderr %q; want a failure with instructions", got, errOut)
+	if got != ResultManual || !strings.Contains(errOut, `Remove the "sync82" entry`) {
+		t.Fatalf("UninstallTarget() = %q, stderr %q; want a manual step with instructions", got, errOut)
 	}
 	if data, _ := os.ReadFile(path); string(data) != original {
 		t.Fatalf("config = %q, want it untouched", data)

@@ -36,13 +36,9 @@ type ExportMemoryTool struct {
 // exportMemoryArgs holds the decoded arguments of the export_memory tool;
 // its JSON tags match the property names declared in InputSchema.
 type exportMemoryArgs struct {
-	Project          string `json:"project,omitempty"`
-	Subproject       string `json:"subproject,omitempty"`
-	OutputDir        string `json:"output_dir"`
-	Overwrite        bool   `json:"overwrite,omitempty"`
-	Path             string `json:"path,omitempty"`
-	WorkspaceRoot    string `json:"workspace_root,omitempty"`
-	SearchParentDirs bool   `json:"search_parent_dirs,omitempty"`
+	targetArgs
+	OutputDir string `json:"output_dir"`
+	Overwrite bool   `json:"overwrite,omitempty"`
 }
 
 // Name returns the MCP tool name, "export_memory".
@@ -60,15 +56,10 @@ func (t *ExportMemoryTool) Description() string {
 func (t *ExportMemoryTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
-			"project":            map[string]any{"type": "string", "description": "Project name. If omitted, auto-discovered from workspace_root or the last used project."},
-			"subproject":         map[string]any{"type": "string", "description": "Subproject name."},
-			"output_dir":         map[string]any{"type": "string", "description": "Absolute directory (or starting with ~/ or HOME/) to write the exported .md files into. Required. Not confined to the vault or workspace. Created if missing."},
-			"overwrite":          map[string]any{"type": "boolean", "description": "Replace .md files that already exist in output_dir. Without it, the export is refused when any destination file exists, and nothing is written."},
-			"workspace_root":     map[string]any{"type": "string", "description": "Path to your project folder, used to auto-discover the project via .sync82.json."},
-			"search_parent_dirs": map[string]any{"type": "boolean", "description": SearchParentDirsDescription},
-			"path":               map[string]any{"type": "string", "description": PathDescription},
-		},
+		"properties": targetProperties(targetSchema{}, map[string]any{
+			"output_dir": map[string]any{"type": "string", "description": "Absolute directory (or starting with ~/ or HOME/) to write the exported .md files into. Required. Not confined to the vault or workspace. Created if missing."},
+			"overwrite":  map[string]any{"type": "boolean", "description": "Replace .md files that already exist in output_dir. Without it, the export is refused when any destination file exists, and nothing is written."},
+		}),
 		"required": []string{"output_dir"},
 	}
 }
@@ -95,10 +86,7 @@ func (t *ExportMemoryTool) Validate(raw json.RawMessage) (any, error) {
 // other failures are returned as errors.
 func (t *ExportMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(exportMemoryArgs)
-	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, ContextArgs{
-		Project: args.Project, Subproject: args.Subproject, Path: args.Path,
-		WorkspaceRoot: args.WorkspaceRoot, SearchParentDirs: args.SearchParentDirs,
-	})
+	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, args.contextArgs())
 	if ready != nil {
 		return *ready, nil
 	}
@@ -106,17 +94,22 @@ func (t *ExportMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult
 		return ToolResult{}, err
 	}
 
-	count, err := exportProjectCore(ctx, s, rctx.Project, rctx.Subproject, args.OutputDir, args.Overwrite)
+	if args.Overwrite {
+		if refused := refuseRememberedTarget(rctx, "overwrite files with the export of"); refused != nil {
+			return *refused, nil
+		}
+	}
+
+	report, err := exportProjectCore(ctx, s, rctx.Project, rctx.Subproject, args.OutputDir, args.Overwrite)
 	if errors.Is(err, errExportWouldOverwrite) {
 		return ToolResult{Text: fmt.Sprintf("Nothing exported for %s%s: %v", rctx.Label(), ContextNote(rctx), err), IsError: true}, nil
 	}
 	if err != nil {
 		return ToolResult{}, wrapNotFound(err, rctx.Label())
 	}
-	if count == 0 {
-		return ToolResult{Text: fmt.Sprintf("Nothing to export for %s%s: no files found.", rctx.Label(), ContextNote(rctx))}, nil
+	text := fmt.Sprintf("Exported %d %s from %s%s to %s", report.Written, pluralize(report.Written, "file", "files"), rctx.Label(), ContextNote(rctx), args.OutputDir)
+	if report.Written == 0 {
+		text = fmt.Sprintf("Nothing to export for %s%s: no files found.", rctx.Label(), ContextNote(rctx))
 	}
-
-	plural := pluralize(count, "file", "files")
-	return ToolResult{Text: fmt.Sprintf("Exported %d %s from %s%s to %s", count, plural, rctx.Label(), ContextNote(rctx), args.OutputDir)}, nil
+	return ToolResult{Text: text + FormatExportNotes(report)}, nil
 }

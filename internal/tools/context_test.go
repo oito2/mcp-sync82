@@ -184,8 +184,10 @@ func TestResolve_ExplicitPathWinsOverLocalConfigPath(t *testing.T) {
 func TestResolve_ExplicitPathWinsOverGlobalConfigVaultPath(t *testing.T) {
 	r := testResolver(t)
 
-	if err := config.WriteGlobalConfig(config.GlobalConfig{LastProject: "oito2", VaultPath: "HOME/team-vault.db"}); err != nil {
-		t.Fatalf("WriteGlobalConfig: %v", err)
+	if err := config.UpdateGlobalConfig(func(c *config.GlobalConfig) {
+		*c = config.GlobalConfig{LastProject: "oito2", VaultPath: "HOME/team-vault.db"}
+	}); err != nil {
+		t.Fatalf("UpdateGlobalConfig: %v", err)
 	}
 	explicitPath := filepath.Join(t.TempDir(), "explicit-override.db")
 
@@ -205,8 +207,8 @@ func TestResolve_ExplicitPathWinsOverGlobalConfigVaultPath(t *testing.T) {
 func TestResolve_GlobalConfigFallback(t *testing.T) {
 	r := testResolver(t)
 
-	if err := config.WriteGlobalConfig(config.GlobalConfig{LastProject: "oito2", LastSubproject: "perci"}); err != nil {
-		t.Fatalf("WriteGlobalConfig: %v", err)
+	if err := config.UpdateGlobalConfig(func(c *config.GlobalConfig) { *c = config.GlobalConfig{LastProject: "oito2", LastSubproject: "perci"} }); err != nil {
+		t.Fatalf("UpdateGlobalConfig: %v", err)
 	}
 
 	ctx := r.Resolve(ContextArgs{})
@@ -239,8 +241,8 @@ func TestResolve_TierPrecedence(t *testing.T) {
 	// Tier 1 must win even when tiers 2 and 3 would also resolve.
 	r := testResolver(t)
 
-	if err := config.WriteGlobalConfig(config.GlobalConfig{LastProject: "from-global"}); err != nil {
-		t.Fatalf("WriteGlobalConfig: %v", err)
+	if err := config.UpdateGlobalConfig(func(c *config.GlobalConfig) { *c = config.GlobalConfig{LastProject: "from-global"} }); err != nil {
+		t.Fatalf("UpdateGlobalConfig: %v", err)
 	}
 	workspace := t.TempDir()
 	if err := config.WriteLocalConfig(workspace, config.LocalConfig{Project: "from-local"}); err != nil {
@@ -313,7 +315,7 @@ func TestRememberIfExists_IgnoresMissingProject(t *testing.T) {
 	r := testResolver(t)
 	vault := filepath.Join(t.TempDir(), "vault.db")
 	s := openTestStore(t, vault, "acme", "")
-	if err := config.WriteGlobalConfig(config.GlobalConfig{LastProject: "acme", LastVaultPath: vault}); err != nil {
+	if err := config.UpdateGlobalConfig(func(c *config.GlobalConfig) { *c = config.GlobalConfig{LastProject: "acme", LastVaultPath: vault} }); err != nil {
 		t.Fatal(err)
 	}
 
@@ -336,7 +338,7 @@ func TestRememberIfExists_IgnoresMissingProject(t *testing.T) {
 func TestResolve_GlobalVaultPathAppliesToEveryTier(t *testing.T) {
 	r := testResolver(t)
 	home, _ := os.UserHomeDir()
-	if err := config.WriteGlobalConfig(config.GlobalConfig{VaultPath: "HOME/team-vault.db"}); err != nil {
+	if err := config.UpdateGlobalConfig(func(c *config.GlobalConfig) { *c = config.GlobalConfig{VaultPath: "HOME/team-vault.db"} }); err != nil {
 		t.Fatal(err)
 	}
 	want := filepath.Join(home, "team-vault.db")
@@ -362,7 +364,7 @@ func TestResolve_GlobalVaultPathAppliesToEveryTier(t *testing.T) {
 // that NeedsInput() reports the .sync82.json problem.
 func TestResolve_WorkspaceRootWithoutUsableConfigDoesNotFallBack(t *testing.T) {
 	r := testResolver(t)
-	if err := config.WriteGlobalConfig(config.GlobalConfig{LastProject: "projectA"}); err != nil {
+	if err := config.UpdateGlobalConfig(func(c *config.GlobalConfig) { *c = config.GlobalConfig{LastProject: "projectA"} }); err != nil {
 		t.Fatal(err)
 	}
 
@@ -405,7 +407,7 @@ func TestResolve_ExplicitSubprojectKeptInTiers2And3(t *testing.T) {
 		t.Errorf("tier 2: got %+v, want acme/api", ctx)
 	}
 
-	if err := config.WriteGlobalConfig(config.GlobalConfig{LastProject: "acme", LastSubproject: "web"}); err != nil {
+	if err := config.UpdateGlobalConfig(func(c *config.GlobalConfig) { *c = config.GlobalConfig{LastProject: "acme", LastSubproject: "web"} }); err != nil {
 		t.Fatal(err)
 	}
 	if ctx := r.Resolve(ContextArgs{Subproject: "api"}); ctx.Project != "acme" || ctx.Subproject != "api" {
@@ -447,5 +449,57 @@ func TestContextNote(t *testing.T) {
 				t.Errorf("ContextNote(%+v) = %q, want %q", tt.ctx, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestResolve_LastProjectOnlyInItsOwnVault verifies that the last-used
+// project is reused with an explicit path only when that path is the vault
+// it was remembered in.
+func TestResolve_LastProjectOnlyInItsOwnVault(t *testing.T) {
+	r := testResolver(t)
+	remembered := filepath.Join(t.TempDir(), "a.db")
+	if err := config.UpdateLastProject("acme", "", remembered); err != nil {
+		t.Fatal(err)
+	}
+
+	same := r.Resolve(ContextArgs{Path: remembered})
+	if !same.OK || same.Project != "acme" || same.DBPath != remembered {
+		t.Errorf("same vault: %+v, want acme in %s", same, remembered)
+	}
+
+	other := filepath.Join(t.TempDir(), "b.db")
+	got := r.Resolve(ContextArgs{Path: other})
+	if got.OK || !strings.Contains(got.Problem, "another vault") {
+		t.Errorf("other vault: %+v, want an unresolved context naming the other vault", got)
+	}
+
+	project, _, dbPath, _, err := r.resolveInitTarget(ContextArgs{Path: other})
+	if err != nil || project != "" || dbPath != other {
+		t.Errorf("resolveInitTarget(other vault) = %q, %q, %v; want no project in %s", project, dbPath, err, other)
+	}
+	project, _, dbPath, _, _ = r.resolveInitTarget(ContextArgs{Path: remembered})
+	if project != "acme" || dbPath != remembered {
+		t.Errorf("resolveInitTarget(same vault) = %q, %q; want acme in %s", project, dbPath, remembered)
+	}
+}
+
+// TestResolve_BlankWorkspaceRootIsRefused checks that a workspace_root of
+// only spaces is refused instead of being read as absent, which would fall
+// back to the last-used project, in Resolve, search_memory and
+// init_project_memory.
+func TestResolve_BlankWorkspaceRootIsRefused(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	if err := config.UpdateLastProject("other", "", r.DefaultDBPath); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Resolve(ContextArgs{WorkspaceRoot: "   "}); got.OK || !strings.Contains(got.Problem, "is blank") {
+		t.Errorf("Resolve = %+v, want a blank workspace_root refused", got)
+	}
+	res := runTool(t, &SearchMemoryTool{Resolver: r, Stores: mgr}, map[string]any{"query": "x", "workspace_root": "   "})
+	if !res.IsError || !strings.Contains(res.Text, "is blank") {
+		t.Errorf("search_memory = %+v, want an error naming the blank workspace_root", res)
+	}
+	if _, err := (&InitProjectMemoryTool{Resolver: r, Stores: mgr}).Validate(mustJSON(t, map[string]any{"workspace_root": "  "})); err == nil {
+		t.Error("init_project_memory accepted a blank workspace_root")
 	}
 }

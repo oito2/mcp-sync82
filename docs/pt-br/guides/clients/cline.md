@@ -21,7 +21,7 @@ Ele grava em toda variante que encontrar:
 | Variante | Detectada por | Arquivo |
 |---|---|---|
 | Extensão do VS Code | o diretório de armazenamento `saoudrizwan.claude-dev` da extensão | Linux: `~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` (respeita `$XDG_CONFIG_HOME`); macOS: `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json`; Windows: `%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json` |
-| Cline CLI (e o diretório de dados compartilhado do Cline) | `~/.cline` (ou `$CLINE_DATA_DIR`, ou a pasta de `$CLINE_MCP_SETTINGS_PATH`) | `$CLINE_MCP_SETTINGS_PATH` quando definida com um caminho absoluto; senão `~/.cline/data/settings/cline_mcp_settings.json`, ou `$CLINE_DATA_DIR/settings/cline_mcp_settings.json` quando `CLINE_DATA_DIR` está definida |
+| Cline CLI (e o diretório de dados compartilhado do Cline) | `~/.cline` (ou um `$CLINE_DIR` absoluto, ou `$CLINE_DATA_DIR`, ou a pasta de `$CLINE_MCP_SETTINGS_PATH`) | `$CLINE_MCP_SETTINGS_PATH` quando definida com um caminho absoluto; senão `~/.cline/data/settings/cline_mcp_settings.json`, ou `$CLINE_DATA_DIR/settings/cline_mcp_settings.json` quando `CLINE_DATA_DIR` está definida |
 
 O Cline documenta o `~/.cline` como compartilhado pelas extensões de IDE, pela CLI e pelo SDK, e o `~/.cline/data/settings/cline_mcp_settings.json` como o arquivo de configuração MCP da CLI; o arquivo em `globalStorage` do VS Code é onde a extensão tem guardado seus servidores. O sync82 grava em todo arquivo cujo diretório existe. Só o diretório de armazenamento do VS Code estável é verificado.
 
@@ -62,7 +62,7 @@ Apaga a entrada `sync82` dos dois arquivos de settings, onde estiver presente. V
 
 ## ⚠️ Solução de Problemas
 
-- **`Skipped: cline not detected.`** — nem o diretório de armazenamento da extensão, nem o `~/.cline` (ou `$CLINE_DATA_DIR`), nem a pasta de `$CLINE_MCP_SETTINGS_PATH` existem; abra o Cline uma vez para ele criar o armazenamento, ou configure manualmente.
+- **`Skipped: cline not detected.`** — nem o diretório de armazenamento da extensão, nem o `~/.cline` (ou um `$CLINE_DIR` absoluto, ou `$CLINE_DATA_DIR`), nem a pasta de `$CLINE_MCP_SETTINGS_PATH` existem; abra o Cline uma vez para ele criar o armazenamento, ou configure manualmente.
 - **`command` não encontrado** — use um caminho absoluto; rode `sync82 install cline` de novo depois de mover o binário.
 - **Projeto errado resolvido** — pergunte _"Mostre a configuração atual do vault"_ (`get_vault_config`) e veja [Resolução de Contexto](../../architecture/context-resolution.md).
 

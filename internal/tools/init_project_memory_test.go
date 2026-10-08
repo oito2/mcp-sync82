@@ -371,7 +371,7 @@ func TestInitProjectMemoryTool_PicksUpSubprojectFromLocalConfigEvenWithExplicitP
 func TestInitProjectMemoryTool_GlobalConfigFallback(t *testing.T) {
 	r, mgr := newToolTestEnv(t)
 	ctx := context.Background()
-	if err := config.WriteGlobalConfig(config.GlobalConfig{LastProject: "acme"}); err != nil {
+	if err := config.UpdateGlobalConfig(func(c *config.GlobalConfig) { *c = config.GlobalConfig{LastProject: "acme"} }); err != nil {
 		t.Fatal(err)
 	}
 
@@ -454,7 +454,7 @@ func TestInitProjectMemoryTool_RecordsPortableVaultPathAsGiven(t *testing.T) {
 func TestInitProjectMemoryTool_WorkspaceRootDoesNotUseLastProject(t *testing.T) {
 	r, mgr := newToolTestEnv(t)
 	ctx := context.Background()
-	if err := config.WriteGlobalConfig(config.GlobalConfig{LastProject: "acme"}); err != nil {
+	if err := config.UpdateGlobalConfig(func(c *config.GlobalConfig) { *c = config.GlobalConfig{LastProject: "acme"} }); err != nil {
 		t.Fatal(err)
 	}
 
@@ -517,5 +517,74 @@ func TestInitProjectMemoryTool_LocalConfigNameIsCaseInsensitive(t *testing.T) {
 	result := runTool(t, &InitProjectMemoryTool{Resolver: r, Stores: mgr}, map[string]any{"workspace_root": workspace})
 	if result.IsError || strings.Contains(result.Text, "left unchanged") || !strings.Contains(result.Text, `"myproj"`) {
 		t.Fatalf("result = %q, want myproj initialized without a mismatch warning", result.Text)
+	}
+}
+
+// TestInitProjectMemoryTool_AnswersFillTemplateDocuments checks that a
+// second call with answers fills the documents the first call left as
+// blank templates, and leaves a document someone edited alone.
+func TestInitProjectMemoryTool_AnswersFillTemplateDocuments(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	tool := &InitProjectMemoryTool{Resolver: r, Stores: mgr}
+	runTool(t, tool, map[string]any{"project": "p"})
+	s, err := mgr.Get(context.Background(), r.DefaultDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteDocument(context.Background(), "p", "", "stack", "# Stack\n\nhand-written"); err != nil {
+		t.Fatal(err)
+	}
+
+	res := runTool(t, tool, map[string]any{"project": "p", "description": "XYZ-DESC", "languages": "Go"})
+	if !strings.Contains(res.Text, "Files written: memory, architecture, next_steps") {
+		t.Fatalf("second call = %q, want the three template documents written", res.Text)
+	}
+	memory, _, _ := s.ReadDocument(context.Background(), "p", "", "memory")
+	stack, _, _ := s.ReadDocument(context.Background(), "p", "", "stack")
+	if !strings.Contains(memory, "XYZ-DESC") || stack != "# Stack\n\nhand-written" {
+		t.Errorf("memory = %q, stack = %q; want the answer in memory and stack untouched", memory, stack)
+	}
+}
+
+// TestInitProjectMemoryTool_RefusesAnswersForTheLastSessionProject checks
+// that answers are never written into a project taken only from the last
+// session, while a call without answers may still use it and says so.
+func TestInitProjectMemoryTool_RefusesAnswersForTheLastSessionProject(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	tool := &InitProjectMemoryTool{Resolver: r, Stores: mgr}
+	runTool(t, tool, map[string]any{"project": "other"})
+
+	res := runTool(t, tool, map[string]any{"description": "A brand new project B"})
+	if !res.IsError || !strings.Contains(res.Text, `Refusing to initialize "other"`) {
+		t.Fatalf("answers without project: %+v, want a refusal", res)
+	}
+	s, _ := mgr.Get(context.Background(), r.DefaultDBPath)
+	if memory, _, _ := s.ReadDocument(context.Background(), "other", "", "memory"); strings.Contains(memory, "brand new") {
+		t.Fatalf("the refused answers were written: %q", memory)
+	}
+	res = runTool(t, tool, map[string]any{})
+	if res.IsError || !strings.Contains(res.Text, "from last session") {
+		t.Errorf("no answers: %+v, want success naming the last session", res)
+	}
+}
+
+// TestInitProjectMemoryTool_KeepsTheWorkspaceVault checks that a path
+// naming another vault than the one the workspace's .sync82.json uses
+// leaves that file unchanged and says so.
+func TestInitProjectMemoryTool_KeepsTheWorkspaceVault(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	workspace := t.TempDir()
+	v1 := filepath.Join(t.TempDir(), "v1.db")
+	v2 := filepath.Join(t.TempDir(), "v2.db")
+	if err := config.WriteLocalConfig(workspace, config.LocalConfig{Project: "p", Path: v1}); err != nil {
+		t.Fatal(err)
+	}
+	res := runTool(t, &InitProjectMemoryTool{Resolver: r, Stores: mgr}, map[string]any{"workspace_root": workspace, "path": v2})
+	if !strings.Contains(res.Text, "uses the vault "+v1+" and was left unchanged") {
+		t.Errorf("result = %q, want the vault mismatch reported", res.Text)
+	}
+	local, err := config.ReadLocalConfig(workspace, false)
+	if err != nil || local == nil || local.Config.Path != v1 {
+		t.Errorf(".sync82.json after the call = %+v, %v; want path %s kept", local, err, v1)
 	}
 }

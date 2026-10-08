@@ -72,9 +72,11 @@ func (s *Store) ProjectExists(ctx context.Context, project, subproject string) (
 
 // CreateProject inserts a new project row named name (normalized), top-level
 // when parentID is nil and otherwise a child of parentID. It returns the
-// created Project, or a database error; a duplicate name in the same scope
-// fails with a UNIQUE constraint error. The existence of parentID is checked
-// by the foreign key.
+// created Project, an error wrapping ErrAlreadyExists when a project with
+// that name already exists in the same scope, one wrapping ErrNotFound when
+// parentID names no project (it was deleted meanwhile), or a database
+// error. The
+// existence of parentID is checked by the foreign key.
 func (s *Store) CreateProject(ctx context.Context, name string, parentID *int64) (*Project, error) {
 	name = normalizeName(name)
 	var parent sql.NullInt64
@@ -85,6 +87,13 @@ func (s *Store) CreateProject(ctx context.Context, name string, parentID *int64)
 
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO projects (name, parent_id, created_at) VALUES (?, ?, ?)`, name, parent, createdAt)
+	if isUniqueConstraintErr(err) {
+		return nil, fmt.Errorf("create project %q: a project named %q already exists in the same scope: %w", name, name, ErrAlreadyExists)
+	}
+	if isForeignKeyErr(err) {
+		// The parent was deleted after the caller looked it up.
+		return nil, fmt.Errorf("create project %q: its parent project no longer exists: %w", name, ErrNotFound)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("create project %q: %w", name, err)
 	}
@@ -141,8 +150,8 @@ func (s *Store) EnsureProject(ctx context.Context, project, subproject string) (
 
 // createOrRecoverExisting creates a project (top-level if parentID is nil,
 // otherwise a child of parentID) and reports created as true. If creation
-// fails on a UNIQUE constraint violation, meaning another goroutine created
-// the same name first, it returns the existing row with created false. Any
+// fails with ErrAlreadyExists, meaning another goroutine created the same
+// name first, it returns the existing row with created false. Any
 // other failure is returned as is, and so is the original error if the row
 // cannot be found afterwards.
 func (s *Store) createOrRecoverExisting(ctx context.Context, name string, parentID *int64) (*Project, bool, error) {
@@ -150,7 +159,7 @@ func (s *Store) createOrRecoverExisting(ctx context.Context, name string, parent
 	if err == nil {
 		return p, true, nil
 	}
-	if !isUniqueConstraintErr(err) {
+	if !errors.Is(err, ErrAlreadyExists) {
 		return nil, false, err
 	}
 
@@ -177,6 +186,44 @@ func (s *Store) ListTopLevelProjects(ctx context.Context) ([]Project, error) {
 	}
 	defer rows.Close()
 	return scanProjects(rows)
+}
+
+// ProjectNode is one top-level project of a ProjectTree with the names of
+// its subprojects, in name order.
+type ProjectNode struct {
+	Name        string
+	Subprojects []string
+}
+
+// ProjectTree returns every top-level project with its subprojects, both
+// in name order, read in one query. Subprojects is empty, not nil, for a
+// project without any. It returns a database error on failure.
+func (s *Store) ProjectTree(ctx context.Context) ([]ProjectNode, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT p.name, c.name FROM projects p
+		LEFT JOIN projects c ON c.parent_id = p.id
+		WHERE p.parent_id IS NULL
+		ORDER BY p.name, c.name`)
+	if err != nil {
+		return nil, fmt.Errorf("list project tree: %w", err)
+	}
+	defer rows.Close()
+	var tree []ProjectNode
+	for rows.Next() {
+		var name string
+		var sub sql.NullString
+		if err := rows.Scan(&name, &sub); err != nil {
+			return nil, fmt.Errorf("list project tree: %w", err)
+		}
+		if len(tree) == 0 || tree[len(tree)-1].Name != name {
+			tree = append(tree, ProjectNode{Name: name, Subprojects: []string{}})
+		}
+		if sub.Valid {
+			last := &tree[len(tree)-1]
+			last.Subprojects = append(last.Subprojects, sub.String)
+		}
+	}
+	return tree, rows.Err()
 }
 
 // ListSubprojects returns every project whose parent is parentID, sorted by
@@ -207,45 +254,21 @@ func scanProjects(rows *sql.Rows) ([]Project, error) {
 }
 
 // PromoteSubproject moves the subproject subName of parentName to the vault
-// root as a top-level project. It returns an error wrapping ErrNotFound when
-// the parent or subproject does not exist, an error wrapping ErrAlreadyExists
-// when a top-level project with that name exists, or a database error.
+// root as a top-level project, in one transaction that also resolves both
+// names. It returns an error wrapping ErrNotFound when the parent or
+// subproject does not exist, an error wrapping ErrAlreadyExists when a
+// top-level project with that name exists, or a database error.
 func (s *Store) PromoteSubproject(ctx context.Context, parentName, subName string) error {
 	parentName, subName = normalizeName(parentName), normalizeName(subName)
-	parent, err := s.FindProjectByName(ctx, parentName, nil)
-	if err != nil {
-		return err
-	}
-	if parent == nil {
-		return fmt.Errorf("project not found: %q: %w", parentName, ErrNotFound)
-	}
-	sub, err := s.FindProjectByName(ctx, subName, &parent.ID)
-	if err != nil {
-		return err
-	}
-	if sub == nil {
-		return fmt.Errorf("project not found: %q/%q: %w", parentName, subName, ErrNotFound)
-	}
-
-	collision, err := s.FindProjectByName(ctx, subName, nil)
-	if err != nil {
-		return err
-	}
-	if collision != nil {
-		return fmt.Errorf("cannot promote %q: a top-level project named %q already exists: %w", subName, subName, ErrAlreadyExists)
-	}
-
-	if _, err := s.db.ExecContext(ctx, `UPDATE projects SET parent_id = NULL WHERE id = ?`, sub.ID); err != nil {
-		// The collision check above and this UPDATE are not atomic, so a
-		// concurrent create or promote of the same name can slip in between.
-		// A UNIQUE violation here is reported as ErrAlreadyExists, like the
-		// pre-check.
-		if isUniqueConstraintErr(err) {
-			return fmt.Errorf("cannot promote %q: a top-level project named %q already exists: %w", subName, subName, ErrAlreadyExists)
+	return s.withProjectTx(ctx, parentName, subName, func(tx *sql.Tx, subID int64) error {
+		if _, err := tx.ExecContext(ctx, `UPDATE projects SET parent_id = NULL WHERE id = ?`, subID); err != nil {
+			if isUniqueConstraintErr(err) {
+				return fmt.Errorf("cannot promote %q: a top-level project named %q already exists: %w", subName, subName, ErrAlreadyExists)
+			}
+			return fmt.Errorf("promote subproject %q/%q: %w", parentName, subName, err)
 		}
-		return fmt.Errorf("promote subproject %q/%q: %w", parentName, subName, err)
-	}
-	return nil
+		return nil
+	})
 }
 
 // PromoteAllSubprojects promotes every subproject of parentName to the vault
@@ -346,49 +369,34 @@ func (s *Store) DeleteProject(ctx context.Context, name string) error {
 }
 
 // DeleteSubproject deletes the subproject subName of parentName, cascading to
-// its documents and entries. It returns an error wrapping ErrNotFound when
-// the parent or subproject does not exist, or a database error.
+// its documents and entries, in one transaction that also resolves both
+// names. It returns an error wrapping ErrNotFound when the parent or
+// subproject does not exist, or a database error.
 func (s *Store) DeleteSubproject(ctx context.Context, parentName, subName string) error {
 	parentName, subName = normalizeName(parentName), normalizeName(subName)
-	parent, err := s.FindProjectByName(ctx, parentName, nil)
-	if err != nil {
-		return err
-	}
-	if parent == nil {
-		return fmt.Errorf("project not found: %q: %w", parentName, ErrNotFound)
-	}
-
-	res, err := s.db.ExecContext(ctx, `DELETE FROM projects WHERE parent_id = ? AND name = ?`, parent.ID, subName)
-	if err != nil {
-		return fmt.Errorf("delete subproject %q/%q: %w", parentName, subName, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("delete subproject %q/%q: %w", parentName, subName, err)
-	}
-	if n == 0 {
-		return fmt.Errorf("project not found: %q/%q: %w", parentName, subName, ErrNotFound)
-	}
-	return nil
+	return s.withProjectTx(ctx, parentName, subName, func(tx *sql.Tx, subID int64) error {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM projects WHERE id = ?`, subID); err != nil {
+			return fmt.Errorf("delete subproject %q/%q: %w", parentName, subName, err)
+		}
+		return nil
+	})
 }
 
 // RenameProject renames a top-level project (subproject == "") or a specific
-// subproject in place to newName (normalized). It returns an error wrapping
-// ErrNotFound when the project or subproject does not exist, an error
-// wrapping ErrAlreadyExists when a sibling in the same scope already has
-// newName, or a database error. Only the database is changed.
+// subproject in place to newName (normalized), in one transaction that also
+// resolves the names. It returns an error wrapping ErrNotFound when the
+// project or subproject does not exist, an error wrapping ErrAlreadyExists
+// when a sibling in the same scope already has newName, or a database
+// error. Only the database is changed.
 func (s *Store) RenameProject(ctx context.Context, project, subproject, newName string) error {
 	project, subproject, newName = normalizeName(project), normalizeName(subproject), normalizeName(newName)
-	targetID, err := s.resolveProjectID(ctx, project, subproject)
-	if err != nil {
-		return err
-	}
-
-	if _, err := s.db.ExecContext(ctx, `UPDATE projects SET name = ? WHERE id = ?`, newName, targetID); err != nil {
-		if isUniqueConstraintErr(err) {
-			return fmt.Errorf("cannot rename %q to %q: a project named %q already exists in the same scope: %w", label(project, subproject), newName, newName, ErrAlreadyExists)
+	return s.withProjectTx(ctx, project, subproject, func(tx *sql.Tx, targetID int64) error {
+		if _, err := tx.ExecContext(ctx, `UPDATE projects SET name = ? WHERE id = ?`, newName, targetID); err != nil {
+			if isUniqueConstraintErr(err) {
+				return fmt.Errorf("cannot rename %q to %q: a project named %q already exists in the same scope: %w", label(project, subproject), newName, newName, ErrAlreadyExists)
+			}
+			return fmt.Errorf("rename %s: %w", label(project, subproject), err)
 		}
-		return fmt.Errorf("rename %s: %w", label(project, subproject), err)
-	}
-	return nil
+		return nil
+	})
 }

@@ -274,6 +274,13 @@ Requests you can type to your AI agent, in plain language, to make it use sync82
   > "Is this project's memory up to date? Anything that looks stale or never filled in?"
 - **Expected output:** `check_project_health` (with `stale_days` if you gave a number of days). Its `Warnings:` list names current-state files older than the newest progress/decisions entries, files still empty or holding the blank template, undated log entries and logs long enough to archive. The agent can then offer to update each file, for example by rewriting `architecture` from what the recent decisions say.
 
+### Check every project at once
+
+- **Expected parameters:** none; optionally another vault.
+- **Example:**
+  > "Check the memory health of every project in my vault. Which ones need attention?"
+- **Expected output:** `check_project_health` with `all_projects: true`: one `HEALTHY`, `UNHEALTHY` or `WARNINGS` line per project and subproject, a count of each, then the missing files and warnings of the ones that need attention. It is an error result when any project is unhealthy.
+
 ### Confirm the connection after installing
 
 - **Expected parameters:** none.

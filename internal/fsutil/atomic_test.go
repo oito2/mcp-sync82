@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 // TestAtomicWriteFile_CreatesFileWithContent verifies that a file is created,
@@ -227,5 +228,46 @@ func TestAtomicReplaceFile_WritesRegularFiles(t *testing.T) {
 	}
 	if err := AtomicReplaceFile(dir, []byte("x"), 0o600); !errors.Is(err, ErrNotRegularFile) {
 		t.Errorf("AtomicReplaceFile on a directory: err = %v, want ErrNotRegularFile", err)
+	}
+}
+
+// TestSHA256File checks the digest of a known file and the error for a
+// missing one.
+func TestSHA256File(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f")
+	if err := os.WriteFile(path, []byte("abc"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const want = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+	if got, err := SHA256File(path); err != nil || got != want {
+		t.Errorf("SHA256File = %q, %v; want %q", got, err, want)
+	}
+	if _, err := SHA256File(path + ".missing"); err == nil {
+		t.Error("SHA256File on a missing file returned no error")
+	}
+}
+
+// TestAtomicWriteFile_WaitsForAReaderToClose holds the target open, as a
+// reader would, and closes it shortly after the write starts: the write
+// succeeds on every OS. On Windows the open handle blocks the rename until
+// it is closed, which renameFile retries.
+func TestAtomicWriteFile_WaitsForAReaderToClose(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		reader.Close()
+	}()
+	if err := AtomicWriteFile(path, []byte("new"), 0o600); err != nil {
+		t.Fatalf("AtomicWriteFile with an open reader: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "new" {
+		t.Errorf("content = %q, want new", got)
 	}
 }

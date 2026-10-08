@@ -14,11 +14,11 @@ sync82 exposes 19 tools over MCP. Every tool that operates on a specific project
 | `subproject` | string | Subproject name, for a component of an existing project. |
 | `workspace_root` | string | Path to your project folder, used to auto-discover the project via `.sync82.json`. |
 | `search_parent_dirs` | boolean | If true, also look for `.sync82.json` in parent directories above `workspace_root` (useful in monorepos, where the marker file lives at the repo root). Defaults to `false` — only `workspace_root` itself is checked, since a `.sync82.json` found in an ancestor directory you don't control could otherwise silently redirect where memory is stored. |
-| `path` | string | Base path where the memory is stored. If left blank, uses the default vault path. A leading `~`, `HOME` or `$HOME` (e.g. `"~/vaults/work.db"`, `"HOME/custom-vault"`) is expanded to the user's home directory. |
+| `path` | string | Base path where the memory is stored. If left blank, uses the default vault path. A leading `~`, `HOME` or `$HOME` (e.g. `"~/vaults/work.db"`, `"HOME/custom-vault"`, and on Windows also `"~\\vaults\\work.db"`) is expanded to the user's home directory. |
 
 If none of `project`, `subproject`, `workspace_root` resolve to a project and no last-used project is on record, the tool returns a message asking the calling agent for a project name or `workspace_root` instead of failing.
 
-Project and subproject names — whether passed, read from `.sync82.json` or remembered — must start with a letter or digit and contain only letters, digits, hyphens and underscores; any other name is refused with an error result. Names are case-insensitive: project, subproject and kind (`filename`) names are trimmed and lower-cased everywhere, so `Acme` and `acme` are the same project and `Memory` and `memory` the same file, and they are always shown lower-cased (existing vaults are migrated — see [Storage — Names](../architecture/storage.md#names)). Only `create_project`, `init_project_memory` and `import_memory` (except on a dry run) create a vault file; every other tool reports a `path` (or `.sync82.json`/`set-vault` path) where no vault exists instead of creating an empty one there.
+Project and subproject names — whether passed, read from `.sync82.json` or remembered — must start with a letter or digit, contain only letters, digits, hyphens and underscores, and be at most 128 characters long — the same rule as kind (`filename`) names; any other name is refused with an error result. Names are case-insensitive: project, subproject and kind (`filename`) names are trimmed and lower-cased everywhere, so `Acme` and `acme` are the same project and `Memory` and `memory` the same file, and they are always shown lower-cased (existing vaults are migrated — see [Storage — Names](../architecture/storage.md#names)). Only `create_project`, `init_project_memory` and `import_memory` (except on a dry run) create a vault file; every other tool reports a `path` (or `.sync82.json`/`set-vault` path) where no vault exists instead of creating an empty one there.
 
 Every tool rejects arguments it doesn't define — e.g. `keepDays` instead of `keep_days` — with an error result, and its input schema sets `additionalProperties: false`.
 
@@ -67,6 +67,8 @@ Permanently delete a project or subproject from the vault. **Requires `confirm: 
 
 If a top-level project has subprojects and `subproject_action` isn't given, the tool doesn't delete anything — it returns the list of subprojects and asks which action to take: `cancel` (abort), `promote` (move each subproject to the vault root as its own project), or `delete_all` (delete everything).
 
+`subproject_action` can also be given on the first call, together with `confirm: true`: `delete_all` then deletes the project and every subproject without listing them first. Ask the user before passing it.
+
 ---
 
 ### `rename_project`
@@ -77,7 +79,7 @@ Rename a project or subproject in place.
 |---|---|---|---|
 | `project` | string | ✅ | The project to rename. When `subproject` is also given, renames that subproject instead. |
 | `subproject` | string | ❌ | The subproject to rename, if renaming a subproject rather than the top-level project. |
-| `new_name` | string | ✅ | The new name (letters, digits, hyphens, underscores — must start with a letter or digit). |
+| `new_name` | string | ✅ | The new name (letters, digits, hyphens, underscores — must start with a letter or digit, at most 128 characters). The current name is refused. |
 | `path` | string | ❌ | Vault path override. |
 
 Doesn't touch any `.sync82.json` elsewhere on disk that already points at the old name — those keep referring to it until re-initialized (`init_project_memory`) or edited by hand.
@@ -87,6 +89,8 @@ Doesn't touch any `.sync82.json` elsewhere on disk that already points at the ol
 ### `get_vault_config`
 
 Report the current effective vault configuration: active vault path, global config, and (if `workspace_root` is given) the local `.sync82.json` config for that workspace.
+
+The JSON report also gives `last_vault_path`, the vault the last used project was remembered in (where a call that relies on the last session opens it), and, under `local_config`, `vault`, the vault that workspace resolves to.
 
 | Argument | Type | Required | Description |
 |---|---|---|---|
@@ -120,6 +124,7 @@ Read a memory file's content. For an append-only kind (`progress`, `decisions`, 
 | `project`, `subproject`, `workspace_root`, `search_parent_dirs` | — | ❌ | Standard context arguments. |
 | `filename` | string | ✅ | The file/kind to read (e.g. `"memory"`, `"progress"`, or a custom name). |
 | `with_ids` | boolean | ❌ | Put a `<!-- entry:N -->` line before each entry of an append-only kind, with the id [`edit_entry`](#edit_entry) takes. No effect on overwrite-style files. |
+| `max_bytes` | integer | ❌ | Size cap of the response in bytes (1024 to 52428800, default 1048576 — 1 MB). Longer content is cut at a line break and ends with `[cut: N of M bytes shown; …]`; [`load_project_context`](#load_project_context) with `since` or `max_entries` reads part of a long log. |
 | `path` | string | ❌ | Vault path override. |
 
 The `<!-- entry:N -->` lines are never stored: `write_memory`, `append_memory`, `update_project_memory`, `edit_entry` and `import_memory` remove whole lines of that form from the content they receive, so content read with ids can be written back as is.
@@ -187,7 +192,7 @@ Change one entry of an append-only memory file (`progress`, `decisions`, or a cu
 | `supersede` | Appends `content` as a new entry and adds a `> Superseded by entry N on YYYY-MM-DD.` line to the old one, in one transaction. The old text stays in the history, marked. Prefer it when a decision changed rather than was recorded wrong. |
 | `delete` | Removes the entry permanently. |
 
-Entry ids are unique within a vault and stay the same while the entry exists. Rewriting a whole file (`write_memory`, `update_project_memory`) or importing it (`import_memory`) creates new entries with new ids, so read the ids again after one of those. Archived entries can be edited too, but `read_memory` doesn't show them.
+Entry ids are unique within a vault and stay the same while the entry exists. Rewriting a whole file (`write_memory`, `update_project_memory`) or importing it (`import_memory`) creates new entries with new ids, so read the ids again after one of those. An id is never given to another entry, even after its entry is deleted, so an old id is reported as not found instead of changing a different entry. Archived entries can be edited too, but `read_memory` doesn't show them. Superseding an archived entry marks it in the archive and appends its replacement as an active entry.
 
 ---
 
@@ -237,13 +242,13 @@ Search memory files. By default it finds the documents and entries that hold eve
 
 | `match` | Finds | Order |
 |---|---|---|
-| `words` (default) | Documents and entries holding **every** word of the query, anywhere in them and in any order. Case and the accents of Latin letters are ignored (`sessao` finds `Sessão`). A word ending in `*` matches as a prefix (`instal*` finds `instalador`). Punctuation only separates words: `edit_entry` searches `edit` and `entry`, and `"`, `NEAR`, `OR`, `:` or `-` have no special meaning. | Relevance (best first) |
+| `words` (default) | Documents and entries holding **every** word of the query, anywhere in them and in any order. Case and the accents of Latin letters are ignored (`sessao` finds `Sessão`). A word ending in `*` matches as a prefix (`instal*` finds `instalador`). Punctuation only separates words: `edit_entry` searches `edit` and `entry`, and `"`, `NEAR`, `OR`, `:` or `-` have no special meaning. Words follow the SQLite `unicode61` tokenizer, so a word with a recent symbol (`100₽`) may need `exact`. | Relevance (best first) |
 | `phrase` | Documents and entries holding the words **in that order**, with the same rules as `words` (`sobre o instal*` works). | Relevance (best first) |
 | `exact` | Lines holding the query as a literal substring, case-insensitive but accent-sensitive (`decisão` finds `DECISÃO`, not `decisao`). Use it for paths, identifiers or punctuation (`100%`, `foo_bar`, `v1.0`). | File order |
 
 In `words` mode, each line holding one of the words is reported, so a document where the words sit on different lines shows each of those lines. A phrase that continues onto the next line is reported by the lines holding its words. A query with no letter or number is rejected in `words` and `phrase` modes — use `exact` for it.
 
-Each match is labeled `project/file:line`, or `project/file[YYYY-MM-DD]:line` for an entry of a dated log (the line is counted within that entry). Results come in a stable order — by relevance in `words`/`phrase` mode, ties broken by project, file and reading order; by project, file and reading order in `exact` mode — so `offset` pages are consistent. Each matching or context line is cut at 4 KB, ending in `…`. The response is capped at about 1 MB; past that it ends with a note telling you to continue with `offset`. On a very large vault the scan stops after 5000 rows (per table in `exact` mode) or 64 MB of content, and the result says so.
+Each match is labeled `project/file:line`, or `project/file[YYYY-MM-DD]:line` for an entry of a dated log (the line is counted within that entry). Results come in a stable order — by relevance in `words`/`phrase` mode, ties broken by project, file and reading order; by project, file and reading order in `exact` mode — so `offset` pages are consistent. In text format, a search with no match answers `No results for "<query>"`, and an `offset` past the last result `No more results for "<query>" at offset N`. Each matching or context line is cut at 4 KB, ending in `…`. The response is capped at about 1 MB as sent, its text and its structured content together (JSON escaping included); past that it ends with a note telling you to continue with `offset`. On a very large vault the scan stops after 5000 rows (per table in `exact` mode) or 64 MB of content, and the result says so.
 
 > `search_memory` deliberately never falls back to "the last used project" on its own the way other tools do — an unscoped search should search the whole vault, not silently guess a project. With `workspace_root` and no `project`, a workspace without `.sync82.json` also searches the whole vault, while a `.sync82.json` that can't be read or names an invalid project gives an error result instead of a search.
 
@@ -258,7 +263,7 @@ Load a project's memory (every non-blank file) concatenated into one context blo
 | Argument | Type | Required | Description |
 |---|---|---|---|
 | `project`, `subproject`, `workspace_root`, `search_parent_dirs` | — | ❌ | Standard context arguments. |
-| `files` | array of strings | ❌ | Only load these specific files/kinds, instead of everything. |
+| `files` | array of strings | ❌ | Only load these specific files/kinds, instead of everything. A name with no file is listed as `[no file named: …]`. |
 | `mode` | string (`summary` \| `full`) | ❌ | `summary` (default): the 10 most recent dated entries per append-only kind, response cut at 40 KB. `full`: every entry, response cut at 200 KB. `since`, `max_entries` and `max_bytes` override these defaults. |
 | `since` | string (`YYYY-MM-DD`) | ❌ | Only include dated entries (`progress`, `decisions`, or a custom append kind) on or after this date. Undated entries are always included. Overwrite-style files are unaffected. In `summary` mode, giving `since` lifts the default 10-entry limit. |
 | `max_entries` | integer | ❌ | Only include the most recent N dated entries per append-only kind (default 10 in `summary` mode). Undated entries (such as a title before the first dated entry) are always included and don't count toward N. Overwrite-style files are unaffected. |
@@ -279,11 +284,12 @@ A response never exceeds `max_bytes`, notes included. When it would, the content
 
 ### `check_project_health`
 
-Report which of the six standard memory files exist for a project, plus warnings about memory that may be out of date (see below). Returns an error result (`isError: true`) when the project is unhealthy — a deliberate signal for the calling agent to act on, not a crash. This holds for `format: "json"` too.
+Report which of the six standard memory files exist for a project, plus warnings about memory that may be out of date (see below). The project is **unhealthy** when a current-state file (`memory`, `architecture`, `stack`, `next_steps`) is missing; `progress` and `decisions` with no entry yet are shown as `EMPTY (no entry yet)` and only get an `empty_log` warning, so a project `init_project_memory` just set up is healthy. Returns an error result (`isError: true`) when the project is unhealthy — a deliberate signal for the calling agent to act on, not a crash — and recommends `init_project_memory`, which writes the missing files only. This holds for `format: "json"` too.
 
 | Argument | Type | Required | Description |
 |---|---|---|---|
 | `project`, `subproject`, `workspace_root`, `search_parent_dirs` | — | ❌ | Standard context arguments. |
+| `all_projects` | boolean | ❌ | Check every project and subproject of the vault (the one named by `path`, or the default vault) instead of one project. Can't be combined with `project`, `subproject` or `workspace_root`, and never uses the last used project. |
 | `path` | string | ❌ | Vault path override. |
 | `format` | string (`text` \| `json`) | ❌ | `text` (default) for readable text; `json` for a JSON document with the same information, returned as the text and as structured content — see [JSON output](#json-output). |
 | `stale_days` | integer | ❌ | Days after which a current-state file older than the newest `progress`/`decisions` entry is reported as possibly out of date (≥ 1, default 30). |
@@ -296,14 +302,17 @@ It also reports **warnings** — memory that may be out of date. Warnings never 
 | `template` | A current-state file is empty, or still equal to the blank template `init_project_memory` writes when no answer is given (the date in its `Last updated` line doesn't count). |
 | `undated_entries` | `progress` or `decisions` holds undated entries — a title before the first dated entry doesn't count. `archive_memory` never archives them; `edit_entry` can give them a `## YYYY-MM-DD` header. |
 | `large_history` | `progress` or `decisions` holds more than 200 active dated entries — `archive_memory` keeps the loaded context small. |
+| `empty_log` | `progress` or `decisions` has no entry yet — record the work with `update_project_memory` or `append_memory`. |
 
 In the text report the warnings come after the file list, under `Warnings:`, one `- <file>: <message>` line each.
+
+With `all_projects: true` the text report has one line per project and subproject — `HEALTHY ✅`, `UNHEALTHY ❌ (N missing)` or `WARNINGS ⚠️ (N)` — then a count of each, then the missing files and warnings of every project that isn't plainly healthy. The result is an error result when any project is unhealthy. An empty vault is healthy (`No projects in the vault.`).
 
 ---
 
 ### `init_project_memory`
 
-Guided initialization of a project's memory. This tool's description doubles as an agent playbook — the agent is expected to determine whether the target is a project or subproject (asking the user if unclear), then either auto-detect the project's data from the codebase or ask the user a fixed set of questions. Only files that are empty or still contain the blank template get written — re-running it on an already-initialized project doesn't clobber existing content. With `workspace_root`, it writes `.sync82.json` there — unless one already points at a different project, which is left unchanged and reported. A `path` given as `~/…`, `HOME/…` or an absolute path is recorded in `.sync82.json` as given. When `workspace_root` is given, the last-used project is never used as a fallback.
+Guided initialization of a project's memory. This tool's description doubles as an agent playbook — the agent is expected to determine whether the target is a project or subproject (asking the user if unclear), then either auto-detect the project's data from the codebase or ask the user a fixed set of questions. Only files that are empty or still contain the blank template get written — re-running it on an already-initialized project doesn't clobber existing content. With `workspace_root`, it writes `.sync82.json` there — unless one already points at a different project, or at a different vault than a `path` given in the call; that file is left unchanged and reported, so the workspace's memory doesn't move. A `path` given as `~/…`, `HOME/…` or an absolute path is recorded in `.sync82.json` as given. When `workspace_root` is given, the last-used project is never used as a fallback. Without `project` and `workspace_root`, it may initialize the last-used project — the result then names it — but it refuses to write any answer (or `auto_detect`) into it.
 
 | Argument | Type | Required | Description |
 |---|---|---|---|
@@ -358,10 +367,14 @@ Export a project's memory to plain Markdown files (one per kind, e.g. `memory.md
 |---|---|---|---|
 | `project`, `subproject`, `workspace_root`, `search_parent_dirs` | — | ❌ | Standard context arguments. |
 | `output_dir` | string | ✅ | Directory to write the exported `.md` files into. Must be absolute (or start with `~/` or `HOME/`); otherwise any directory the server process can write to — it is not confined to the vault or workspace. Created (private to the user) if it doesn't exist. |
-| `overwrite` | boolean | ❌ | Replace `.md` files that already exist in `output_dir`. Without it, the export is refused — and nothing written — when any destination file exists. A destination that is a symlink or special file is always refused. |
+| `overwrite` | boolean | ❌ | Replace `.md` files that already exist in `output_dir`. Without it, the export is refused — and nothing written — when any destination file exists. A destination that is a symlink or special file is always refused. With `overwrite`, a project taken only from the last session is refused: pass `project` or `workspace_root`. |
 | `path` | string | ❌ | Vault path override. |
 
-A kind with archived entries also gets a `<kind>.archived.md` file holding them, so an export keeps the whole history. There's also a `sync82 export` CLI command that does the same thing without going through an MCP client, plus an `--all` mode that exports every project/subproject in the vault at once — see [CLI Reference — export](./cli.md#export).
+A kind with archived entries also gets a `<kind>.archived.md` file holding them, so an export keeps the whole history. A kind whose name can't be a file name (stored by an older version, for example longer than 128 characters) is left out and listed as skipped.
+
+When it writes any file, the export also writes `.sync82-kinds.json`, a manifest that names each kind a `log` (append-only, stored as entries) or a `document`, so an import restores a custom log as a log. It doesn't count as an exported file. After writing, the result lists the `.md` files already in `output_dir` that this export didn't write and that are valid kind names — left by an earlier export of a file the project no longer has. They aren't deleted: an import of the folder would bring them back, so delete them if those files were removed on purpose.
+
+There's also a `sync82 export` CLI command that does the same thing without going through an MCP client, plus an `--all` mode that exports every project/subproject in the vault at once — see [CLI Reference — export](./cli.md#export).
 
 ---
 
@@ -372,7 +385,7 @@ Import a project's memory from plain Markdown files previously produced by `expo
 | Argument | Type | Required | Description |
 |---|---|---|---|
 | `project`, `subproject`, `workspace_root`, `search_parent_dirs` | — | ❌ | Standard context arguments. |
-| `input_dir` | string | ✅ | Directory to read exported `.md` files from. Must be absolute (or start with `~/` or `HOME/`); otherwise any directory the server process can read — it is not confined to the vault or workspace. Every `"<kind>.md"` file present is imported, and a `"<kind>.archived.md"` file restores that kind's archived entries; files that aren't valid kind names, are empty, exceed 10 MB, or are symlinks or special files are skipped and reported back. At most 256 `.md` files are read per import. |
+| `input_dir` | string | ✅ | Directory to read exported `.md` files from. Must be absolute (or start with `~/` or `HOME/`); otherwise any directory the server process can read — it is not confined to the vault or workspace. Every `"<kind>.md"` file present is imported, and a `"<kind>.archived.md"` file restores that kind's archived entries; files that aren't valid kind names, are empty, exceed 10 MB, or are symlinks or special files are skipped and reported back. At most 256 `.md` files are read per import. A `.sync82-kinds.json` manifest written by the export, when present, says which new kinds are logs; it must be a regular file of at most 1 MB with version `1`, or the import fails. |
 | `dry_run` | boolean | ❌ | When `true`, report what the import would create and overwrite without writing anything — not even a missing vault file is created. |
 | `path` | string | ❌ | Vault path override. |
 
@@ -416,6 +429,8 @@ Every tool declares MCP annotations — hints clients use to decide when to ask 
 
 `list_projects`, `list_files`, `check_project_health` and `search_memory` accept `format: "json"`. The result's text is then an indented JSON document, and the same object is returned as the MCP result's `structuredContent`. Any other `format` value is rejected with an error result. Context notes (`[project: ..., from ..., vault: ...]`) are not added in JSON mode — the `vault` field carries the resolved path instead. An empty result is an empty array (`[]`), never a "nothing found" sentence. Messages that aren't results — a request for `project`, a missing vault (except for `list_projects`), an invalid argument — stay plain text.
 
+These four tools declare an **output schema** (`outputSchema` in `tools/list`) describing the objects below, and every successful result carries the matching object as `structuredContent`, **whatever the `format`**: in `text` format the text stays readable and the structured content holds the same information. A client chooses which of the two the agent sees: Claude Code (2.1) gives the agent the structured content when a result has one, so there these tools answer in JSON whatever the `format`. A result that has no such object — a request for `project` or `workspace_root`, a missing vault — is returned with `isError: true`, since clients reject a successful result without structured content from a tool that declares an output schema.
+
 **`list_projects`**
 
 | Field | Type | Description |
@@ -446,6 +461,19 @@ Every tool declares MCP annotations — hints clients use to decide when to ask 
 | `healthy` | boolean | `true` when all six standard files exist (the result is flagged `isError` otherwise). |
 | `files` | object | One boolean per standard file: `memory`, `architecture`, `stack`, `decisions`, `progress`, `next_steps`. |
 | `warnings` | array | One object per warning, with `file`, `check` (`stale`, `template`, `undated_entries`, `large_history`) and `message` — omitted when there are none. |
+
+With `all_projects: true`:
+
+| Field | Type | Description |
+|---|---|---|
+| `vault` | string | Vault path that was checked. |
+| `healthy` | boolean | `true` when every project is healthy, or the vault is empty. |
+| `projects` | array | One object per project and subproject, each project followed by its subprojects, in name order (`[]` for an empty vault). |
+| `projects[].project` | string | Top-level project name. |
+| `projects[].subproject` | string | Subproject name — omitted for a top-level project. |
+| `projects[].healthy` | boolean | `true` when all six standard files exist. |
+| `projects[].missing` | array of strings | The standard files that don't exist (`[]` when none). |
+| `projects[].warnings` | array | Its warnings, shaped as above (`[]` when none). |
 
 **`search_memory`**
 

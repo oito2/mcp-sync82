@@ -19,6 +19,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/oito2/mcp-sync82/internal/fsutil"
 )
 
 // TestReleaseContract_DistMatchesSelfUpdate checks that a release directory
@@ -33,7 +35,7 @@ func TestReleaseContract_DistMatchesSelfUpdate(t *testing.T) {
 		t.Skip("SYNC82_DIST_DIR not set")
 	}
 	known := map[string]bool{}
-	for _, p := range [][2]string{{"linux", "amd64"}, {"linux", "arm64"}, {"darwin", "amd64"}, {"darwin", "arm64"}, {"windows", "amd64"}, {"windows", "arm64"}} {
+	for _, p := range ReleasePlatforms() {
 		known[AssetName(p[0], p[1])] = true
 	}
 
@@ -56,7 +58,7 @@ func TestReleaseContract_DistMatchesSelfUpdate(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 			continue
 		}
-		if got, err := sha256File(asset); err != nil || got != want {
+		if got, err := fsutil.SHA256File(asset); err != nil || got != want {
 			t.Errorf("%s: sha256 = %s (err %v), checksums.txt says %s", name, got, err, want)
 		}
 	}

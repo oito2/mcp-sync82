@@ -27,8 +27,8 @@ import (
 // Any other err is returned unchanged, and a nil err stays nil.
 //
 // Only call this where the store operation's sole possible ErrNotFound
-// cause is a missing project row: write_memory's WriteDocument/
-// ReplaceAllEntries and append_memory's AppendEntry all resolve the
+// cause is a missing project row: the KindMode and WriteKinds calls of
+// write_memory, append_memory and update_project_memory resolve the
 // project first and have no separate "kind not found" error path. By
 // contrast, read_memory's ReadContent reports a missing kind via
 // ok=false (not an error) and delete_memory's DeleteKind returns the same
@@ -38,6 +38,17 @@ import (
 func wrapNotFound(err error, label string) error {
 	if errors.Is(err, store.ErrNotFound) {
 		return fmt.Errorf("project not found: %q; use create_project first", label)
+	}
+	return err
+}
+
+// projectNotFound turns a store.ErrNotFound from an operation on the
+// project or subproject named label into the error "project not found:
+// <label>", without the store's own wording repeated after it. Any other
+// err is returned unchanged, and a nil err stays nil.
+func projectNotFound(err error, label string) error {
+	if errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("project not found: %q", label)
 	}
 	return err
 }

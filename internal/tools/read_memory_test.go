@@ -17,6 +17,7 @@ package tools
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -153,5 +154,32 @@ func TestReadMemoryTool_ProjectNotFound(t *testing.T) {
 	_, err = tool.Execute(context.Background(), parsed)
 	if err == nil {
 		t.Fatal("expected an execution error for a nonexistent project")
+	}
+}
+
+// TestReadMemoryTool_MaxBytes checks that a long file is cut at a line
+// break within max_bytes, note included, and that the note gives the
+// sizes; a short file comes back whole.
+func TestReadMemoryTool_MaxBytes(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	ctx := context.Background()
+	s, _ := mgr.Get(ctx, r.DefaultDBPath)
+	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+	long := strings.Repeat("line of memory\n", 400)
+	if err := s.WriteDocument(ctx, "acme", "", "memory", long); err != nil {
+		t.Fatal(err)
+	}
+	tool := &ReadMemoryTool{Resolver: r, Stores: mgr}
+	text := runTool(t, tool, map[string]any{"project": "acme", "filename": "memory", "max_bytes": 2048}).Text
+	if len(text) > 2048 || !strings.Contains(text, "[cut: ") || !strings.Contains(text, "line of memory\n\n[cut") {
+		t.Errorf("cut text (%d bytes) = ...%q", len(text), text[max(0, len(text)-200):])
+	}
+	if text := runTool(t, tool, map[string]any{"project": "acme", "filename": "memory"}).Text; strings.Contains(text, "[cut") {
+		t.Error("a 6 KB file was cut at the 1 MB default")
+	}
+	if _, err := tool.Validate(mustJSON(t, map[string]any{"filename": "memory", "max_bytes": 10})); err == nil {
+		t.Error("a max_bytes below the minimum was accepted")
 	}
 }

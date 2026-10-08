@@ -44,6 +44,12 @@ var ErrOpenFailed = errors.New("could not open vault")
 // sync82 has upgraded the vault, and this one refuses to read or write it.
 var ErrSchemaTooNew = errors.New("the vault's schema is newer than this sync82 supports; upgrade sync82")
 
-// ErrVaultNotFound is wrapped by Manager.GetExisting when no vault file
-// exists at the requested path.
+// ErrVaultNotFound is returned by Manager.GetExisting when no vault file
+// exists at the requested path. Its message holds no path; callers know it.
 var ErrVaultNotFound = errors.New("vault not found")
+
+// ErrStorageConflict is wrapped by WriteKinds when a write would store a
+// kind the other way it is stored already: as a document while it has
+// entries, or as entries while it has a document. The message names the
+// kind and its current storage.
+var ErrStorageConflict = errors.New("storage conflict")

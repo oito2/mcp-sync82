@@ -28,10 +28,10 @@ go vet ./...
 go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run ./...   # precisa informar "0 issues."
 go build ./...
 go test ./... -race
-go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 ```
 
-Os seis precisam passar — [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) os roda a cada push e pull request contra `main` e bloqueia o merge caso contrário. Os testes rodam em Linux, macOS e Windows (formatação, golangci-lint e `govulncheck` só no Linux). O golangci-lint usa o `.golangci.yml` do repositório e a versão fixada em `GOLANGCI_LINT_VERSION` nos workflows — atualize lá e no comando acima juntos; alguns testes compilam o binário real e conversam com ele via stdio — `go test -short ./...` pula esses. A CI também gera um conjunto completo de artefatos de release com `scripts/release` (o programa que o workflow de release usa), confere que o `self-update` consegue encontrar, verificar e executar os binários, e valida o `server.json` com o `mcp-publisher` — veja [Publicando uma release](#publicando-uma-release).
+Os seis precisam passar — [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) os roda a cada push e pull request contra `main` e bloqueia o merge caso contrário. Os testes rodam em Linux, macOS e Windows (formatação e `govulncheck` só no Linux; o golangci-lint roda no Linux para os alvos Linux, Windows e macOS, então os arquivos compilados só para um deles também passam pelo lint). O golangci-lint usa o `.golangci.yml` do repositório e a versão fixada em `GOLANGCI_LINT_VERSION` nos workflows, e o govulncheck a versão fixada em `GOVULNCHECK_VERSION` — atualize cada um lá e nos comandos acima juntos; alguns testes compilam o binário real e conversam com ele via stdio — `go test -short ./...` pula esses. Um teste que roda `install` ou `uninstall` via `run` precisa chamar `isolateClients` (em `cmd/sync82/main_test.go`) antes: a detecção de clientes olha o `PATH` além do diretório home, então só um `HOME` temporário ainda deixaria o teste ver, e alterar, os clientes MCP instalados na sua máquina. A CI também gera um conjunto completo de artefatos de release com `scripts/release` (o programa que o workflow de release usa), confere que o `self-update` consegue encontrar, verificar e executar os binários, e valida o `server.json` com o `mcp-publisher` — veja [Publicando uma release](#publicando-uma-release).
 
 ## Fazendo uma mudança
 
@@ -80,13 +80,23 @@ git push origin v1.2.3
 | Job | O que faz |
 |---|---|
 | `validate` | Rejeita uma tag que não seja exatamente `vMAJOR.MINOR.PATCH`. |
-| `checks` | Roda as checagens da CI (gofmt, vet, golangci-lint, build, `go test -race`, govulncheck) no commit da tag. |
-| `release` | Roda `go run ./scripts/release <tag>`, valida o `server.json` com `mcp-publisher validate`, assina o `checksums.txt` com `cosign sign-blob` (keyless) em `checksums.txt.sigstore.json`, registra atestações de proveniência de build para `dist/sync82_*` e `dist/sync82.mcpb`, e cria a release do GitHub com todos os arquivos de `dist/`. |
+| `checks` | Roda as checagens da CI no commit da tag, em Linux, macOS e Windows (gofmt, golangci-lint e govulncheck só no Linux): vet, build, `go test -race`. |
+| `build` | Somente leitura. Roda `go run ./scripts/release <tag>`, confere que `sync82_linux_amd64 --version` imprime a tag, roda o teste de contrato do self-update (`TestReleaseContract`) sobre o `dist/`, valida o `server.json` com `mcp-publisher validate` e envia o `dist/` como artefato do workflow. |
+| `sign-publish` | O único job com `contents: write`, `id-token: write` e `attestations: write`; ele não faz checkout nem roda código do repositório. Baixa o `dist/` (o download falha se o digest não confere), confere cada asset com `sha256sum --check checksums.txt`, assina o `checksums.txt` com `cosign sign-blob` (keyless) em `checksums.txt.sigstore.json`, registra atestações de proveniência de build para `dist/sync82_*` e `dist/sync82.mcpb`, e cria a release do GitHub com todos os arquivos de `dist/`. |
 | `publish-registry` | Baixa o `server.json` da release, faz login no MCP Registry com OIDC do GitHub e o publica. |
 
-O `publish-registry` é um job separado para poder ser executado de novo sozinho (ex. depois de uma indisponibilidade do registry) sem recriar a release.
+Build e assinatura são jobs separados para que o código que o build roda (o repositório, as dependências dele e o `mcp-publisher`) nunca tenha as permissões que assinam, atestam ou publicam. Uma execução que falha antes do `sign-publish` não publica nada e pode ser executada de novo; um `sign-publish` que falhou pode ser executado de novo sozinho por 7 dias, enquanto o artefato do build existir, e com "Re-run all jobs" depois disso. O `publish-registry` é um job separado para poder ser executado de novo sozinho (ex. depois de uma indisponibilidade do registry) sem recriar a release.
 
-**Atualizando o `mcp-publisher`** — a versão é fixada por `MCP_PUBLISHER_VERSION` e o SHA-256 do `mcp-publisher_linux_amd64.tar.gz` dela por `MCP_PUBLISHER_SHA256`, tanto no `release.yml` quanto no `ci.yml`. Atualize os dois juntos, nos dois arquivos; um hash que não confere faz a checagem do download falhar.
+**Versões de ferramentas fixadas** — antes de uma release, confira se estas versões precisam de atualização; o Dependabot atualiza as actions e os módulos Go, mas não estas:
+
+| Versão fixada | Onde |
+|---|---|
+| `GOLANGCI_LINT_VERSION` | `env` do `ci.yml` e do `release.yml` |
+| `GOVULNCHECK_VERSION` | `env` do `ci.yml` e do `release.yml` (e o comando em [Configurando o ambiente](#configurando-o-ambiente)) |
+| `MCP_PUBLISHER_VERSION`, `MCP_PUBLISHER_SHA256` | a action local `.github/actions/install-mcp-publisher/action.yml` |
+| `cosign-release` | o passo `sigstore/cosign-installer` do `release.yml` |
+
+**Atualizando o `mcp-publisher`** — a versão é fixada por `MCP_PUBLISHER_VERSION` e o SHA-256 do `mcp-publisher_linux_amd64.tar.gz` dela por `MCP_PUBLISHER_SHA256`, na action local [`.github/actions/install-mcp-publisher/action.yml`](../../.github/actions/install-mcp-publisher/action.yml), usada tanto pelo `ci.yml` quanto pelo `release.yml`. Atualize os dois juntos; um hash que não confere faz a checagem do download falhar.
 
 ## Reportando bugs e sugerindo funcionalidades
 

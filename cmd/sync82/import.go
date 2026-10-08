@@ -34,7 +34,7 @@ import (
 func RunImport(ctx context.Context, args []string, deps memoryCmdDeps) int {
 	project, subproject, inputDir, vaultPath, dryRun, err := parseImportArgs(args)
 	if err != nil {
-		return usageError(deps.Stderr, err)
+		return commandUsageError(deps.Stderr, "import", err)
 	}
 
 	vaultPath = deps.Resolver.DBPathOrDefault(vaultPath)

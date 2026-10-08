@@ -154,9 +154,17 @@ sync82 config set-vault /a/writable/path/vault.db
 
 **Symptom:** every tool call on that vault fails. sync82 1.0.0 answers `internal error: could not open the vault database`; later versions answer `could not open the vault database: the vault's schema is newer than this sync82 supports; upgrade sync82`. The server log (stderr, shown in the client's MCP logs) and CLI commands such as `sync82 export` print the versions involved: `vault schema version 3 is newer than this sync82 supports (2)`.
 
-**Cause:** the vault was opened by a newer sync82, which upgraded its schema — version 3, for example, adds the full-text search indexes — and is now being opened by an older binary. Several clients sharing one vault can each run a different sync82 binary. The older binary refuses the vault instead of writing to it, since its writes would leave the newer parts of the schema out of date.
+**Cause:** the vault was opened by a newer sync82, which upgraded its schema — version 3 (sync82 1.1.0) adds the full-text search indexes and version 4 (sync82 1.2.0) makes ids never reused — and is now being opened by an older binary. Several clients sharing one vault can each run a different sync82 binary. The older binary refuses the vault instead of writing to it, since its writes would leave the newer parts of the schema out of date.
 
 **Solution:** upgrade the sync82 binary every client uses (`sync82 self-update`, or `go install github.com/oito2/mcp-sync82/cmd/sync82@latest`) and restart the clients. Check each client's binary with `sync82 version` or with the path its MCP configuration points to. A schema upgrade can't be undone. To go back to an older sync82, export the projects with the newer one (`sync82 export --all <dir>`) and import them with the older one into a new vault (`sync82 import`, with `--path` pointing at the new vault file).
+
+### `self-update` says the previous version is still in use
+
+**Symptom:** `sync82 self-update` on Windows stops with `the previous version is still in use: …\sync82.exe.bak can't be removed or moved aside (…); restart your MCP clients, then try again`.
+
+**Cause:** an MCP client still runs the binary that the last update kept as `sync82.exe.bak`. Windows can't delete a running program; the update moves it aside to `sync82.exe.bak.old-<n>` instead, and this message means even that failed.
+
+**Solution:** quit and reopen your MCP clients (or end the `sync82.exe` processes), then run `sync82 self-update` again. Leftover `sync82.exe.bak.old-*` files are removed by the next update once nothing runs them.
 
 ---
 

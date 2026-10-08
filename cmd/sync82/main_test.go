@@ -29,6 +29,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/oito2/mcp-sync82/internal/installer"
 	"github.com/oito2/mcp-sync82/internal/server"
 	"github.com/oito2/mcp-sync82/internal/store"
 	"github.com/oito2/mcp-sync82/internal/tools"
@@ -114,9 +115,7 @@ func TestBuildRegisteredTools_MatchesEveryToolImplementation(t *testing.T) {
 // unknown install target, 2 for the usage errors), without contacting the
 // network or creating the default vault in the isolated home.
 func TestRun_DispatchRejectsBadArgumentsWithoutSideEffects(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
+	home := isolateClients(t)
 	cases := []struct {
 		args      []string
 		code      int
@@ -135,7 +134,7 @@ func TestRun_DispatchRejectsBadArgumentsWithoutSideEffects(t *testing.T) {
 		if code := run(context.Background(), c.args, strings.NewReader(""), &stdout, &stderr); code != c.code {
 			t.Errorf("run(%q) = %d, want %d; stderr=%s", c.args, code, c.code, stderr.String())
 		}
-		if c.code == usageExitCode && !strings.Contains(stderr.String(), "Run 'sync82 --help' for usage.") {
+		if c.code == usageExitCode && !strings.Contains(stderr.String(), "--help' for usage.") {
 			t.Errorf("run(%q) stderr = %q, want the --help pointer of a usage error", c.args, stderr.String())
 		}
 		if !strings.Contains(stderr.String(), c.stderrHas) {
@@ -235,7 +234,10 @@ func connectRegisteredToolsWith(t *testing.T, opts *mcp.ClientOptions) (*mcp.Cli
 	t.Cleanup(func() { mgr.Close() })
 	resolver := tools.NewResolver(filepath.Join(t.TempDir(), "vault.db"), slog.New(slog.DiscardHandler))
 	registered := tools.Registered(resolver, mgr)
-	s := server.New("sync82-test", "v0", slog.New(slog.DiscardHandler), registered, &tools.Resources{Resolver: resolver, Stores: mgr})
+	s := server.New("sync82-test", "v0", slog.New(slog.DiscardHandler), server.Options{
+		Tools: registered, Prompts: tools.Prompts, ResourceTemplates: tools.ResourceTemplates,
+		Resources: &tools.Resources{Resolver: resolver, Stores: mgr},
+	})
 
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	ss, err := s.Connect(context.Background(), serverTransport, nil)
@@ -461,6 +463,16 @@ func TestServer_NotifiesResourceListChanges(t *testing.T) {
 	expect("rename_project", true)
 	callText(t, cs, "delete_project", map[string]any{"project": "ghost", "confirm": true}, true)
 	expect("a failed delete_project", false)
+	callText(t, cs, "create_project", map[string]any{"project": "acme2", "subproject": "api"}, false)
+	expect("create_project of a subproject", true)
+	callText(t, cs, "delete_project", map[string]any{"project": "acme2", "confirm": true}, false)
+	expect("delete_project asking for subproject_action", false)
+	callText(t, cs, "delete_project", map[string]any{"project": "acme2", "confirm": true, "subproject_action": "cancel"}, false)
+	expect("a cancelled delete_project", false)
+	callText(t, cs, "delete_project", map[string]any{"project": "acme2", "confirm": true, "subproject_action": "delete_all"}, false)
+	expect("delete_project with delete_all", true)
+	callText(t, cs, "create_project", map[string]any{"project": "acme2"}, false)
+	expect("create_project again", true)
 	callText(t, cs, "delete_project", map[string]any{"project": "acme2", "confirm": true}, false)
 	expect("delete_project", true)
 }
@@ -517,13 +529,72 @@ func TestRun_RejectsSurplusArguments(t *testing.T) {
 // dispatched by run and rejects a target outside installer.Targets with
 // exit code 1, listing the available targets.
 func TestRun_UninstallRejectsUnknownTarget(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	isolateClients(t)
 	var stdout, stderr bytes.Buffer
 	if code := run(context.Background(), []string{"uninstall", "nonexistent-client"}, strings.NewReader(""), &stdout, &stderr); code != 1 {
 		t.Fatalf("run(uninstall nonexistent-client) = %d, want 1", code)
 	}
 	if !strings.Contains(stderr.String(), "Unknown target") || !strings.Contains(stderr.String(), "claude-desktop") {
 		t.Errorf("stderr = %q, want the unknown target and the available targets", stderr.String())
+	}
+}
+
+// TestRun_SubcommandHelp checks that -h and --help after a subcommand print
+// that subcommand's usage to stdout and exit 0, without running it: no
+// vault is created and no client is touched.
+func TestRun_SubcommandHelp(t *testing.T) {
+	home := isolateClients(t)
+	cases := map[string][]string{
+		"Usage: sync82 [serve]":            {"serve", "--help"},
+		"Usage: sync82 install [target]":   {"install", "-h"},
+		"Usage: sync82 config set-vault":   {"config", "--help"},
+		"Usage: sync82 self-update":        {"self-update", "--check", "--help"},
+		"Usage: sync82 export <project>":   {"export", "acme", "out", "--help"},
+		"Usage: sync82 import <project>":   {"import", "-h"},
+		"Usage: sync82 uninstall [target]": {"uninstall", "--help"},
+		"Usage: sync82 search <query>":     {"search", "--help"},
+		"Usage: sync82 context <project>":  {"context", "acme", "-h"},
+		"Usage: sync82 health <project>":   {"health", "--all", "--help"},
+	}
+	for want, args := range cases {
+		var stdout, stderr bytes.Buffer
+		if code := run(context.Background(), args, strings.NewReader(""), &stdout, &stderr); code != 0 {
+			t.Errorf("run(%q) = %d, want 0; stderr=%s", args, code, stderr.String())
+		}
+		if !strings.HasPrefix(stdout.String(), want) {
+			t.Errorf("run(%q) stdout = %q, want it to start with %q", args, stdout.String(), want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".sync82")); !os.IsNotExist(err) {
+		t.Errorf("~/.sync82 exists after help requests (stat err = %v)", err)
+	}
+}
+
+// isolateClients points HOME (and the Windows profile directories) at a
+// new temporary directory and PATH at an empty one, and clears the
+// variables the installer reads client locations from, so an install or
+// uninstall that run executes in a test can neither detect nor change the
+// MCP clients of the machine running it: client detection looks at PATH
+// as well as at the home directory. It returns the home directory.
+func isolateClients(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	for key, value := range map[string]string{
+		"HOME": home, "USERPROFILE": home, "PATH": t.TempDir(),
+		"APPDATA": filepath.Join(home, "AppData", "Roaming"), "LOCALAPPDATA": filepath.Join(home, "AppData", "Local"),
+		"XDG_CONFIG_HOME": "", "CLINE_DATA_DIR": "", "CLINE_DIR": "", "CLINE_MCP_SETTINGS_PATH": "",
+	} {
+		t.Setenv(key, value)
+	}
+	return home
+}
+
+// TestIsolateClients_DetectsNoClient checks that, under isolateClients, no
+// built-in install target is detected, whatever is installed on the
+// machine running the test.
+func TestIsolateClients_DetectsNoClient(t *testing.T) {
+	home := isolateClients(t)
+	if detected := installer.DetectedIn(installer.Targets, installer.HostEnv(home)); len(detected) != 0 {
+		t.Errorf("detected %v under isolateClients, want none", installer.TargetNamesIn(detected))
 	}
 }

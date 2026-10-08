@@ -70,9 +70,10 @@ func validateAppendInput(kind, content string) (string, error) {
 }
 
 // appendMemoryCore appends content as a new entry of kind in the given
-// project and subproject of s. It is shared by append_memory and
-// update_project_memory. Entry id marker lines are removed from content
-// (stripEntryMarkers) before it is validated with validateAppendInput;
+// project and subproject of s, for append_memory; update_project_memory
+// calls planAppend, which this wraps, directly. Entry id marker lines are
+// removed from content (stripEntryMarkers) before it is validated with
+// validateAppendInput;
 // a kind already stored as a document is refused with an error wrapping
 // errAppendToDocumentKind, and a missing project yields the error built
 // by wrapNotFound. For the date-headed kinds the entry's date is taken
@@ -135,9 +136,9 @@ func validateWriteInput(kind, content string) (string, error) {
 }
 
 // writeMemoryCore replaces the whole content of kind in the given project
-// and subproject of s. It is shared by write_memory and
-// update_project_memory. Entry id marker lines are removed from content
-// (stripEntryMarkers) first; see planWrite for how the kind is stored.
+// and subproject of s, for write_memory; update_project_memory calls
+// planWrite, which this wraps, directly. Entry id marker lines are removed
+// from content (stripEntryMarkers) first; see planWrite for how the kind is stored.
 // Invalid input is rejected with validateWriteInput's error, and a missing
 // project yields the error built by wrapNotFound.
 func writeMemoryCore(ctx context.Context, s *store.Store, project, subproject, kind, content string) error {

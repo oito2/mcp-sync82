@@ -84,6 +84,9 @@ The AI agent calls these over MCP — it never touches the database directly. Fu
 | `sync82 self-update [--check] [--yes] \| --rollback` | Check GitHub Releases and update the binary in place (`--rollback` restores the previous version) |
 | `sync82 export <project> [subproject] <output-dir>` | Dump a project's memory to plain `.md` files (`--all` for the whole vault) |
 | `sync82 import <project> [subproject] <input-dir> [--dry-run]` | Restore a project's memory from plain `.md` files (the inverse of `export`); `--dry-run` only reports what would change |
+| `sync82 search <query> [--project P] [--json]` | Search the memory, like the `search_memory` tool |
+| `sync82 context <project> [subproject] [--full]` | Print a project's memory, like the `load_project_context` tool |
+| `sync82 health <project> [subproject] \| --all` | Check a project, or every project, for missing files and out-of-date memory |
 | `sync82 help` / `--help` / `-h` | Print the list of subcommands |
 | `sync82 version` / `--version` / `-v` | Print the installed version |
 
@@ -188,7 +191,7 @@ sync82 self-update           # download, verify (SHA-256) and install the latest
 sync82 self-update --rollback   # restore the previous version, kept as <binary>.bak
 ```
 
-`self-update` works on a release binary or a `go install .../sync82@vX.Y.Z` build. If you installed with `go install`, update with `go install github.com/oito2/mcp-sync82/cmd/sync82@latest` instead — don't mix the two. The Claude Desktop extension is updated by installing a newer `sync82.mcpb`. A release can upgrade the vault schema (1.1.0 does); once the new version has opened a vault, the previous binary — including one restored by `--rollback` — refuses that vault, so update every client that shares it and don't roll back past such a release (see [Troubleshooting](docs/en/troubleshooting/common-issues.md#vault-schema-version-is-newer-than-this-sync82-supports)).
+`self-update` works on a release binary or a `go install .../sync82@vX.Y.Z` build. If you installed with `go install`, update with `go install github.com/oito2/mcp-sync82/cmd/sync82@latest` instead — don't mix the two. The Claude Desktop extension is updated by installing a newer `sync82.mcpb`. A release can upgrade the vault schema (1.1.0 and 1.2.0 do); once the new version has opened a vault, the previous binary — including one restored by `--rollback` — refuses that vault, so update every client that shares it and don't roll back past such a release (see [Troubleshooting](docs/en/troubleshooting/common-issues.md#vault-schema-version-is-newer-than-this-sync82-supports)).
 
 To remove sync82 from every detected client, run `sync82 uninstall` (add `--purge` to also delete the default vault and config in `~/.sync82`) — see [Uninstallation](docs/en/getting-started/uninstallation.md) for the complete removal, binary included.
 

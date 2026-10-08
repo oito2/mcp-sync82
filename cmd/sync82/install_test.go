@@ -18,6 +18,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -72,8 +73,8 @@ func TestRunInstall_NoTarget_FailureSurfacesAsExitCode(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit code = %d, want 1 when at least one target fails", code)
 	}
-	if !strings.Contains(stdout.String(), "Done. 1 installed, 0 skipped, 1 failed.") {
-		t.Errorf("stdout = %q, want the summary counting 1 installed/0 skipped/1 failed", stdout.String())
+	if !strings.Contains(stdout.String(), "Done. 1 installed, 0 skipped, 0 need a manual step, 1 failed.") {
+		t.Errorf("stdout = %q, want the summary counting 1 installed/0 skipped/0 manual/1 failed", stdout.String())
 	}
 }
 
@@ -142,8 +143,8 @@ func TestRunInstall_NoTarget_ProceedsAndSummarizes(t *testing.T) {
 	}
 	// fakeTargets: only ok-cli ("true") is detected; the undetected ones
 	// are neither listed nor counted.
-	if !strings.Contains(stdout.String(), "Done. 1 installed, 0 skipped, 0 failed.") {
-		t.Errorf("stdout = %q, want the summary counting 1 installed/0 skipped/0 failed", stdout.String())
+	if !strings.Contains(stdout.String(), "Done. 1 installed, 0 skipped, 0 need a manual step, 0 failed.") {
+		t.Errorf("stdout = %q, want the summary counting 1 installed/0 skipped/0 manual/0 failed", stdout.String())
 	}
 }
 
@@ -194,5 +195,51 @@ func TestRunInstall_SpecificTarget_NotDetected(t *testing.T) {
 		if code != 0 || !strings.Contains(stdout.String(), "Skipped: "+name+" not detected.") {
 			t.Errorf("install %s = %d, stdout %q; want the not-detected skip", name, code, stdout.String())
 		}
+	}
+}
+
+// TestRunInstall_NoTarget_ManualStepCountedAndFails checks that a file
+// target whose config holds comments is counted as needing a manual step,
+// left unchanged, and makes install exit with code 1.
+func TestRunInstall_NoTarget_ManualStepCountedAndFails(t *testing.T) {
+	home := t.TempDir()
+	configPath := filepath.Join(home, "jsonc", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := "{\n  // comment\n}\n"
+	if err := os.WriteFile(configPath, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	targets := append(fakeTargets(home), installer.Target{
+		Kind:        installer.KindFile,
+		Name:        "jsonc-file",
+		Shape:       installer.Shape{Key: "mcpServers", Entry: func(bin string) map[string]any { return map[string]any{"command": bin} }},
+		DetectDirs:  func(installer.Env) []string { return []string{filepath.Dir(configPath)} },
+		ConfigPaths: func(installer.Env) []string { return []string{configPath} },
+	})
+	var stdout, stderr bytes.Buffer
+	if code := RunInstall(context.Background(), nil, strings.NewReader("y\n"), &stdout, &stderr, home, "/opt/sync82", targets); code != 1 {
+		t.Fatalf("exit code = %d, want 1 when a target needs a manual step", code)
+	}
+	for _, want := range []string{"jsonc-file — manual step needed", "Done. 1 installed, 0 skipped, 1 need a manual step, 0 failed."} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("stdout = %q, want %q", stdout.String(), want)
+		}
+	}
+	if data, _ := os.ReadFile(configPath); string(data) != original {
+		t.Errorf("config = %q, want it untouched", data)
+	}
+}
+
+// TestRunInstall_UsageErrorPrintsNothingElse checks that a usage error
+// prints only the error, not the "Registering …" line.
+func TestRunInstall_UsageErrorPrintsNothingElse(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := RunInstall(context.Background(), []string{"a", "b"}, strings.NewReader(""), &stdout, &stderr, t.TempDir(), "/opt/sync82", nil); code != usageExitCode {
+		t.Fatalf("exit code = %d, want %d", code, usageExitCode)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want nothing on a usage error", stdout.String())
 	}
 }

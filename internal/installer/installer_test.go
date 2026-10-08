@@ -250,9 +250,12 @@ func TestInstallTarget_File_LeavesJSONCUnchanged(t *testing.T) {
 	original := "{\n  // a comment\n  \"mcpServers\": {},\n}\n"
 	writeFile(t, configPath, original, 0o644)
 
-	got, _, errOut := install(t, fileTargetAt(configPath), testEnv("linux", t.TempDir(), nil))
-	if got != ResultFail {
-		t.Fatalf("InstallTarget() = %q, want %q", got, ResultFail)
+	got, out, errOut := install(t, fileTargetAt(configPath), testEnv("linux", t.TempDir(), nil))
+	if got != ResultManual {
+		t.Fatalf("InstallTarget() = %q, want %q", got, ResultManual)
+	}
+	if !strings.Contains(out, "manual step needed") {
+		t.Errorf("stdout = %q, want the manual-step status line", out)
 	}
 	if data, _ := os.ReadFile(configPath); string(data) != original {
 		t.Fatalf("config = %q, want it untouched", data)
@@ -432,5 +435,75 @@ func TestInstallTarget_File_KeepsUserValuesAndRefusesBadShapes(t *testing.T) {
 		if data, _ := os.ReadFile(path); string(data) != original {
 			t.Errorf("%s: the file was rewritten to %q", original, data)
 		}
+	}
+}
+
+// TestInstallTarget_File_JSONCAlreadyRegistered checks that a config with
+// comments that already holds the wanted entry counts as installed,
+// unchanged, instead of needing a manual step on every run; a differing
+// entry still needs one.
+func TestInstallTarget_File_JSONCAlreadyRegistered(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	original := "{\n  // a comment\n  \"mcpServers\": {\"sync82\": {\"command\": \"/opt/sync82\", \"args\": [], \"env\": {\"X\": \"1\"}}}\n}\n"
+	writeFile(t, configPath, original, 0o644)
+	got, out, _ := install(t, fileTargetAt(configPath), testEnv("linux", t.TempDir(), nil))
+	if got != ResultOK || !strings.Contains(out, "updated.") {
+		t.Fatalf("InstallTarget() = %q, stdout %q; want an unchanged success", got, out)
+	}
+	if data, _ := os.ReadFile(configPath); string(data) != original {
+		t.Fatalf("config = %q, want it untouched", data)
+	}
+
+	writeFile(t, configPath, "{\n  // a comment\n  \"mcpServers\": {\"sync82\": {\"command\": \"/old/sync82\", \"args\": []}}\n}\n", 0o644)
+	if got, _, _ := install(t, fileTargetAt(configPath), testEnv("linux", t.TempDir(), nil)); got != ResultManual {
+		t.Errorf("a differing entry: InstallTarget() = %q, want %q", got, ResultManual)
+	}
+}
+
+// TestFileTargets_ByteOrderMark checks that a config file starting with a
+// UTF-8 byte order mark is read: install writes the entry (dropping the
+// mark), and uninstall finds and removes it.
+func TestFileTargets_ByteOrderMark(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "mcp.json")
+	writeFile(t, configPath, "\xef\xbb\xbf{\"mcpServers\": {\"other\": {\"command\": \"x\"}}}", 0o644)
+	if got, _, errOut := install(t, fileTargetAt(configPath), testEnv("linux", t.TempDir(), nil)); got != ResultOK {
+		t.Fatalf("install with a BOM = %q, stderr %q", got, errOut)
+	}
+	if has, err := fileHasEntry(configPath, shapeMCPServers); err != nil || !has {
+		t.Fatalf("entry after install: %v, %v", has, err)
+	}
+	writeFile(t, configPath, "\xef\xbb\xbf{\"mcpServers\": {\"sync82\": {\"command\": \"/opt/sync82\"}}}", 0o644)
+	if got, _, _ := uninstall(t, fileTargetAt(configPath), testEnv("linux", t.TempDir(), nil)); got != ResultOK {
+		t.Errorf("uninstall with a BOM = %q, want the entry removed", got)
+	}
+}
+
+// TestUninstallTarget_File_UnreadableConfigFails checks that a config file
+// that can't be parsed is reported as a failure, not as a file without
+// sync82.
+func TestUninstallTarget_File_UnreadableConfigFails(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "mcp.json")
+	writeFile(t, configPath, "not json at all", 0o644)
+	got, _, errOut := uninstall(t, fileTargetAt(configPath), testEnv("linux", t.TempDir(), nil))
+	if got != ResultFail || errOut == "" {
+		t.Errorf("uninstall of an unparsable config = %q, stderr %q; want a reported failure", got, errOut)
+	}
+}
+
+// TestClineCLIDirs_ClineDir checks that an absolute CLINE_DIR replaces
+// ~/.cline, that CLINE_DATA_DIR still wins over it, and that a relative
+// CLINE_DIR is ignored.
+func TestClineCLIDirs_ClineDir(t *testing.T) {
+	home := t.TempDir()
+	custom := filepath.Join(t.TempDir(), "cline")
+	if marker, data := clineCLIDirs(testEnv("linux", home, map[string]string{"CLINE_DIR": custom})); marker != custom || data != filepath.Join(custom, "data") {
+		t.Errorf("CLINE_DIR: %s, %s", marker, data)
+	}
+	dataDir := filepath.Join(t.TempDir(), "data")
+	if marker, data := clineCLIDirs(testEnv("linux", home, map[string]string{"CLINE_DIR": custom, "CLINE_DATA_DIR": dataDir})); marker != dataDir || data != dataDir {
+		t.Errorf("CLINE_DATA_DIR with CLINE_DIR: %s, %s", marker, data)
+	}
+	if marker, _ := clineCLIDirs(testEnv("linux", home, map[string]string{"CLINE_DIR": "relative"})); marker != filepath.Join(home, ".cline") {
+		t.Errorf("relative CLINE_DIR: %s, want ~/.cline", marker)
 	}
 }

@@ -79,8 +79,8 @@ func AtomicReplaceFile(path string, data []byte, perm os.FileMode) error {
 
 // writeAndRename writes data to a temporary file in path's directory,
 // creating missing directories private to the user (0700), syncs it, sets
-// perm on it and renames it onto path, which replaces whatever entry path
-// names (a symlink itself, not its target). It then syncs the directory,
+// perm on it and renames it onto path with renameFile, which replaces
+// whatever entry path names (a symlink itself, not its target). It then syncs the directory,
 // ignoring a failure. The temporary file is removed on every failure.
 func writeAndRename(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
@@ -109,16 +109,31 @@ func writeAndRename(path string, data []byte, perm os.FileMode) error {
 	if err := os.Chmod(tmpPath, perm); err != nil {
 		return fmt.Errorf("chmod temp file %s: %w", tmpPath, err)
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := renameFile(tmpPath, path); err != nil {
 		return fmt.Errorf("rename %s to %s: %w", tmpPath, path, err)
 	}
-	if runtime.GOOS != "windows" {
-		// Persist the rename itself: the new directory entry must reach
-		// the disk too. Best-effort — the data is already written.
-		if d, err := os.Open(dir); err == nil {
-			_ = d.Sync()
-			d.Close()
-		}
-	}
+	// Persist the rename itself: the new directory entry must reach the
+	// disk too. Best-effort — the data is already written.
+	SyncDir(dir)
 	return nil
+}
+
+// Rename renames oldpath to newpath like os.Rename. On Windows, a rename
+// blocked by another process holding either file open (an antivirus scan,
+// a reader) is retried for up to a second.
+func Rename(oldpath, newpath string) error {
+	return renameFile(oldpath, newpath)
+}
+
+// SyncDir flushes dir's entries to disk, so a rename or a new file in it
+// survives a crash. It is best-effort: a failure is ignored, and it does
+// nothing on Windows, where a directory can't be synced this way.
+func SyncDir(dir string) {
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		d.Close()
+	}
 }

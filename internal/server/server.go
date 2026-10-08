@@ -30,48 +30,92 @@ import (
 	"github.com/oito2/mcp-sync82/internal/tools"
 )
 
-// New builds the sync82 MCP server and registers every tool in
-// registeredTools, with its toolAnnotations, and every prompt in
-// tools.Prompts. When resources is not nil it also serves the resources
-// and completes the arguments of the prompts and resource templates.
+// Options lists what New registers on the server. Tools are registered
+// with their toolAnnotations and Prompts as MCP prompts. When Resources is
+// not nil, ResourceTemplates are served through it, and the arguments of
+// Prompts and ResourceTemplates are completed from it; without it, neither
+// resources nor completion are offered.
+type Options struct {
+	Tools             []tools.Tool
+	Prompts           []tools.PromptDefinition
+	ResourceTemplates []tools.ResourceTemplate
+	Resources         *tools.Resources
+}
+
+// New builds the sync82 MCP server with everything opts lists.
 // name/version identify the server to connecting clients; logger receives
 // every diagnostic message and must write only to stderr — stdout is the
-// JSON-RPC channel over the stdio transport.
-func New(name, version string, logger *slog.Logger, registeredTools []tools.Tool, resources *tools.Resources) *mcp.Server {
-	opts := &mcp.ServerOptions{Logger: logger}
-	if resources != nil {
-		opts.CompletionHandler = completionHandler(resources, logger)
+// JSON-RPC channel over the stdio transport. A tool call that creates,
+// renames or deletes a project tells clients the resource list changed,
+// when resources are served.
+func New(name, version string, logger *slog.Logger, opts Options) *mcp.Server {
+	serverOpts := &mcp.ServerOptions{Logger: slog.New(cancelAsInfo{logger.Handler()})}
+	if opts.Resources != nil {
+		serverOpts.CompletionHandler = completionHandler(opts, logger)
 	}
-	s := mcp.NewServer(&mcp.Implementation{Name: name, Version: version, Icons: serverIcons()}, opts)
+	s := mcp.NewServer(&mcp.Implementation{Name: name, Version: version, Icons: serverIcons()}, serverOpts)
 
-	// projectsChanged is set once the resources are registered; until then,
-	// and without resources, a change to the project list notifies nobody.
-	var projectsChanged func()
-	onProjectsChanged := func() {
-		if projectsChanged != nil {
-			projectsChanged()
-		}
+	onProjectsChanged := func() {}
+	if opts.Resources != nil && len(opts.ResourceTemplates) > 0 {
+		onProjectsChanged = addResources(s, opts.ResourceTemplates, opts.Resources, logger)
 	}
-	for _, t := range registeredTools {
+	addPrompts(s, opts.Prompts, logger)
+	for _, t := range opts.Tools {
 		schema := t.InputSchema()
 		// Arguments a tool doesn't define are rejected by its Validate;
 		// the schema says so too, so clients don't send them.
 		if _, set := schema["additionalProperties"]; !set {
 			schema["additionalProperties"] = false
 		}
-		s.AddTool(&mcp.Tool{
+		tool := &mcp.Tool{
 			Name:        t.Name(),
 			Description: t.Description(),
 			InputSchema: schema,
 			Annotations: toolAnnotations(t.Name()),
-		}, adapt(t, logger, onProjectsChanged))
-	}
-	addPrompts(s, logger)
-	if resources != nil {
-		projectsChanged = addResources(s, resources, logger)
+		}
+		if o, ok := t.(tools.OutputSchemaTool); ok {
+			tool.OutputSchema = o.OutputSchema()
+		}
+		s.AddTool(tool, adapt(t, logger, onProjectsChanged))
 	}
 
 	return s
+}
+
+// cancelAsInfo is the handler of the logger the SDK receives. It logs at
+// INFO an ERROR record whose "error" attribute is context.Canceled — the
+// SDK reports a server stopped by SIGINT/SIGTERM that way, and that is a
+// clean shutdown — and passes every other record to the wrapped handler
+// unchanged.
+type cancelAsInfo struct {
+	slog.Handler
+}
+
+// Handle passes r to the wrapped handler, at INFO when it is an ERROR
+// record caused by context.Canceled.
+func (h cancelAsInfo) Handle(ctx context.Context, r slog.Record) error {
+	if r.Level == slog.LevelError {
+		r.Attrs(func(a slog.Attr) bool {
+			if err, ok := a.Value.Any().(error); ok && a.Key == "error" && errors.Is(err, context.Canceled) {
+				r.Level = slog.LevelInfo
+				return false
+			}
+			return true
+		})
+	}
+	return h.Handler.Handle(ctx, r)
+}
+
+// WithAttrs returns the handler with attrs added, still logging
+// cancellations at INFO.
+func (h cancelAsInfo) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return cancelAsInfo{h.Handler.WithAttrs(attrs)}
+}
+
+// WithGroup returns the handler with the group opened, still logging
+// cancellations at INFO.
+func (h cancelAsInfo) WithGroup(name string) slog.Handler {
+	return cancelAsInfo{h.Handler.WithGroup(name)}
 }
 
 // toolAnnotations returns the MCP annotations of the tool called name, from
@@ -122,8 +166,14 @@ func serverIcons() []mcp.Icon {
 // tools, and some clients don't show them to the model at all, while a
 // tool error result lets the calling agent read the message and correct
 // its call.
+//
+// A tool with an output schema must return structured content with every
+// successful result, and clients reject one without it. Its results that
+// carry none, such as the request to name a project, are therefore marked
+// isError: the agent still reads the text and acts on it.
 func adapt(t tools.Tool, logger *slog.Logger, onProjectsChanged func()) mcp.ToolHandler {
 	hints, _ := tools.HintsFor(t.Name())
+	_, hasOutputSchema := t.(tools.OutputSchemaTool)
 	return func(ctx context.Context, req *mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
 		// The MCP SDK runs each request in its own goroutine and recovers
 		// from no panic: an unrecovered panic here (a bad type assertion, a
@@ -145,8 +195,11 @@ func adapt(t tools.Tool, logger *slog.Logger, onProjectsChanged func()) mcp.Tool
 		if eerr != nil {
 			return errorResult(clientMessage(logger, t.Name(), eerr)), nil
 		}
-		if hints.ChangesProjects && !toolResult.IsError {
+		if hints.ChangesProjects && !toolResult.IsError && !toolResult.ProjectsUnchanged {
 			onProjectsChanged()
+		}
+		if hasOutputSchema && toolResult.Structured == nil {
+			toolResult.IsError = true
 		}
 
 		return &mcp.CallToolResult{

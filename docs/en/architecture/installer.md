@@ -24,7 +24,7 @@ Which targets count as installed on your machine is decided per target — see [
 | Target | Kind | Install | Config files |
 |---|---|---|---|
 | `claude` | CLI | [Remove existing registrations](#removing-existing-cli-registrations), then `claude mcp add --scope user sync82 -- <absolute-path>` | `~/.claude.json`, written by Claude Code |
-| `claude-desktop` | file | `mcpServers.sync82 = {command, args}` | macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`; Windows: `%APPDATA%\Claude\claude_desktop_config.json`; Linux: `$XDG_CONFIG_HOME/Claude/claude_desktop_config.json` (default `~/.config/Claude/claude_desktop_config.json`); any other OS is skipped with `Skipped: claude-desktop (Claude Desktop is only available for macOS, Windows and Linux).` |
+| `claude-desktop` | file | `mcpServers.sync82 = {command, args}` | macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`; Windows: `%APPDATA%\Claude\claude_desktop_config.json`, and for the MSIX package (the claude.ai download and the Microsoft Store) `%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude\claude_desktop_config.json` — every one whose directory exists; Linux: `$XDG_CONFIG_HOME/Claude/claude_desktop_config.json` (default `~/.config/Claude/claude_desktop_config.json`); any other OS is skipped with `Skipped: claude-desktop (Claude Desktop is only available for macOS, Windows and Linux).` |
 | `antigravity` | file | `mcpServers.sync82 = {command, args}` | Install writes only `~/.gemini/config/mcp_config.json`; uninstall also cleans the legacy `~/.gemini/antigravity/mcp_config.json` and `~/.gemini/antigravity-ide/mcp_config.json` |
 | `codex` | CLI | `codex mcp get sync82`, then `codex mcp remove sync82` when it is registered, then `codex mcp add sync82 -- <absolute-path>` | `~/.codex/config.toml`, written by Codex |
 | `opencode` | file | `mcp.sync82 = {"type": "local", "command": ["<absolute-path>"], "enabled": true}` | Install writes `$XDG_CONFIG_HOME/opencode/opencode.json` (default `~/.config/opencode/opencode.json`), or `opencode.jsonc` when that is the only one of the two that exists; uninstall cleans `opencode.json`, `opencode.jsonc` and the legacy `config.json` in that directory |
@@ -45,13 +45,13 @@ A target is **detected** when its command is on `PATH` or one of its config dire
 | Target | Detected when |
 |---|---|
 | `claude` | `claude` is on `PATH` |
-| `claude-desktop` | Claude Desktop's config directory exists (`~/Library/Application Support/Claude`, `%APPDATA%\Claude` or `$XDG_CONFIG_HOME/Claude`) |
+| `claude-desktop` | Claude Desktop's config directory exists (`~/Library/Application Support/Claude`, `%APPDATA%\Claude`, `%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude` or `$XDG_CONFIG_HOME/Claude`) |
 | `antigravity` | `agy` is on `PATH`, or `~/.gemini/config` or `~/.gemini/antigravity` exists (a bare `~/.gemini` is not enough) |
 | `codex` | `codex` is on `PATH` |
 | `opencode` | `opencode` is on `PATH` |
 | `cursor` | `~/.cursor` exists |
 | `zed` | Zed's config directory exists (the directory of its `settings.json` above) |
-| `cline` | the extension's `saoudrizwan.claude-dev` directory, the CLI's `~/.cline` (or `$CLINE_DATA_DIR`), or the folder of `$CLINE_MCP_SETTINGS_PATH` exists |
+| `cline` | the extension's `saoudrizwan.claude-dev` directory, the CLI's `~/.cline` (or an absolute `$CLINE_DIR`, or `$CLINE_DATA_DIR`), or the folder of `$CLINE_MCP_SETTINGS_PATH` exists |
 
 ---
 
@@ -60,9 +60,12 @@ A target is **detected** when its command is on `PATH` or one of its config dire
 1. With no target, `install` acts only on detected clients: it prints `Detected the following MCP clients:` with one `  - <target>` line each and asks `Install sync82 into all N detected client(s)? [y/N]` (any other answer than `y`/`yes` prints `Aborted.`). When nothing is detected, it prints `No supported MCP clients detected. Supported targets: <targets>` and exits with `0` without asking. With one target, it runs only that one, without asking. More than one target is a usage error (exit code `2`); an unknown target exits with `1`.
 2. An unsupported OS prints `Skipped: <target> (<reason>).` — only `claude-desktop` has one: `Skipped: claude-desktop (Claude Desktop is only available for macOS, Windows and Linux).`; an explicit target whose client isn't detected prints `Skipped: <target> not detected.` Neither is an error.
 3. Otherwise it installs and prints `✓  <target> — configured.` for a new registration, or `✓  <target> — updated.` when sync82 was already registered — for `claude` and `codex`, when a previous registration was [removed](#removing-existing-cli-registrations) first; for file targets, when a config file already had a `sync82` entry. Warnings are printed after the status line.
-4. With no target, it ends with `Done. N installed, N skipped, N failed.` and exits with `1` if any target failed.
+4. A file target whose config file has comments or trailing commas leaves it unchanged and prints `!  <target> — manual step needed`, with the entry to add by hand on stderr — unless the file already holds that entry (keys you added to it, such as `env`, are allowed), which counts as `✓  <target> — updated.`, so re-running `install` after adding the entry by hand succeeds.
+5. With no target, it ends with `Done. N installed, N skipped, N need a manual step, N failed.` and exits with `1` if any target failed or needs a manual step.
 
-Re-running it is safe: `claude` and `codex` remove every existing registration before `mcp add`, since their `mcp add` refuses to replace one; file targets overwrite the `sync82` entry.
+Re-running it is safe: `claude` and `codex` remove every existing registration before `mcp add`, since their `mcp add` refuses to replace one; file targets overwrite the `sync82` entry. A config file starting with a UTF-8 byte order mark (written by some Windows editors) is read normally, and rewritten without the mark. A rewritten JSON file keeps every key and value, but its keys come out in alphabetical order and its indentation is two spaces.
+
+A file target is a read-merge-write of a file the client also owns. A client running while `install` writes may save its own copy of the config afterwards and drop the `sync82` entry, so quit the client before installing into it. The binary path registered is the one the running `sync82` resolves to, symlinks followed (`internal/binpath`), so the clients run the real file, which is also the one `self-update` replaces. On uninstall, a config file that can't be parsed is reported as `failed` with the reason, never taken for one without sync82.
 
 ### Removing existing CLI registrations
 
@@ -79,12 +82,12 @@ Both `install` and `uninstall` start a CLI target by removing sync82's existing 
 
 ## Uninstall flow
 
-`sync82 uninstall [target] [--purge]` mirrors install: no target prints `Detected the following MCP clients:` and asks `Remove sync82 from all N detected client(s)? [y/N]` (declining ends the run, `--purge` included); one target runs without asking. When nothing is detected, it prints `No supported MCP clients detected. Supported targets: <targets>` and `--purge` still runs.
+`sync82 uninstall [target] [--purge]` mirrors install: no target prints `Detected the following MCP clients:` and asks `Remove sync82 from all N detected client(s)? [y/N]` (declining ends the run, `--purge` included, and with `--purge` prints `--purge skipped too: nothing was removed or deleted.`); one target runs without asking. The list holds the detected targets plus every supported file target whose client is no longer detected but whose config file still holds a `sync82` entry (`UninstallCandidatesIn`); a config file that can't be read counts as holding one. When no target is listed, it prints `No supported MCP clients detected. Supported targets: <targets>` and `--purge` still runs.
 
 - **CLI targets** (`claude`, `codex`) — an explicit target whose command isn't on `PATH` prints `Skipped: <target> not detected.`; otherwise its registrations are [removed](#removing-existing-cli-registrations). It prints `✓  <target> — removed.` when something was removed, `⚠  <target> — nothing removed` when only a project-scope `claude` registration was found (followed by its warning), and `⚠  <target> — not configured, skipping` when nothing was registered.
 - **File targets** delete the `sync82` key from every config file that has one — for `antigravity`, all three `mcp_config.json` files; for `opencode`, `opencode.json`, `opencode.jsonc` and `config.json`; for `cline`, both the extension and CLI settings files — keeping every other key. An explicitly named file target is cleaned even when its client is no longer detected. A JSONC file is left unchanged and the target fails with a message to remove the entry by hand.
 
-Each target prints `✓  <target> — removed.`, `⚠  <target> — not configured, skipping`, `⚠  <target> — nothing removed`, a `Skipped: ...` line, or `✗  <target> — failed`; with no target, the run ends with `Done. N removed, N skipped, N failed.`
+Each target prints `✓  <target> — removed.`, `⚠  <target> — not configured, skipping`, `⚠  <target> — nothing removed`, a `Skipped: ...` line, `!  <target> — manual step needed` (a config file with comments, left unchanged, with the entry to remove by hand on stderr), or `✗  <target> — failed`; with no target, the run ends with `Done. N removed, N skipped, N need a manual step, N failed.`
 
 ### `--purge`
 

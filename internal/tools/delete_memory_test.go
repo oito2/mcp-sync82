@@ -123,7 +123,9 @@ func TestDeleteMemoryTool_RefusesProjectFromLastSession(t *testing.T) {
 	if err := s.WriteDocument(ctx, "acme", "", "notes", "keep me"); err != nil {
 		t.Fatal(err)
 	}
-	if err := config.WriteGlobalConfig(config.GlobalConfig{LastProject: "acme", LastVaultPath: r.DefaultDBPath}); err != nil {
+	if err := config.UpdateGlobalConfig(func(c *config.GlobalConfig) {
+		*c = config.GlobalConfig{LastProject: "acme", LastVaultPath: r.DefaultDBPath}
+	}); err != nil {
 		t.Fatal(err)
 	}
 

@@ -154,7 +154,9 @@ func TestImportMemoryTool_DryRunDoesNotCreateVault(t *testing.T) {
 func TestImportMemoryTool_RefusesProjectFromLastSession(t *testing.T) {
 	r, mgr := newToolTestEnv(t)
 	ctx := context.Background()
-	if err := config.WriteGlobalConfig(config.GlobalConfig{LastProject: "acme", LastVaultPath: r.DefaultDBPath}); err != nil {
+	if err := config.UpdateGlobalConfig(func(c *config.GlobalConfig) {
+		*c = config.GlobalConfig{LastProject: "acme", LastVaultPath: r.DefaultDBPath}
+	}); err != nil {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()

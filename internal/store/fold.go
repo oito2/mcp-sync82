@@ -17,6 +17,7 @@ package store
 
 import (
 	"strings"
+	"sync"
 	"unicode"
 
 	"golang.org/x/text/unicode/norm"
@@ -50,21 +51,54 @@ func foldText(s string) string {
 	return b.String()
 }
 
-// foldRune writes the folded form of r to b, as described in foldText: a
+// foldCache holds the folded form, as a string, of every non-ASCII rune up
+// to maxCachedRune that foldRune has folded. The fold is a pure function of
+// the rune, so each one is computed once per process; the bound keeps the
+// cache at most a few megabytes whatever text is searched.
+var foldCache sync.Map
+
+// maxCachedRune is the largest rune foldCache holds: the end of the Basic
+// Multilingual Plane, which holds every script with case or diacritics.
+const maxCachedRune = 0xFFFF
+
+// foldRune writes the folded form of r to b, as described in foldText. An
+// ASCII rune is lower-cased directly; a rune up to maxCachedRune is folded
+// once by foldRuneSlow and then read from foldCache; any other rune is
+// folded by foldRuneSlow every time.
+func foldRune(b *strings.Builder, r rune) {
+	if r < utf8RuneSelf {
+		if 'A' <= r && r <= 'Z' {
+			r += 'a' - 'A'
+		}
+		b.WriteByte(byte(r))
+		return
+	}
+	if r > maxCachedRune {
+		foldRuneSlow(b, r)
+		return
+	}
+	if folded, ok := foldCache.Load(r); ok {
+		b.WriteString(folded.(string))
+		return
+	}
+	var tmp strings.Builder
+	foldRuneSlow(&tmp, r)
+	folded := tmp.String()
+	foldCache.Store(r, folded)
+	b.WriteString(folded)
+}
+
+// foldRuneSlow writes the folded form of the non-ASCII rune r to b: a
 // combining mark is dropped, a rune of foldExceptions is replaced by its
 // mapping, a Latin letter is decomposed and written without its marks, and
 // any other rune is lower-cased. Lower-casing goes through the upper case
 // so variant forms such as "ſ" or "ϐ" fold to their base letter.
-func foldRune(b *strings.Builder, r rune) {
+func foldRuneSlow(b *strings.Builder, r rune) {
 	if unicode.Is(unicode.Mn, r) {
 		return
 	}
 	if m, ok := foldExceptions[r]; ok {
 		b.WriteRune(m)
-		return
-	}
-	if r < utf8RuneSelf {
-		b.WriteRune(unicode.ToLower(r))
 		return
 	}
 	decomposed := norm.NFD.String(string(r))
@@ -84,11 +118,27 @@ func foldRune(b *strings.Builder, r rune) {
 const utf8RuneSelf = 0x80
 
 // isTokenRune reports whether r belongs to a search token, as in the FTS5
-// unicode61 tokenizer: letters, numbers, private-use characters and the
-// combining marks foldText drops. Every other rune separates tokens.
+// unicode61 tokenizer with remove_diacritics 2: letters, numbers,
+// private-use characters and the combining marks of ftsDiacritics, which
+// foldText drops. Every other rune, other combining marks included,
+// separates tokens.
 func isTokenRune(r rune) bool {
-	return unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.Is(unicode.Co, r) || unicode.Is(unicode.Mn, r)
+	return unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.Is(unicode.Co, r) || unicode.Is(ftsDiacritics, r)
 }
+
+// ftsDiacritics holds the combining marks the FTS5 "unicode61
+// remove_diacritics 2" tokenizer keeps inside a token and removes from it;
+// it treats every other combining mark (Devanagari vowel signs, Hebrew
+// points, Arabic harakat…) as a token separator.
+var ftsDiacritics = &unicode.RangeTable{R16: []unicode.Range16{
+	{Lo: 0x0300, Hi: 0x0304, Stride: 1},
+	{Lo: 0x0306, Hi: 0x030C, Stride: 1},
+	{Lo: 0x030F, Hi: 0x0311, Stride: 2},
+	{Lo: 0x031B, Hi: 0x031B, Stride: 1},
+	{Lo: 0x0323, Hi: 0x0328, Stride: 1},
+	{Lo: 0x032D, Hi: 0x032E, Stride: 1},
+	{Lo: 0x0330, Hi: 0x0331, Stride: 1},
+}}
 
 // tokenize splits s into folded tokens, the same words the FTS5 index
 // holds for s.
@@ -196,4 +246,70 @@ func lineHasPhrase(line string, terms []searchTerm) bool {
 		}
 	}
 	return false
+}
+
+// exactPrefilter returns an FTS5 MATCH expression that every row holding
+// query as a case-insensitive substring also matches, so an exact search
+// can read only the rows the full-text index returns, or "" when query
+// gives no such expression and every row must be scanned.
+//
+// A token of query with a separator on both sides is a whole token of the
+// matching text, and the last token, when query ends inside it, is matched
+// as a prefix. The first token may start earlier in the text, which no
+// FTS5 expression can match, so it is never used. A token is used only
+// when it and the runes around it are prefilterSafe, since the expression
+// is only sound where the index tokenizes and folds as foldText does.
+func exactPrefilter(query string) string {
+	runes := []rune(query)
+	var parts []string
+	for i := 0; i < len(runes); {
+		if !isTokenRune(runes[i]) {
+			i++
+			continue
+		}
+		j := i
+		for j < len(runes) && isTokenRune(runes[j]) {
+			j++
+		}
+		safe := i > 0
+		for k := max(i-1, 0); safe && k < min(j+1, len(runes)); k++ {
+			safe = prefilterSafe(runes[k])
+		}
+		if tok := foldText(string(runes[i:j])); safe && tok != "" {
+			part := `"` + tok + `"`
+			if j == len(runes) {
+				part += "*"
+			}
+			parts = append(parts, part)
+		}
+		i = j
+	}
+	return strings.Join(parts, " ")
+}
+
+// inPrefilterBlocks reports whether r is in the Latin-1 Supplement to
+// Cyrillic blocks (U+00A0–U+04FF) or in Latin Extended Additional and
+// Greek Extended (U+1E00–U+1FFF).
+func inPrefilterBlocks(r rune) bool {
+	return (r >= 0xA0 && r < 0x0500) || (r >= 0x1E00 && r <= 0x1FFF)
+}
+
+// prefilterSafe reports whether the FTS5 tokenizer is known to classify and
+// fold r, and every rune of its case-folding orbit, exactly as isTokenRune
+// and foldText do: ASCII and the Latin, Greek and Cyrillic blocks
+// (U+00A0–U+04FF and U+1E00–U+1FFF), except U+037F, which FTS5 does not
+// fold.
+func prefilterSafe(r rune) bool {
+	if r < utf8RuneSelf {
+		return true
+	}
+	for f := unicode.SimpleFold(r); ; f = unicode.SimpleFold(f) {
+		if f == 0x037F || !inPrefilterBlocks(f) {
+			return false
+		}
+		if f == r {
+			break
+		}
+	}
+	return unicode.In(r, unicode.L, unicode.M, unicode.N, unicode.P, unicode.S, unicode.Zs)
 }

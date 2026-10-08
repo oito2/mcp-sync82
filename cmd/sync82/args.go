@@ -49,7 +49,8 @@ type parsedArgs struct {
 // empty one, a "--name value" whose value starts with "-" (another flag,
 // most likely; "--name=-value" passes such a value on purpose), and a flag
 // given twice are errors — so a typo is reported instead of being taken as
-// a project, directory or vault name. It returns the
+// a project, directory or vault name. Every argument after "--" is
+// positional. It returns the
 // split command line, or the first such error found.
 func parseArgs(args []string, boolFlags, valueFlags []string) (parsedArgs, error) {
 	p := parsedArgs{flags: map[string]bool{}, values: map[string]string{}}
@@ -64,6 +65,12 @@ func parseArgs(args []string, boolFlags, valueFlags []string) (parsedArgs, error
 
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if arg == "--" {
+			// Everything after "--" is positional, so a query or a name
+			// starting with "-" can be given.
+			p.positional = append(p.positional, args[i+1:]...)
+			break
+		}
 		if !strings.HasPrefix(arg, "-") {
 			p.positional = append(p.positional, arg)
 			continue

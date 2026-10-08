@@ -18,7 +18,6 @@ package store
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -93,14 +92,14 @@ func (m *Manager) Get(ctx context.Context, path string) (*Store, error) {
 }
 
 // GetExisting is Get for callers that must not create a vault: when no file
-// exists at path it returns an error wrapping ErrVaultNotFound instead of
-// creating an empty vault there. Other errors are those of Get.
+// exists at path it returns ErrVaultNotFound, whose message holds no path,
+// instead of creating an empty vault there. Other errors are those of Get.
 func (m *Manager) GetExisting(ctx context.Context, path string) (*Store, error) {
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
 	}
 	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("%w: %s", ErrVaultNotFound, path)
+		return nil, ErrVaultNotFound
 	}
 	return m.Get(ctx, path)
 }

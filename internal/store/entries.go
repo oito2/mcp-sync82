@@ -44,8 +44,9 @@ const preamblePosition = -1
 const entryOrder = ` ORDER BY (entry_date IS NULL AND position >= 0), entry_date, position`
 
 // Entry is a single row of an append-only log. ID is the row's identifier,
-// unique within the vault and stable for the life of the row (rewriting the
-// whole kind, or importing it, creates new rows). EntryDate is empty when
+// unique within the vault, stable for the life of the row (rewriting the
+// whole kind, or importing it, creates new rows) and never given to another
+// row, even after this one is deleted. EntryDate is empty when
 // the entry is undated.
 type Entry struct {
 	ID        int64
@@ -63,22 +64,35 @@ type Entry struct {
 // not exist, or a database error.
 func (s *Store) AppendEntry(ctx context.Context, project, subproject, kind, entryDate, body string) error {
 	project, subproject, kind = normalizeName(project), normalizeName(subproject), normalizeName(kind)
-	projectID, err := s.resolveProjectID(ctx, project, subproject)
-	if err != nil {
-		return err
-	}
+	return s.withProjectTx(ctx, project, subproject, func(tx *sql.Tx, projectID int64) error {
+		if _, err := appendEntryIn(ctx, tx, projectID, kind, entryDate, body); err != nil {
+			return fmt.Errorf("append entry %s/%s: %w", label(project, subproject), kind, err)
+		}
+		return nil
+	})
+}
 
-	date := nullableString(entryDate)
+// appendEntrySQL inserts one non-archived entry at the next insertion
+// position of its (project, kind). Arguments: project id, kind, entry date
+// (NULL for undated), body, creation time, then project id and kind again
+// for the position subquery.
+const appendEntrySQL = `
+	INSERT INTO entries (project_id, kind, entry_date, body, archived, created_at, position)
+	VALUES (?, ?, ?, ?, 0, ?,
+		(SELECT COALESCE(MAX(position), -1) + 1 FROM entries WHERE project_id = ? AND kind = ?))`
 
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO entries (project_id, kind, entry_date, body, archived, created_at, position)
-		VALUES (?, ?, ?, ?, 0, ?,
-			(SELECT COALESCE(MAX(position), -1) + 1 FROM entries WHERE project_id = ? AND kind = ?))`,
-		projectID, kind, date, body, now(), projectID, kind)
+// appendEntryIn inserts one non-archived entry of (projectID, kind) with
+// entryDate ("" for undated) and body at the next insertion position, on db
+// (a transaction when it must apply with other writes). The position is
+// computed in the same statement, so concurrent appends never share one.
+// kind must be normalized. It returns the new entry's id, or the database
+// error.
+func appendEntryIn(ctx context.Context, db execer, projectID int64, kind, entryDate, body string) (int64, error) {
+	res, err := db.ExecContext(ctx, appendEntrySQL, projectID, kind, nullableString(entryDate), body, now(), projectID, kind)
 	if err != nil {
-		return fmt.Errorf("append entry %s/%s: %w", label(project, subproject), kind, err)
+		return 0, err
 	}
-	return nil
+	return res.LastInsertId()
 }
 
 // ReplaceAllEntries atomically replaces every non-archived entries row for
@@ -101,21 +115,12 @@ func (s *Store) ReplaceArchivedEntries(ctx context.Context, project, subproject,
 // positioned after every remaining row, all in one transaction. It returns an error wrapping ErrNotFound when the project or subproject does not exist, or a database error.
 func (s *Store) replaceEntries(ctx context.Context, project, subproject, kind string, sections []EntrySection, archived bool) error {
 	project, subproject, kind = normalizeName(project), normalizeName(subproject), normalizeName(kind)
-	projectID, err := s.resolveProjectID(ctx, project, subproject)
-	if err != nil {
-		return err
-	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("replace entries %s/%s: %w", label(project, subproject), kind, err)
-	}
-	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
-
-	if err := replaceEntriesIn(ctx, tx, projectID, kind, sections, archived); err != nil {
-		return fmt.Errorf("replace entries %s/%s: %w", label(project, subproject), kind, err)
-	}
-	return tx.Commit()
+	return s.withProjectTx(ctx, project, subproject, func(tx *sql.Tx, projectID int64) error {
+		if err := replaceEntriesIn(ctx, tx, projectID, kind, sections, archived); err != nil {
+			return fmt.Errorf("replace entries %s/%s: %w", label(project, subproject), kind, err)
+		}
+		return nil
+	})
 }
 
 // replaceEntriesIn deletes the (projectID, kind) entries rows whose archived
@@ -174,35 +179,41 @@ type KindWrite struct {
 
 // WriteKinds applies every write to (project, subproject) in one transaction:
 // either all of them take effect or none does. Kind names are normalized.
-// It returns an error wrapping ErrNotFound when the project or subproject does not exist, or a database error.
+// A kind keeps the storage it has: a document write to a kind that has
+// entries, or an entries write to a kind that has a document, is refused,
+// including when an earlier write of the same batch gave the kind its
+// storage. It returns an error wrapping ErrNotFound when the project or
+// subproject does not exist, one wrapping ErrStorageConflict for such a
+// write, or a database error.
 func (s *Store) WriteKinds(ctx context.Context, project, subproject string, writes []KindWrite) error {
 	project, subproject = normalizeName(project), normalizeName(subproject)
-	projectID, err := s.resolveProjectID(ctx, project, subproject)
-	if err != nil {
-		return err
-	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("write %s: %w", label(project, subproject), err)
-	}
-	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
-
-	for _, w := range writes {
-		kind := normalizeName(w.Kind)
-		switch {
-		case w.Document != nil:
-			err = writeDocument(ctx, tx, projectID, kind, *w.Document)
-		case w.Append:
-			err = appendEntriesIn(ctx, tx, projectID, kind, w.Sections)
-		default:
-			err = replaceEntriesIn(ctx, tx, projectID, kind, w.Sections, w.Archived)
+	return s.withProjectTx(ctx, project, subproject, func(tx *sql.Tx, projectID int64) error {
+		for _, w := range writes {
+			kind := normalizeName(w.Kind)
+			mode, err := kindModeIn(ctx, tx, projectID, kind)
+			if err != nil {
+				return fmt.Errorf("write %s/%s: %w", label(project, subproject), kind, err)
+			}
+			switch {
+			case w.Document != nil && mode == KindStorageEntries:
+				return fmt.Errorf("%q is a log (entries), so it can't be written as a document: %w", kind, ErrStorageConflict)
+			case w.Document == nil && mode == KindStorageDocument:
+				return fmt.Errorf("%q is an overwrite-style document, so it can't hold entries: %w", kind, ErrStorageConflict)
+			}
+			switch {
+			case w.Document != nil:
+				err = writeDocument(ctx, tx, projectID, kind, *w.Document)
+			case w.Append:
+				err = appendEntriesIn(ctx, tx, projectID, kind, w.Sections)
+			default:
+				err = replaceEntriesIn(ctx, tx, projectID, kind, w.Sections, w.Archived)
+			}
+			if err != nil {
+				return fmt.Errorf("write %s/%s: %w", label(project, subproject), kind, err)
+			}
 		}
-		if err != nil {
-			return fmt.Errorf("write %s/%s: %w", label(project, subproject), kind, err)
-		}
-	}
-	return tx.Commit()
+		return nil
+	})
 }
 
 // appendEntriesIn adds sections as new non-archived entries of
@@ -211,16 +222,48 @@ func (s *Store) WriteKinds(ctx context.Context, project, subproject string, writ
 // writes must apply together. It returns the first database error.
 func appendEntriesIn(ctx context.Context, db execer, projectID int64, kind string, sections []EntrySection) error {
 	for _, section := range sections {
-		if _, err := db.ExecContext(ctx, `
-			INSERT INTO entries (project_id, kind, entry_date, body, archived, created_at, position)
-			VALUES (?, ?, ?, ?, 0, ?,
-				(SELECT COALESCE(MAX(position), -1) + 1 FROM entries WHERE project_id = ? AND kind = ?))`,
-			projectID, kind, nullableString(section.Date), section.Body, now(), projectID, kind,
-		); err != nil {
+		if _, err := appendEntryIn(ctx, db, projectID, kind, section.Date, section.Body); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// entryColumns are the entries columns scanEntries reads, in its order.
+const entryColumns = `id, entry_date, body, archived, created_at`
+
+// scanEntries reads every row of rows, selected with entryColumns, as
+// Entry values, and closes rows. It returns the first scan or iteration
+// error.
+func scanEntries(rows *sql.Rows) ([]Entry, error) {
+	defer rows.Close()
+	var out []Entry
+	for rows.Next() {
+		var e Entry
+		var date sql.NullString
+		var archived int
+		if err := rows.Scan(&e.ID, &date, &e.Body, &archived, &e.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan entry row: %w", err)
+		}
+		e.EntryDate, e.Archived = date.String, archived != 0
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// readEntriesIn reads the entries of (projectID, kind) from db in reading
+// order, archived ones only when includeArchived is set. kind must be
+// normalized. It returns the database error, if any.
+func readEntriesIn(ctx context.Context, db *sql.DB, projectID int64, kind string, includeArchived bool) ([]Entry, error) {
+	query := `SELECT ` + entryColumns + ` FROM entries WHERE project_id = ? AND kind = ?`
+	if !includeArchived {
+		query += ` AND archived = 0`
+	}
+	rows, err := db.QueryContext(ctx, query+entryOrder, projectID, kind)
+	if err != nil {
+		return nil, err
+	}
+	return scanEntries(rows)
 }
 
 // ReadEntries returns entries for (project, kind) in reading order: a
@@ -234,32 +277,11 @@ func (s *Store) ReadEntries(ctx context.Context, project, subproject, kind strin
 	if err != nil {
 		return nil, err
 	}
-
-	query := `SELECT id, entry_date, body, archived, created_at FROM entries WHERE project_id = ? AND kind = ?`
-	if !includeArchived {
-		query += ` AND archived = 0`
-	}
-	query += entryOrder
-
-	rows, err := s.db.QueryContext(ctx, query, projectID, kind)
+	out, err := readEntriesIn(ctx, s.db, projectID, kind, includeArchived)
 	if err != nil {
 		return nil, fmt.Errorf("read entries %s/%s: %w", label(project, subproject), kind, err)
 	}
-	defer rows.Close()
-
-	var out []Entry
-	for rows.Next() {
-		var e Entry
-		var date sql.NullString
-		var archived int
-		if err := rows.Scan(&e.ID, &date, &e.Body, &archived, &e.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan entry row: %w", err)
-		}
-		e.EntryDate = date.String
-		e.Archived = archived != 0
-		out = append(out, e)
-	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // ReadEntriesSince returns non-archived entries for (project, kind), filtered
@@ -284,7 +306,7 @@ func (s *Store) ReadEntriesSince(ctx context.Context, project, subproject, kind,
 		datedArgs = append(datedArgs, since)
 	}
 
-	query := `SELECT id, entry_date, body, archived, created_at FROM entries WHERE project_id = ? AND kind = ? AND archived = 0`
+	query := `SELECT ` + entryColumns + ` FROM entries WHERE project_id = ? AND kind = ? AND archived = 0`
 	args := []any{projectID, kind}
 	if maxEntries > 0 {
 		query += ` AND (entry_date IS NULL OR id IN (
@@ -303,21 +325,8 @@ func (s *Store) ReadEntriesSince(ctx context.Context, project, subproject, kind,
 	if err != nil {
 		return nil, fmt.Errorf("read entries since %s/%s: %w", label(project, subproject), kind, err)
 	}
-	defer rows.Close()
-
-	var out []Entry
-	for rows.Next() {
-		var e Entry
-		var date sql.NullString
-		var archived int
-		if err := rows.Scan(&e.ID, &date, &e.Body, &archived, &e.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan entry row: %w", err)
-		}
-		e.EntryDate = date.String
-		e.Archived = archived != 0
-		out = append(out, e)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := scanEntries(rows)
+	if err != nil {
 		return nil, fmt.Errorf("read entries since %s/%s: %w", label(project, subproject), kind, err)
 	}
 	return out, nil
@@ -366,21 +375,19 @@ func readEntryIn(ctx context.Context, db execer, projectID int64, kind string, i
 // or no such entry belongs to (project, kind), or a database error.
 func (s *Store) UpdateEntry(ctx context.Context, project, subproject, kind string, id int64, body string, entryDate *string) error {
 	project, subproject, kind = normalizeName(project), normalizeName(subproject), normalizeName(kind)
-	projectID, err := s.resolveProjectID(ctx, project, subproject)
-	if err != nil {
-		return err
-	}
-	query := `UPDATE entries SET body = ? WHERE id = ? AND project_id = ? AND kind = ?`
-	args := []any{body, id, projectID, kind}
-	if entryDate != nil {
-		query = `UPDATE entries SET body = ?, entry_date = ? WHERE id = ? AND project_id = ? AND kind = ?`
-		args = []any{body, nullableString(*entryDate), id, projectID, kind}
-	}
-	res, err := s.db.ExecContext(ctx, query, args...)
-	if err != nil {
-		return fmt.Errorf("update entry %s/%s entry %d: %w", label(project, subproject), kind, id, err)
-	}
-	return requireOneRow(res, label(project, subproject), kind, id)
+	return s.withProjectTx(ctx, project, subproject, func(tx *sql.Tx, projectID int64) error {
+		query := `UPDATE entries SET body = ? WHERE id = ? AND project_id = ? AND kind = ?`
+		args := []any{body, id, projectID, kind}
+		if entryDate != nil {
+			query = `UPDATE entries SET body = ?, entry_date = ? WHERE id = ? AND project_id = ? AND kind = ?`
+			args = []any{body, nullableString(*entryDate), id, projectID, kind}
+		}
+		res, err := tx.ExecContext(ctx, query, args...)
+		if err != nil {
+			return fmt.Errorf("update entry %s/%s entry %d: %w", label(project, subproject), kind, id, err)
+		}
+		return requireOneRow(res, label(project, subproject), kind, id)
+	})
 }
 
 // DeleteEntry deletes the entry with the given id, archived or not. It
@@ -389,61 +396,45 @@ func (s *Store) UpdateEntry(ctx context.Context, project, subproject, kind strin
 // error.
 func (s *Store) DeleteEntry(ctx context.Context, project, subproject, kind string, id int64) error {
 	project, subproject, kind = normalizeName(project), normalizeName(subproject), normalizeName(kind)
-	projectID, err := s.resolveProjectID(ctx, project, subproject)
-	if err != nil {
-		return err
-	}
-	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM entries WHERE id = ? AND project_id = ? AND kind = ?`, id, projectID, kind)
-	if err != nil {
-		return fmt.Errorf("delete entry %s/%s entry %d: %w", label(project, subproject), kind, id, err)
-	}
-	return requireOneRow(res, label(project, subproject), kind, id)
+	return s.withProjectTx(ctx, project, subproject, func(tx *sql.Tx, projectID int64) error {
+		res, err := tx.ExecContext(ctx,
+			`DELETE FROM entries WHERE id = ? AND project_id = ? AND kind = ?`, id, projectID, kind)
+		if err != nil {
+			return fmt.Errorf("delete entry %s/%s entry %d: %w", label(project, subproject), kind, id, err)
+		}
+		return requireOneRow(res, label(project, subproject), kind, id)
+	})
 }
 
 // SupersedeEntry appends a new, non-archived entry with entryDate (empty for
 // undated) and body, as AppendEntry does, and replaces the body of the
 // entry with the given id by mark(oldBody, newID), all in one transaction.
+// mark runs inside the transaction, which holds the Store's only
+// connection: it must not call any *Store method.
 // It returns the new entry's id. It returns an error wrapping ErrNotFound
 // when the project or subproject does not exist or no such entry belongs
 // to (project, kind), or a database error.
 func (s *Store) SupersedeEntry(ctx context.Context, project, subproject, kind string, id int64, entryDate, body string, mark func(oldBody string, newID int64) string) (int64, error) {
 	project, subproject, kind = normalizeName(project), normalizeName(subproject), normalizeName(kind)
-	projectID, err := s.resolveProjectID(ctx, project, subproject)
-	if err != nil {
-		return 0, err
-	}
 	where := label(project, subproject)
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, fmt.Errorf("supersede entry %s/%s entry %d: %w", where, kind, id, err)
-	}
-	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
-
-	old, err := readEntryIn(ctx, tx, projectID, kind, id, where)
+	var newID int64
+	err := s.withProjectTx(ctx, project, subproject, func(tx *sql.Tx, projectID int64) error {
+		old, err := readEntryIn(ctx, tx, projectID, kind, id, where)
+		if err != nil {
+			return err
+		}
+		if newID, err = appendEntryIn(ctx, tx, projectID, kind, entryDate, body); err != nil {
+			return fmt.Errorf("supersede entry %s/%s entry %d: %w", where, kind, id, err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE entries SET body = ? WHERE id = ?`, mark(old.Body, newID), id,
+		); err != nil {
+			return fmt.Errorf("supersede entry %s/%s entry %d: %w", where, kind, id, err)
+		}
+		return nil
+	})
 	if err != nil {
 		return 0, err
-	}
-	res, err := tx.ExecContext(ctx, `
-		INSERT INTO entries (project_id, kind, entry_date, body, archived, created_at, position)
-		VALUES (?, ?, ?, ?, 0, ?,
-			(SELECT COALESCE(MAX(position), -1) + 1 FROM entries WHERE project_id = ? AND kind = ?))`,
-		projectID, kind, nullableString(entryDate), body, now(), projectID, kind)
-	if err != nil {
-		return 0, fmt.Errorf("supersede entry %s/%s entry %d: %w", where, kind, id, err)
-	}
-	newID, err := res.LastInsertId()
-	if err != nil {
-		return 0, fmt.Errorf("supersede entry %s/%s entry %d: %w", where, kind, id, err)
-	}
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE entries SET body = ? WHERE id = ?`, mark(old.Body, newID), id,
-	); err != nil {
-		return 0, fmt.Errorf("supersede entry %s/%s entry %d: %w", where, kind, id, err)
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("supersede entry %s/%s entry %d: %w", where, kind, id, err)
 	}
 	return newID, nil
 }
@@ -513,7 +504,8 @@ type ArchiveResult struct {
 // ArchiveSummary builds the summary entry ArchiveEntries adds after
 // archiving: given the archived range (Archived, OldestDate and
 // NewestDate set), it returns the entry's date ("" for undated) and body.
-// An error aborts the whole call.
+// An error aborts the whole call. It runs inside the transaction, which
+// holds the Store's only connection: it must not call any *Store method.
 type ArchiveSummary func(archived ArchiveResult) (entryDate, body string, err error)
 
 // ArchiveEntries marks every non-archived, dated entry older than cutoff
@@ -526,68 +518,52 @@ type ArchiveSummary func(archived ArchiveResult) (entryDate, body string, err er
 // error.
 func (s *Store) ArchiveEntries(ctx context.Context, project, subproject, kind, cutoff string, summary ArchiveSummary) (ArchiveResult, error) {
 	project, subproject, kind = normalizeName(project), normalizeName(subproject), normalizeName(kind)
-	projectID, err := s.resolveProjectID(ctx, project, subproject)
+	where := label(project, subproject)
+	var result ArchiveResult
+	err := s.withProjectTx(ctx, project, subproject, func(tx *sql.Tx, projectID int64) error {
+		var oldest, newest sql.NullString
+		err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*), MIN(entry_date), MAX(entry_date) FROM entries
+			 WHERE project_id = ? AND kind = ? AND archived = 0
+			   AND entry_date IS NOT NULL AND entry_date < ?`,
+			projectID, kind, cutoff,
+		).Scan(&result.Archived, &oldest, &newest)
+		if err != nil {
+			return fmt.Errorf("archive entries %s/%s: %w", where, kind, err)
+		}
+		result.OldestDate, result.NewestDate = oldest.String, newest.String
+
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE entries SET archived = 1
+			 WHERE project_id = ? AND kind = ? AND archived = 0
+			   AND entry_date IS NOT NULL AND entry_date < ?`,
+			projectID, kind, cutoff,
+		); err != nil {
+			return fmt.Errorf("archive entries %s/%s: %w", where, kind, err)
+		}
+
+		if summary != nil && result.Archived > 0 {
+			date, body, err := summary(result)
+			if err != nil {
+				return err
+			}
+			if result.SummaryID, err = appendEntryIn(ctx, tx, projectID, kind, date, body); err != nil {
+				return fmt.Errorf("archive entries %s/%s: add summary: %w", where, kind, err)
+			}
+		}
+
+		err = tx.QueryRowContext(ctx,
+			`SELECT COUNT(*), COUNT(*) FILTER (WHERE entry_date IS NULL)
+			 FROM entries WHERE project_id = ? AND kind = ? AND archived = 0`,
+			projectID, kind,
+		).Scan(&result.Kept, &result.NoDate)
+		if err != nil {
+			return fmt.Errorf("archive entries %s/%s: count remaining: %w", where, kind, err)
+		}
+		return nil
+	})
 	if err != nil {
 		return ArchiveResult{}, err
-	}
-	where := label(project, subproject)
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return ArchiveResult{}, fmt.Errorf("archive entries %s/%s: %w", where, kind, err)
-	}
-	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
-
-	var result ArchiveResult
-	var oldest, newest sql.NullString
-	err = tx.QueryRowContext(ctx,
-		`SELECT COUNT(*), MIN(entry_date), MAX(entry_date) FROM entries
-		 WHERE project_id = ? AND kind = ? AND archived = 0
-		   AND entry_date IS NOT NULL AND entry_date < ?`,
-		projectID, kind, cutoff,
-	).Scan(&result.Archived, &oldest, &newest)
-	if err != nil {
-		return ArchiveResult{}, fmt.Errorf("archive entries %s/%s: %w", where, kind, err)
-	}
-	result.OldestDate, result.NewestDate = oldest.String, newest.String
-
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE entries SET archived = 1
-		 WHERE project_id = ? AND kind = ? AND archived = 0
-		   AND entry_date IS NOT NULL AND entry_date < ?`,
-		projectID, kind, cutoff,
-	); err != nil {
-		return ArchiveResult{}, fmt.Errorf("archive entries %s/%s: %w", where, kind, err)
-	}
-
-	if summary != nil && result.Archived > 0 {
-		date, body, err := summary(result)
-		if err != nil {
-			return ArchiveResult{}, err
-		}
-		res, err := tx.ExecContext(ctx, `
-			INSERT INTO entries (project_id, kind, entry_date, body, archived, created_at, position)
-			VALUES (?, ?, ?, ?, 0, ?,
-				(SELECT COALESCE(MAX(position), -1) + 1 FROM entries WHERE project_id = ? AND kind = ?))`,
-			projectID, kind, nullableString(date), body, now(), projectID, kind)
-		if err != nil {
-			return ArchiveResult{}, fmt.Errorf("archive entries %s/%s: add summary: %w", where, kind, err)
-		}
-		if result.SummaryID, err = res.LastInsertId(); err != nil {
-			return ArchiveResult{}, fmt.Errorf("archive entries %s/%s: add summary: %w", where, kind, err)
-		}
-	}
-
-	err = tx.QueryRowContext(ctx,
-		`SELECT COUNT(*), COUNT(*) FILTER (WHERE entry_date IS NULL)
-		 FROM entries WHERE project_id = ? AND kind = ? AND archived = 0`,
-		projectID, kind,
-	).Scan(&result.Kept, &result.NoDate)
-	if err != nil {
-		return ArchiveResult{}, fmt.Errorf("archive entries %s/%s: count remaining: %w", where, kind, err)
-	}
-	if err := tx.Commit(); err != nil {
-		return ArchiveResult{}, fmt.Errorf("archive entries %s/%s: %w", where, kind, err)
 	}
 	return result, nil
 }
@@ -603,27 +579,15 @@ func (s *Store) ListArchivable(ctx context.Context, project, subproject, kind, c
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, entry_date, body, archived, created_at FROM entries
+		`SELECT `+entryColumns+` FROM entries
 		 WHERE project_id = ? AND kind = ? AND archived = 0
 		   AND entry_date IS NOT NULL AND entry_date < ?`+entryOrder,
 		projectID, kind, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("list archivable %s/%s: %w", label(project, subproject), kind, err)
 	}
-	defer rows.Close()
-	var out []Entry
-	for rows.Next() {
-		var e Entry
-		var date sql.NullString
-		var archived int
-		if err := rows.Scan(&e.ID, &date, &e.Body, &archived, &e.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan entry row: %w", err)
-		}
-		e.EntryDate = date.String
-		e.Archived = archived != 0
-		out = append(out, e)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := scanEntries(rows)
+	if err != nil {
 		return nil, fmt.Errorf("list archivable %s/%s: %w", label(project, subproject), kind, err)
 	}
 	return out, nil
@@ -636,37 +600,23 @@ func (s *Store) ListArchivable(ctx context.Context, project, subproject, kind, c
 // no rows, or a database error.
 func (s *Store) DeleteKind(ctx context.Context, project, subproject, kind string) error {
 	project, subproject, kind = normalizeName(project), normalizeName(subproject), normalizeName(kind)
-	projectID, err := s.resolveProjectID(ctx, project, subproject)
-	if err != nil {
-		return err
-	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("delete %s/%s: %w", label(project, subproject), kind, err)
-	}
-	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
-
-	docRes, err := tx.ExecContext(ctx, `DELETE FROM documents WHERE project_id = ? AND kind = ?`, projectID, kind)
-	if err != nil {
-		return fmt.Errorf("delete %s/%s: %w", label(project, subproject), kind, err)
-	}
-	docsDeleted, err := docRes.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("delete %s/%s: %w", label(project, subproject), kind, err)
-	}
-
-	entryRes, err := tx.ExecContext(ctx, `DELETE FROM entries WHERE project_id = ? AND kind = ?`, projectID, kind)
-	if err != nil {
-		return fmt.Errorf("delete %s/%s: %w", label(project, subproject), kind, err)
-	}
-	entriesDeleted, err := entryRes.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("delete %s/%s: %w", label(project, subproject), kind, err)
-	}
-
-	if docsDeleted == 0 && entriesDeleted == 0 {
-		return fmt.Errorf("file not found: %s/%s: %w", label(project, subproject), kind, ErrNotFound)
-	}
-	return tx.Commit()
+	where := label(project, subproject)
+	return s.withProjectTx(ctx, project, subproject, func(tx *sql.Tx, projectID int64) error {
+		var deleted int64
+		for _, table := range []string{"documents", "entries"} {
+			res, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE project_id = ? AND kind = ?`, projectID, kind)
+			if err != nil {
+				return fmt.Errorf("delete %s/%s: %w", where, kind, err)
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return fmt.Errorf("delete %s/%s: %w", where, kind, err)
+			}
+			deleted += n
+		}
+		if deleted == 0 {
+			return fmt.Errorf("file not found: %s/%s: %w", where, kind, ErrNotFound)
+		}
+		return nil
+	})
 }

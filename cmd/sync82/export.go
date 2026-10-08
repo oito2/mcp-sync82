@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -39,11 +40,15 @@ import (
 func RunExport(ctx context.Context, args []string, deps memoryCmdDeps) int {
 	all, project, subproject, outputDir, vaultPath, err := parseExportArgs(args)
 	if err != nil {
-		return usageError(deps.Stderr, err)
+		return commandUsageError(deps.Stderr, "export", err)
 	}
 
 	vaultPath = deps.Resolver.DBPathOrDefault(vaultPath)
 	s, err := deps.Stores.GetExisting(ctx, vaultPath)
+	if errors.Is(err, store.ErrVaultNotFound) {
+		fmt.Fprintf(deps.Stderr, "open vault: no vault exists at %s\n", vaultPath)
+		return 1
+	}
 	if err != nil {
 		fmt.Fprintf(deps.Stderr, "open vault: %v\n", err)
 		return 1
@@ -53,22 +58,22 @@ func RunExport(ctx context.Context, args []string, deps memoryCmdDeps) int {
 		return runExportAll(ctx, s, deps.Stdout, deps.Stderr, outputDir)
 	}
 
-	count, err := tools.ExportProject(ctx, s, project, subproject, outputDir, true)
+	report, err := tools.ExportProject(ctx, s, project, subproject, outputDir, true)
 	if err != nil {
 		fmt.Fprintf(deps.Stderr, "export: %v\n", err)
 		return 1
 	}
 
 	label := tools.FormatLabel(project, subproject)
-	if count == 0 {
-		fmt.Fprintf(deps.Stdout, "Nothing to export for %s: no files found.\n", label)
+	if report.Written == 0 {
+		fmt.Fprintf(deps.Stdout, "Nothing to export for %s: no files found.%s\n", label, tools.FormatExportNotes(report))
 		return 0
 	}
 	plural := "files"
-	if count == 1 {
+	if report.Written == 1 {
 		plural = "file"
 	}
-	fmt.Fprintf(deps.Stdout, "Exported %d %s from %s to %s\n", count, plural, label, outputDir)
+	fmt.Fprintf(deps.Stdout, "Exported %d %s from %s to %s%s\n", report.Written, plural, label, outputDir, tools.FormatExportNotes(report))
 	return 0
 }
 
@@ -134,13 +139,13 @@ func exportOneAndReport(ctx context.Context, s *store.Store, stdout, stderr io.W
 		dest = filepath.Join(dest, subproject)
 	}
 
-	count, err := tools.ExportProject(ctx, s, project, subproject, dest, true)
+	report, err := tools.ExportProject(ctx, s, project, subproject, dest, true)
 	if err != nil {
 		fmt.Fprintf(stderr, "export %s: %v\n", label, err)
 		return 0, false
 	}
-	fmt.Fprintf(stdout, "  %s: %d file(s) -> %s\n", label, count, dest)
-	return count, true
+	fmt.Fprintf(stdout, "  %s: %d file(s) -> %s%s\n", label, report.Written, dest, tools.FormatExportNotes(report))
+	return report.Written, true
 }
 
 // parseExportArgs accepts either "<project> <output-dir>" or

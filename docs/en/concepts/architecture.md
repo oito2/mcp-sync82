@@ -17,7 +17,7 @@ mcp-sync82/
 ├── docs/                 ← full documentation (en/ and pt-br/), images and icons (img/)
 ├── .github/workflows/    ← ci.yml (checks + release contract) and release.yml (tag → release → MCP Registry)
 ├── scripts/release/      ← the release builder: `go run ./scripts/release vX.Y.Z` writes dist/
-├── cmd/sync82/          ← main.go — CLI dispatch: serve (default), install, uninstall, config, self-update, export, import
+├── cmd/sync82/          ← main.go — CLI dispatch: serve (default), install, uninstall, config, self-update, export, import, search, context, health
 └── internal/
     ├── server/           ← MCP server construction, tool, resource and prompt registration, server icon, JSON-RPC error handling
     ├── tools/            ← one file per tool — the 19 tools documented in reference/tools.md; registry.go lists them (tools.Registered)
@@ -27,6 +27,7 @@ mcp-sync82/
     ├── installer/        ← the 8-target MCP client installer and uninstaller (incl. --purge)
     ├── selfupdate/       ← self-update: GitHub Releases check, checksum verification, binary replacement
     ├── cli/               ← the `config set-vault|get-vault|unset-vault` subcommand
+    ├── prompt/            ← the yes/no confirmation questions of install, uninstall and self-update (Ctrl-C ends them at once)
     ├── fsutil/            ← shared atomic-file-write helper
     ├── binpath/           ← absolute, symlink-resolved path of the running binary (install, self-update)
     ├── version/           ← the version string (injected at release build time, or read from build info)
@@ -64,7 +65,7 @@ mcp-sync82/
       the same data as structuredContent
 ```
 
-The server's tool list is a single function, `tools.Registered` in `internal/tools/registry.go`: `sync82` (serve) passes it to `internal/server`, and the release builder starts an in-memory server from the same list to write the tools into the `.mcpb` manifest — so the bundle never lists a tool the binary doesn't have. The [resources](../reference/resources.md) (`tools.ResourceTemplates`, read through `tools.Resources`) and the [MCP prompts](../reference/mcp-prompts.md) (`tools.Prompts`) are defined in `internal/tools` too, without depending on the MCP SDK; `internal/server` only adapts them to it. Resources read the default vault directly, without the project resolution of the tools, and never write. The tools' MCP annotations (read-only, destructive, idempotent) come from one table, `internal/tools/hints.go`, checked by a test against the registered tools.
+The server's tool list is a single function, `tools.Registered` in `internal/tools/registry.go`: `sync82` (serve) passes it to `internal/server`, and the release builder starts an in-memory server from the same list to write the tools into the `.mcpb` manifest — so the bundle never lists a tool the binary doesn't have. The [resources](../reference/resources.md) (`tools.ResourceTemplates`, read through `tools.Resources`) and the [MCP prompts](../reference/mcp-prompts.md) (`tools.Prompts`) are defined in `internal/tools` too, without depending on the MCP SDK; `server.New` receives the tools, prompts, templates and resources in a `server.Options` and only adapts them to the SDK. Resources read the default vault directly, without the project resolution of the tools, and never write. The tools' MCP annotations (read-only, destructive, idempotent) come from one table, `internal/tools/hints.go`, checked by a test against the registered tools.
 
 ---
 
@@ -100,12 +101,16 @@ ci.yml (push/PR to main)
    self-update contract test, mcp-publisher validate
 
 release.yml (tag vX.Y.Z)
-   validate → checks → release → publish-registry
-                         │          └─ mcp-publisher login github-oidc + publish
-                         └─ scripts/release, mcp-publisher validate,
-                            cosign sign-blob → checksums.txt.sigstore.json,
-                            build provenance attestations (binaries + .mcpb),
-                            gh release create
+   validate → checks (Linux, macOS, Windows) → build → sign-publish → publish-registry
+                                               │       │              └─ mcp-publisher login github-oidc + publish
+                                               │       └─ write + OIDC, no repository code:
+                                               │          download dist/, sha256sum --check,
+                                               │          cosign sign-blob → checksums.txt.sigstore.json,
+                                               │          build provenance attestations (binaries + .mcpb),
+                                               │          gh release create
+                                               └─ read-only: scripts/release, --version == tag,
+                                                  self-update contract test, mcp-publisher validate,
+                                                  upload dist/
 ```
 
 Asset names carry no version, so `releases/latest/download/<name>` always points at the newest release — the URLs the install instructions use. See [Contributing — Releasing](../../../CONTRIBUTING.md#releasing).

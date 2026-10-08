@@ -15,7 +15,7 @@ sync82 uninstall            # lista os clientes detectados, pergunta "Remove syn
 sync82 uninstall cursor     # só um target, sem pergunta de confirmação
 ```
 
-Targets: `claude`, `claude-desktop`, `antigravity`, `codex`, `opencode`, `cursor`, `zed`, `cline` — o mesmo conjunto que o `sync82 install` escreve. Sem target, só os clientes detectados na sua máquina são processados (veja [Detecção](../architecture/installer.md#detecção)); quando nenhum é detectado, imprime `No supported MCP clients detected. Supported targets: ...`. Nomeie um target de arquivo explicitamente para limpar os arquivos de config dele mesmo depois de o cliente ter sido desinstalado. Cada target imprime uma linha:
+Targets: `claude`, `claude-desktop`, `antigravity`, `codex`, `opencode`, `cursor`, `zed`, `cline` — o mesmo conjunto que o `sync82 install` escreve. Sem target, os clientes detectados na sua máquina são processados (veja [Detecção](../architecture/installer.md#detecção)), mais todo target de arquivo cujo cliente foi desinstalado mas cujo arquivo de config ainda tem uma entrada `sync82`; quando não há nenhum, imprime `No supported MCP clients detected. Supported targets: ...`. Nomeie um target de arquivo explicitamente para limpar os arquivos de config dele mesmo depois de o cliente ter sido desinstalado. Cada target imprime uma linha:
 
 | Linha | Significado |
 |---|---|
@@ -92,7 +92,7 @@ Remove-Item "$env:LOCALAPPDATA\sync82\sync82.exe", "$env:LOCALAPPDATA\sync82\syn
 Remove-Item "$env:LOCALAPPDATA\sync82"
 ```
 
-No Windows, remova também `%LOCALAPPDATA%\sync82` do seu `PATH` se você o adicionou. Um arquivo `.bak` só existe depois de um `self-update`.
+No Windows, remova também `%LOCALAPPDATA%\sync82` do seu `PATH` se você o adicionou. Um arquivo `.bak` só existe depois de um `self-update`; um arquivo `sync82.exe.bak.old-*` é um que ainda estava rodando durante uma atualização — remova-o também (`Remove-Item "$env:LOCALAPPDATA\sync82\sync82.exe.bak.old-*"`).
 
 ---
 

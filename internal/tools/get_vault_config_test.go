@@ -193,6 +193,9 @@ func TestGetVaultConfigTool_WorkspaceRootWithLocalConfigPath_ReportsSubprojectsF
 	if !ok {
 		t.Fatalf("expected local_config to be an object, got %T: %+v", report["local_config"], report["local_config"])
 	}
+	if localConfig["vault"] != customVault {
+		t.Errorf("local_config.vault = %v, want %s", localConfig["vault"], customVault)
+	}
 	subs, ok := localConfig["subprojects"].([]any)
 	if !ok {
 		t.Fatalf("expected subprojects to be an array, got %T", localConfig["subprojects"])
@@ -246,8 +249,10 @@ func TestGetVaultConfigTool_LocalConfigRelativePath_ResolvesAgainstConfigDir(t *
 // stored in the global config.
 func TestGetVaultConfigTool_ReflectsGlobalConfig(t *testing.T) {
 	r, mgr := newToolTestEnv(t)
-	if err := config.WriteGlobalConfig(config.GlobalConfig{LastProject: "oito2", LastSubproject: "perci", VaultPath: "HOME/team-vault.db"}); err != nil {
-		t.Fatalf("WriteGlobalConfig: %v", err)
+	if err := config.UpdateGlobalConfig(func(c *config.GlobalConfig) {
+		*c = config.GlobalConfig{LastProject: "oito2", LastSubproject: "perci", VaultPath: "HOME/team-vault.db"}
+	}); err != nil {
+		t.Fatalf("UpdateGlobalConfig: %v", err)
 	}
 
 	tool := &GetVaultConfigTool{Resolver: r, Stores: mgr}
@@ -269,5 +274,27 @@ func TestGetVaultConfigTool_ReflectsGlobalConfig(t *testing.T) {
 	}
 	if report["last_project"] != "oito2" || report["last_subproject"] != "perci" {
 		t.Errorf("last_project/last_subproject = %v/%v, want oito2/perci", report["last_project"], report["last_subproject"])
+	}
+}
+
+// TestGetVaultConfigTool_ReportsLastVaultPath verifies that the report
+// gives the vault the last used project was remembered in.
+func TestGetVaultConfigTool_ReportsLastVaultPath(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	other := filepath.Join(t.TempDir(), "other.db")
+	if err := config.UpdateLastProject("acme", "", other); err != nil {
+		t.Fatal(err)
+	}
+	tool := &GetVaultConfigTool{Resolver: r, Stores: mgr}
+	result, err := tool.Execute(context.Background(), getVaultConfigArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report map[string]any
+	if err := json.Unmarshal([]byte(result.Text), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report["last_project"] != "acme" || report["last_vault_path"] != other {
+		t.Errorf("last_project = %v, last_vault_path = %v; want acme, %s", report["last_project"], report["last_vault_path"], other)
 	}
 }

@@ -18,6 +18,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -35,13 +36,9 @@ type ListFilesTool struct {
 // listFilesArgs holds the decoded arguments of the list_files tool; its JSON
 // tags match the property names declared in InputSchema.
 type listFilesArgs struct {
-	Project          string `json:"project,omitempty"`
-	Subproject       string `json:"subproject,omitempty"`
-	Path             string `json:"path,omitempty"`
-	WorkspaceRoot    string `json:"workspace_root,omitempty"`
-	SearchParentDirs bool   `json:"search_parent_dirs,omitempty"`
-	Metadata         bool   `json:"metadata,omitempty"`
-	Format           string `json:"format,omitempty"`
+	targetArgs
+	Metadata bool   `json:"metadata,omitempty"`
+	Format   string `json:"format,omitempty"`
 }
 
 // Name returns the MCP tool name, "list_files".
@@ -59,15 +56,10 @@ func (t *ListFilesTool) Description() string {
 func (t *ListFilesTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
-			"project":            map[string]any{"type": "string", "description": "Project name. If omitted, auto-discovered from workspace_root or the last used project."},
-			"subproject":         map[string]any{"type": "string", "description": "Subproject name."},
-			"workspace_root":     map[string]any{"type": "string", "description": "Path to your project folder, used to auto-discover the project via .sync82.json."},
-			"search_parent_dirs": map[string]any{"type": "boolean", "description": SearchParentDirsDescription},
-			"metadata":           map[string]any{"type": "boolean", "description": "When true, include size, estimated tokens, and last-modified date per file."},
-			"path":               map[string]any{"type": "string", "description": PathDescription},
-			"format":             formatProperty(),
-		},
+		"properties": targetProperties(targetSchema{}, map[string]any{
+			"metadata": map[string]any{"type": "boolean", "description": "When true, include size, estimated tokens, and last-modified date per file."},
+			"format":   formatProperty(),
+		}),
 	}
 }
 
@@ -92,10 +84,7 @@ func (t *ListFilesTool) Validate(raw json.RawMessage) (any, error) {
 // content. Store failures are returned as errors.
 func (t *ListFilesTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(listFilesArgs)
-	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, ContextArgs{
-		Project: args.Project, Subproject: args.Subproject, Path: args.Path,
-		WorkspaceRoot: args.WorkspaceRoot, SearchParentDirs: args.SearchParentDirs,
-	})
+	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, args.contextArgs())
 	if ready != nil {
 		return *ready, nil
 	}
@@ -107,7 +96,8 @@ func (t *ListFilesTool) Execute(ctx context.Context, rawArgs any) (ToolResult, e
 		return ToolResult{}, wrapNotFound(err, rctx.Label())
 	}
 	if len(kinds) == 0 && args.Format != "json" {
-		return ToolResult{Text: fmt.Sprintf("No files found in project %q.", rctx.Label())}, nil
+		return ToolResult{Text: fmt.Sprintf("No files found in project %q.", rctx.Label()),
+			Structured: fileList{Project: rctx.Label(), Vault: rctx.DBPath, Files: []fileEntry{}}}, nil
 	}
 
 	list := fileList{Project: rctx.Label(), Vault: rctx.DBPath, Files: []fileEntry{}}
@@ -116,6 +106,9 @@ func (t *ListFilesTool) Execute(ctx context.Context, rawArgs any) (ToolResult, e
 		entry := fileEntry{Name: k}
 		if args.Metadata {
 			info, err := s.Metadata(ctx, rctx.Project, rctx.Subproject, k)
+			if errors.Is(err, store.ErrNotFound) {
+				continue // deleted by another call since it was listed
+			}
 			if err != nil {
 				return ToolResult{}, err
 			}
@@ -130,7 +123,22 @@ func (t *ListFilesTool) Execute(ctx context.Context, rawArgs any) (ToolResult, e
 	if args.Format == "json" {
 		return jsonResult(list, false)
 	}
-	return ToolResult{Text: fmt.Sprintf("Files in %q%s:\n%s", rctx.Label(), ContextNote(rctx), strings.Join(lines, "\n"))}, nil
+	return ToolResult{Text: fmt.Sprintf("Files in %q%s:\n%s", rctx.Label(), ContextNote(rctx), strings.Join(lines, "\n")), Structured: list}, nil
+}
+
+// OutputSchema returns the JSON Schema of fileList, the structured content
+// of every successful list_files result.
+func (t *ListFilesTool) OutputSchema() map[string]any {
+	return schemaObject(map[string]any{
+		"project": schemaString(),
+		"vault":   schemaString(),
+		"files": schemaArray(schemaObject(map[string]any{
+			"name":             schemaString(),
+			"size_bytes":       schemaInteger(),
+			"estimated_tokens": schemaInteger(),
+			"last_modified":    schemaString(),
+		}, "name")),
+	}, "project", "vault", "files")
 }
 
 // fileList is list_files' JSON result: the project label, the vault path

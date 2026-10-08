@@ -40,26 +40,23 @@ type SearchMemoryTool struct {
 // searchMemoryArgs holds the decoded arguments of the search_memory tool;
 // its JSON tags match the property names declared in InputSchema.
 type searchMemoryArgs struct {
-	Query            string   `json:"query"`
-	Match            string   `json:"match,omitempty"`
-	Kinds            []string `json:"kinds,omitempty"`
-	Since            string   `json:"since,omitempty"`
-	Until            string   `json:"until,omitempty"`
-	Project          string   `json:"project,omitempty"`
-	Subproject       string   `json:"subproject,omitempty"`
-	Limit            int      `json:"limit,omitempty"`
-	Offset           int      `json:"offset,omitempty"`
-	ContextLines     int      `json:"context_lines,omitempty"`
-	Format           string   `json:"format,omitempty"`
-	Path             string   `json:"path,omitempty"`
-	WorkspaceRoot    string   `json:"workspace_root,omitempty"`
-	SearchParentDirs bool     `json:"search_parent_dirs,omitempty"`
+	targetArgs
+	Query        string   `json:"query"`
+	Match        string   `json:"match,omitempty"`
+	Kinds        []string `json:"kinds,omitempty"`
+	Since        string   `json:"since,omitempty"`
+	Until        string   `json:"until,omitempty"`
+	Limit        int      `json:"limit,omitempty"`
+	Offset       int      `json:"offset,omitempty"`
+	ContextLines int      `json:"context_lines,omitempty"`
+	Format       string   `json:"format,omitempty"`
 }
 
 // Bounds on a search's output: the maximum context lines per match, the
-// maximum size in bytes of the whole response text, and the maximum size
-// of one matching or context line, so a single huge line (content may be
-// up to maxContentSize) cannot exceed the response size on its own.
+// maximum size in bytes of the whole response as sent (its text and its
+// structured content, both JSON-encoded), and the maximum size of one
+// matching or context line, so a single huge line (content may be up to
+// maxContentSize) cannot exceed the response size on its own.
 const (
 	maxSearchContextLines = 20
 	maxSearchResponseSize = 1 << 20
@@ -107,22 +104,21 @@ func (t *SearchMemoryTool) Description() string {
 func (t *SearchMemoryTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
-			"query":              map[string]any{"type": "string", "description": "What to search for, on a single line: words (match \"words\", the default), a phrase (match \"phrase\") or a literal substring (match \"exact\")."},
-			"match":              map[string]any{"type": "string", "enum": []string{string(store.SearchWords), string(store.SearchPhrase), string(store.SearchExact)}, "description": "\"words\" (default): every word, any order, accents and case ignored, ranked by relevance, \"word*\" for a prefix. \"phrase\": the words in that order. \"exact\": a literal case-insensitive substring, in file order."},
-			"kinds":              map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Only search these files/kinds (e.g. [\"decisions\"])."},
-			"since":              map[string]any{"type": "string", "description": "Only search dated entries on or after this date (\"YYYY-MM-DD\"); documents and undated entries are left out."},
-			"until":              map[string]any{"type": "string", "description": "Only search dated entries on or before this date (\"YYYY-MM-DD\"); documents and undated entries are left out."},
-			"project":            map[string]any{"type": "string", "description": "Limit the search to this project (and its subprojects, unless subproject is also given)."},
-			"subproject":         map[string]any{"type": "string", "description": "Limit the search to this specific subproject (requires project or workspace_root)."},
-			"limit":              map[string]any{"type": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum number of results to return (1-1000, default 100)."},
-			"offset":             map[string]any{"type": "integer", "minimum": 0, "description": "Number of results to skip, for pagination (default 0)."},
-			"context_lines":      map[string]any{"type": "integer", "minimum": 0, "maximum": maxSearchContextLines, "description": "Number of surrounding lines to include per match (0-20, default 0)."},
-			"workspace_root":     map[string]any{"type": "string", "description": "Path to your project folder, used to auto-discover the project via .sync82.json when project isn't given."},
-			"search_parent_dirs": map[string]any{"type": "boolean", "description": SearchParentDirsDescription},
-			"path":               map[string]any{"type": "string", "description": PathDescription},
-			"format":             formatProperty(),
-		},
+		"properties": targetProperties(targetSchema{
+			Project:       "Limit the search to this project (and its subprojects, unless subproject is also given).",
+			Subproject:    "Limit the search to this specific subproject (requires project or workspace_root).",
+			WorkspaceRoot: "Path to your project folder, used to auto-discover the project via .sync82.json when project isn't given.",
+		}, map[string]any{
+			"query":         map[string]any{"type": "string", "description": "What to search for, on a single line: words (match \"words\", the default), a phrase (match \"phrase\") or a literal substring (match \"exact\")."},
+			"match":         map[string]any{"type": "string", "enum": []string{string(store.SearchWords), string(store.SearchPhrase), string(store.SearchExact)}, "description": "\"words\" (default): every word, any order, accents and case ignored, ranked by relevance, \"word*\" for a prefix. \"phrase\": the words in that order. \"exact\": a literal case-insensitive substring, in file order."},
+			"kinds":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Only search these files/kinds (e.g. [\"decisions\"])."},
+			"since":         map[string]any{"type": "string", "description": "Only search dated entries on or after this date (\"YYYY-MM-DD\"); documents and undated entries are left out."},
+			"until":         map[string]any{"type": "string", "description": "Only search dated entries on or before this date (\"YYYY-MM-DD\"); documents and undated entries are left out."},
+			"limit":         map[string]any{"type": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum number of results to return (1-1000, default 100)."},
+			"offset":        map[string]any{"type": "integer", "minimum": 0, "description": "Number of results to skip, for pagination (default 0)."},
+			"context_lines": map[string]any{"type": "integer", "minimum": 0, "maximum": maxSearchContextLines, "description": "Number of surrounding lines to include per match (0-20, default 0)."},
+			"format":        formatProperty(),
+		}),
 		"required": []string{"query"},
 	}
 }
@@ -215,7 +211,7 @@ func (t *SearchMemoryTool) Validate(raw json.RawMessage) (any, error) {
 // error result; store failures are returned as errors.
 func (t *SearchMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(searchMemoryArgs)
-	rctx := t.resolveScope(args)
+	rctx := t.Resolver.resolveSearchScope(args.contextArgs())
 	if rctx.Problem != "" {
 		return ToolResult{IsError: true, Text: rctx.Problem}, nil
 	}
@@ -248,10 +244,14 @@ func (t *SearchMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult
 	}
 	if len(results) == 0 && args.Format != "json" {
 		text := fmt.Sprintf("No results for %q", args.Query)
+		if args.Offset > 0 {
+			// Past the last page, not "nothing matches".
+			text = fmt.Sprintf("No more results for %q at offset %d", args.Query, args.Offset)
+		}
 		if scanTruncated {
 			text += " (the search stopped early on a very large vault; narrow it with project)"
 		}
-		return ToolResult{Text: text}, nil
+		return ToolResult{Text: text, Structured: searchReport{Query: args.Query, Results: []searchHit{}, ScanTruncated: scanTruncated}}, nil
 	}
 
 	report := searchReport{Query: args.Query, Results: []searchHit{}, ScanTruncated: scanTruncated}
@@ -274,18 +274,23 @@ func (t *SearchMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult
 			}
 			line += "\nContext:\n" + strings.Join(ctxLines, "\n") + "\n---"
 		}
-		if size+len(line) > maxSearchResponseSize && i > 0 {
+		hit := searchHit{
+			Project: r.Project, Subproject: r.Subproject, File: r.Kind, EntryID: r.EntryID, EntryDate: r.EntryDate,
+			Line: r.LineNumber, Text: r.Line, ContextBefore: r.ContextBefore, ContextAfter: r.ContextAfter,
+		}
+		cost, err := searchHitCost(hit, line, args.Format == "json")
+		if err != nil {
+			return ToolResult{}, err
+		}
+		if size+cost > maxSearchResponseSize && i > 0 {
 			lines = append(lines, fmt.Sprintf("(output truncated after %d results; use offset %d to continue, or fewer context_lines)", i, args.Offset+i))
 			report.NextOffset = args.Offset + i
 			moreResults = false
 			break
 		}
-		size += len(line) + 1
+		size += cost
 		lines = append(lines, line)
-		report.Results = append(report.Results, searchHit{
-			Project: r.Project, Subproject: r.Subproject, File: r.Kind, EntryID: r.EntryID, EntryDate: r.EntryDate,
-			Line: r.LineNumber, Text: r.Line, ContextBefore: r.ContextBefore, ContextAfter: r.ContextAfter,
-		})
+		report.Results = append(report.Results, hit)
 	}
 	if moreResults {
 		report.NextOffset = args.Offset + args.Limit
@@ -301,40 +306,28 @@ func (t *SearchMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult
 		lines = append(lines, "(the search stopped early on a very large vault, so some matches may be missing; narrow it with project)")
 	}
 
-	return ToolResult{Text: strings.Join(lines, "\n")}, nil
+	return ToolResult{Text: strings.Join(lines, "\n"), Structured: report}, nil
 }
 
-// resolveScope resolves the project scope and vault of a search. Unlike
-// the other memory tools, search_memory never falls back to the global
-// config's last-used project: with neither project nor workspace_root,
-// the scope stays empty (search everything) rather than narrowing to the
-// project last used, and a workspace_root without a .sync82.json searches
-// the whole vault — unless a subproject was given, which then has no
-// project to belong to. The returned context always carries the vault
-// path; OK is true only when a project scope was resolved, and Problem is
-// set when the workspace's .sync82.json cannot be read or names an invalid
-// project, or a subproject was given without any project.
-func (t *SearchMemoryTool) resolveScope(args searchMemoryArgs) ResolvedContext {
-	if strings.TrimSpace(args.Project) == "" && args.WorkspaceRoot != "" {
-		rctx := t.Resolver.Resolve(ContextArgs{WorkspaceRoot: args.WorkspaceRoot, Subproject: args.Subproject, Path: args.Path, SearchParentDirs: args.SearchParentDirs})
-		if !rctx.OK {
-			if rctx.Problem == "" && strings.TrimSpace(args.Subproject) != "" {
-				// Without a project the subproject can't narrow anything;
-				// searching the whole vault instead would mix projects.
-				rctx.Problem = fmt.Sprintf(`"subproject" was given, but no .sync82.json was found at workspace_root %s to tell which project it belongs to; pass "project" too`, args.WorkspaceRoot)
-			}
-			rctx.DBPath = t.Resolver.DBPathOrDefault(args.Path)
-		}
-		return rctx
-	}
-	rctx := ResolvedContext{
-		Project:    NormalizeName(args.Project),
-		Subproject: NormalizeName(args.Subproject),
-		DBPath:     t.Resolver.DBPathOrDefault(args.Path),
-		Source:     SourceProvided,
-	}
-	rctx.OK = rctx.Project != ""
-	return rctx
+// OutputSchema returns the JSON Schema of searchReport, the structured
+// content of every successful search_memory result.
+func (t *SearchMemoryTool) OutputSchema() map[string]any {
+	return schemaObject(map[string]any{
+		"query": schemaString(),
+		"results": schemaArray(schemaObject(map[string]any{
+			"project":        schemaString(),
+			"subproject":     schemaString(),
+			"file":           schemaString(),
+			"entry_id":       schemaInteger(),
+			"entry_date":     schemaString(),
+			"line":           schemaInteger(),
+			"text":           schemaString(),
+			"context_before": schemaArray(schemaString()),
+			"context_after":  schemaArray(schemaString()),
+		}, "project", "file", "line", "text")),
+		"next_offset":    schemaInteger(),
+		"scan_truncated": schemaBoolean(),
+	}, "query", "results")
 }
 
 // searchReport is search_memory's JSON result. NextOffset, when non-zero,
@@ -359,4 +352,29 @@ type searchHit struct {
 	Text          string   `json:"text"`
 	ContextBefore []string `json:"context_before,omitempty"`
 	ContextAfter  []string `json:"context_after,omitempty"`
+}
+
+// searchHitCost returns the bytes hit adds to a search response as it is
+// sent: the hit in the structured content, plus its part of the text — line
+// in text format, or the hit's indented JSON in JSON format — encoded as a
+// JSON string. JSON escaping counts, since "<", ">" and "&" take six bytes
+// each.
+func searchHitCost(hit searchHit, line string, jsonFormat bool) (int, error) {
+	structured, err := json.Marshal(hit)
+	if err != nil {
+		return 0, fmt.Errorf("encode search result: %w", err)
+	}
+	text := line
+	if jsonFormat {
+		indented, err := json.MarshalIndent(hit, "    ", "  ")
+		if err != nil {
+			return 0, fmt.Errorf("encode search result: %w", err)
+		}
+		text = string(indented)
+	}
+	encodedText, err := json.Marshal(text)
+	if err != nil {
+		return 0, fmt.Errorf("encode search result: %w", err)
+	}
+	return len(structured) + len(encodedText) + 8, nil
 }

@@ -66,7 +66,7 @@ Consult the tools and commands available on the server.
 - [Tools](./reference/tools.md) — All 19 MCP tools the AI can call, full parameter reference.
 - [Resources](./reference/resources.md) — Project memory as read-only MCP resources (`sync82://projects/...`).
 - [MCP Prompts](./reference/mcp-prompts.md) — The `start_session` and `end_session` prompts.
-- [CLI](./reference/cli.md) — All `sync82` CLI subcommands: `install`, `uninstall`, `config`, `self-update`, `export`, `import`.
+- [CLI](./reference/cli.md) — All `sync82` CLI subcommands: `install`, `uninstall`, `config`, `self-update`, `export`, `import`, `search`, `context`, `health`.
 - [Configuration](./reference/configuration.md) — `SYNC82_DB_PATH`, `~/.sync82/config.json`, `.sync82.json`, precedence, transport, and the bundle's settings.
 
 ---

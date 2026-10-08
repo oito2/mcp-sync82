@@ -18,6 +18,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -40,6 +41,20 @@ func TestResolvePath(t *testing.T) {
 		{"tilde with subpath", "~/custom-vault", filepath.Join(home, "custom-vault")},
 		{"absolute path passthrough", "/opt/vaults/team.db", "/opt/vaults/team.db"},
 		{"relative path passthrough", "relative/vault.db", "relative/vault.db"},
+		{"token prefix of a name", "HOMEWORK/vault.db", "HOMEWORK/vault.db"},
+	}
+	if runtime.GOOS == "windows" {
+		tests = append(tests, struct {
+			name string
+			raw  string
+			want string
+		}{"tilde with backslash", `~\custom-vault`, filepath.Join(home, "custom-vault")})
+	} else {
+		tests = append(tests, struct {
+			name string
+			raw  string
+			want string
+		}{"backslash is part of the name", `~\custom-vault`, `~\custom-vault`})
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -58,7 +73,7 @@ func TestDefaultVaultPath(t *testing.T) {
 	t.Setenv("USERPROFILE", os.Getenv("HOME"))
 
 	t.Run("no env override", func(t *testing.T) {
-		t.Setenv(dbPathEnvVar, "")
+		t.Setenv(DBPathEnvVar, "")
 		want := filepath.Join(home, defaultVaultDir, defaultVaultFile)
 		if got := DefaultVaultPath(); got != want {
 			t.Errorf("DefaultVaultPath() = %q, want %q", got, want)
@@ -66,10 +81,24 @@ func TestDefaultVaultPath(t *testing.T) {
 	})
 
 	t.Run("env override wins", func(t *testing.T) {
-		t.Setenv(dbPathEnvVar, "HOME/custom-vault/knowledge.db")
+		t.Setenv(DBPathEnvVar, "HOME/custom-vault/knowledge.db")
 		want := filepath.Join(home, "custom-vault", "knowledge.db")
 		if got := DefaultVaultPath(); got != want {
 			t.Errorf("DefaultVaultPath() = %q, want %q", got, want)
 		}
 	})
+}
+
+// TestDefaultVaultPath_RelativeEnvIsMadeAbsolute checks that a relative
+// SYNC82_DB_PATH is made absolute against the current directory, so it
+// names the same file after the directory changes.
+func TestDefaultVaultPath_RelativeEnvIsMadeAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	t.Setenv(DBPathEnvVar, "rel.db")
+	got := DefaultVaultPath()
+	want, _ := filepath.Abs("rel.db")
+	if got != want || !filepath.IsAbs(got) {
+		t.Errorf("DefaultVaultPath() = %q, want %q", got, want)
+	}
 }

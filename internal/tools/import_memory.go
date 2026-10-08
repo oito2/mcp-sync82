@@ -36,13 +36,9 @@ type ImportMemoryTool struct {
 // importMemoryArgs holds the decoded arguments of the import_memory tool;
 // its JSON tags match the property names declared in InputSchema.
 type importMemoryArgs struct {
-	Project          string `json:"project,omitempty"`
-	Subproject       string `json:"subproject,omitempty"`
-	InputDir         string `json:"input_dir"`
-	DryRun           bool   `json:"dry_run,omitempty"`
-	Path             string `json:"path,omitempty"`
-	WorkspaceRoot    string `json:"workspace_root,omitempty"`
-	SearchParentDirs bool   `json:"search_parent_dirs,omitempty"`
+	targetArgs
+	InputDir string `json:"input_dir"`
+	DryRun   bool   `json:"dry_run,omitempty"`
 }
 
 // Name returns the MCP tool name, "import_memory".
@@ -60,15 +56,10 @@ func (t *ImportMemoryTool) Description() string {
 func (t *ImportMemoryTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
-			"project":            map[string]any{"type": "string", "description": "Project name. If omitted, auto-discovered from workspace_root; unlike other tools, the last used project is refused."},
-			"subproject":         map[string]any{"type": "string", "description": "Subproject name."},
-			"input_dir":          map[string]any{"type": "string", "description": "Absolute directory (or starting with ~/ or HOME/) to read exported .md files from. Required. Not confined to the vault or workspace. Every \"<kind>.md\" file present is imported; files that aren't valid kind names, are empty, or are README/CHANGELOG/LICENSE/CONTRIBUTING/CODE_OF_CONDUCT are skipped."},
-			"dry_run":            map[string]any{"type": "boolean", "description": "Report what the import would create and overwrite without writing anything."},
-			"workspace_root":     map[string]any{"type": "string", "description": "Path to your project folder, used to auto-discover the project via .sync82.json."},
-			"search_parent_dirs": map[string]any{"type": "boolean", "description": SearchParentDirsDescription},
-			"path":               map[string]any{"type": "string", "description": PathDescription},
-		},
+		"properties": targetProperties(targetSchema{Project: projectRefusesLastDescription}, map[string]any{
+			"input_dir": map[string]any{"type": "string", "description": "Absolute directory (or starting with ~/ or HOME/) to read exported .md files from. Required. Not confined to the vault or workspace. Every \"<kind>.md\" file present is imported; files that aren't valid kind names, are empty, or are README/CHANGELOG/LICENSE/CONTRIBUTING/CODE_OF_CONDUCT are skipped."},
+			"dry_run":   map[string]any{"type": "boolean", "description": "Report what the import would create and overwrite without writing anything."},
+		}),
 		"required": []string{"input_dir"},
 	}
 }
@@ -96,10 +87,7 @@ func (t *ImportMemoryTool) Validate(raw json.RawMessage) (any, error) {
 // other failures are returned as errors.
 func (t *ImportMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(importMemoryArgs)
-	ctxArgs := ContextArgs{
-		Project: args.Project, Subproject: args.Subproject, Path: args.Path,
-		WorkspaceRoot: args.WorkspaceRoot, SearchParentDirs: args.SearchParentDirs,
-	}
+	ctxArgs := args.contextArgs()
 	resolve := t.Resolver.ResolveStoreCreating
 	if args.DryRun {
 		resolve = t.Resolver.ResolveStore

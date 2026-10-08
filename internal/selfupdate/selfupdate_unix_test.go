@@ -72,6 +72,7 @@ func TestRunSelfUpdate_ReadOnlyBinaryDirSuggestsPrivileges(t *testing.T) {
 		HTTPClient:     srv.Client(),
 		ExecutablePath: func() (string, error) { return exePath, nil },
 		ValidateURL:    acceptAnyURL,
+		ValidateAsset:  acceptAnyAsset,
 		RunVersion:     reportVersion("v2.0.0"),
 	}
 	var stdout, stderr bytes.Buffer

@@ -29,14 +29,35 @@ import (
 func TestRunConfig_GetVault_DefaultsToNoneConfigured(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	t.Setenv(config.DBPathEnvVar, "")
 	var stdout, stderr bytes.Buffer
 
 	code := RunConfig([]string{"get-vault"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("code = %d, want 0; stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "No global vault configured") {
-		t.Errorf("stdout = %q, want it to report no vault configured", stdout.String())
+	want := "No global vault configured. Using the default: " + config.DefaultVaultPath()
+	if !strings.Contains(stdout.String(), want) {
+		t.Errorf("stdout = %q, want %q", stdout.String(), want)
+	}
+}
+
+// TestRunConfig_GetVault_NamesTheEnvironmentVariable verifies that, with no
+// global vault, get-vault reports the SYNC82_DB_PATH vault and names the
+// variable.
+func TestRunConfig_GetVault_NamesTheEnvironmentVariable(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	envVault := filepath.Join(t.TempDir(), "env.db")
+	t.Setenv(config.DBPathEnvVar, envVault)
+	var stdout, stderr bytes.Buffer
+
+	if code := RunConfig([]string{"get-vault"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	want := "No global vault configured. Using SYNC82_DB_PATH: " + envVault
+	if !strings.Contains(stdout.String(), want) {
+		t.Errorf("stdout = %q, want %q", stdout.String(), want)
 	}
 }
 

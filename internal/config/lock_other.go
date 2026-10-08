@@ -22,7 +22,11 @@ import "os"
 // lockFile is a no-op on platforms without a supported file-locking
 // primitive, so only the in-process mutex serializes updates there. It
 // always returns nil.
-func lockFile(*os.File) error { return nil }
+func lockFile(*os.File, bool) error { return nil }
 
 // unlockFile is the no-op counterpart of lockFile. It always returns nil.
 func unlockFile(*os.File) error { return nil }
+
+// isReadOnlyFS always reports false on platforms without a known
+// read-only filesystem error.
+func isReadOnlyFS(error) bool { return false }

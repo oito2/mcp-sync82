@@ -17,6 +17,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -241,7 +242,7 @@ func TestSearchMemoryTool_DoesNotFallBackToLastUsedProjectOnItsOwn(t *testing.T)
 	// Set "oito2" as the last-used project. Most tools would scope to it
 	// through tier 3, but search_memory must not unless workspace_root is
 	// also given.
-	if err := config.WriteGlobalConfig(config.GlobalConfig{LastProject: "oito2"}); err != nil {
+	if err := config.UpdateGlobalConfig(func(c *config.GlobalConfig) { *c = config.GlobalConfig{LastProject: "oito2"} }); err != nil {
 		t.Fatal(err)
 	}
 
@@ -595,6 +596,45 @@ func TestSearchMemoryTool_RejectsInvalidProjectName(t *testing.T) {
 	} {
 		if _, err := tool.Validate(mustJSON(t, args)); err == nil || !strings.Contains(err.Error(), "must start with a letter or digit") {
 			t.Errorf("Validate(%v) = %v, want a name error", args, err)
+		}
+	}
+}
+
+// TestSearchMemoryTool_ResponseCapCountsEncodedCopies fills the results
+// with lines of "<", which JSON encodes in six bytes each, and checks that
+// the whole response as sent — the text and the structured content, both
+// JSON-encoded — stays within maxSearchResponseSize, in text and JSON
+// format, while reporting where to continue.
+func TestSearchMemoryTool_ResponseCapCountsEncodedCopies(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	ctx := context.Background()
+	s, err := mgr.Get(ctx, r.DefaultDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+	line := "needle " + strings.Repeat("<", 4000)
+	if err := s.WriteDocument(ctx, "acme", "", "memory", strings.TrimSuffix(strings.Repeat(line+"\n", 600), "\n")); err != nil {
+		t.Fatal(err)
+	}
+	tool := &SearchMemoryTool{Resolver: r, Stores: mgr}
+	for _, format := range []string{"text", "json"} {
+		res := runTool(t, tool, map[string]any{"query": "needle", "limit": 1000, "format": format})
+		sent, err := json.Marshal(map[string]any{
+			"content":           []any{map[string]any{"type": "text", "text": res.Text}},
+			"structuredContent": res.Structured,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(sent) > maxSearchResponseSize+4096 {
+			t.Errorf("%s format: %d bytes sent, want at most about %d", format, len(sent), maxSearchResponseSize)
+		}
+		report, ok := res.Structured.(searchReport)
+		if !ok || report.NextOffset == 0 || len(report.Results) == 0 {
+			t.Errorf("%s format: %d results, next offset %d; want a truncated page with a next offset", format, len(report.Results), report.NextOffset)
 		}
 	}
 }

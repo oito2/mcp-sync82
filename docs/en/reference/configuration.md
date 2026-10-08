@@ -24,10 +24,12 @@ Every source of configuration sync82 reads. sync82 has **no command-line flags**
 
 | Variable | Default | Description |
 |---|---|---|
-| `SYNC82_DB_PATH` | `~/.sync82/knowledge.db` | Vault file used when no `path` argument, `.sync82.json` `path` or global `vaultPath` applies. A leading `~`, `~/`, `HOME`, `HOME/`, `$HOME` or `$HOME/` is expanded to the home directory. Read once when the server (or `export`/`import`) starts. |
+| `SYNC82_DB_PATH` | `~/.sync82/knowledge.db` | Vault file used when no `path` argument, `.sync82.json` `path` or global `vaultPath` applies. A leading `~`, `~/`, `HOME`, `HOME/`, `$HOME` or `$HOME/` is expanded to the home directory, and a relative value is made absolute against the directory the process starts in (each MCP client may start it elsewhere, so prefer an absolute path). Read once when the server (or a CLI command) starts. |
 | `XDG_CONFIG_HOME` | `~/.config` | `install`/`uninstall` only — where the Claude Desktop (Linux), OpenCode, Zed and Cline config files are looked up. Used only when it is an absolute path. |
 | `APPDATA` | `<home>/AppData/Roaming` | `install`/`uninstall` only, on Windows — where the Claude Desktop, Zed and Cline config files are looked up. |
+| `LOCALAPPDATA` | `<home>/AppData/Local` | `install`/`uninstall` only, on Windows — where the MSIX package of Claude Desktop keeps its config (`Packages\Claude_<id>\LocalCache\Roaming\Claude`). |
 | `CLINE_DATA_DIR` | `~/.cline` | `install`/`uninstall` only — the Cline CLI's data directory. |
+| `CLINE_DIR` | `~/.cline` | `install`/`uninstall` only — the Cline CLI's configuration directory, used in place of `~/.cline` when it is an absolute path (`CLINE_DATA_DIR` still wins). |
 | `CLINE_MCP_SETTINGS_PATH` | — | `install`/`uninstall` only — an absolute path to the Cline MCP settings file to use instead of the default ones. |
 
 To set it for one client, add it to that client's server entry, e.g. in a `mcpServers`-style config:
@@ -72,7 +74,7 @@ Every field is omitted when empty. Example:
 
 **`config.lock`** — every update of `config.json` holds an exclusive advisory lock on `~/.sync82/config.lock` (created with mode `0600`), so several sync82 processes (one per MCP client, plus the CLI) never overwrite each other's update. An update that changes nothing doesn't rewrite the file.
 
-**Corrupt file recovery** — when an update finds a `config.json` that is empty, whitespace-only or not valid JSON, it renames it to `config.json.corrupt-<unix-timestamp>` (keeping its permissions) and continues from an empty config. Until the next update, tools that only read the file log the parse error and skip the global tiers. See [Troubleshooting](../troubleshooting/common-issues.md#a-configjsoncorrupt--file-appeared-in-sync82).
+**Corrupt file recovery** — when an update finds a `config.json` that is empty, whitespace-only or not valid JSON, it renames it to `config.json.corrupt-<unix-timestamp>` (keeping its permissions) and continues from an empty config. A `config.json` that is a symlink (a dotfiles setup) keeps its link: its content is copied to `config.json.corrupt-<unix-timestamp>` instead, and the update is written through the link. Until the next update, tools that only read the file log the parse error and skip the global tiers. See [Troubleshooting](../troubleshooting/common-issues.md#a-configjsoncorrupt--file-appeared-in-sync82).
 
 ---
 
@@ -118,7 +120,7 @@ When the project itself came from `lastProject`, its `lastVaultPath` is used ins
 
 sync82 serves MCP over **stdio only**: running `sync82` with no arguments starts the server. There is no HTTP, SSE or Streamable HTTP transport and no flag or variable to enable one.
 
-The server supports MCP protocol revisions `2024-11-05` through `2026-07-28` and negotiates the newest one the client also supports. A single incoming JSON-RPC message may be at most **64 MiB**, enough for the largest valid tool call (10 MB of content) even after JSON escaping; a larger message closes the connection.
+The server supports MCP protocol revisions `2024-11-05` through `2026-07-28` and negotiates the newest one the client also supports. A single incoming JSON-RPC message may be at most **64 MiB**, enough for the largest valid tool call (10 MB of content) even after JSON escaping; a larger message can't be read, so it gets no JSON-RPC error: the server ends the session, and the client sees it exit.
 
 ---
 

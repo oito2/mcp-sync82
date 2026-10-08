@@ -24,7 +24,7 @@ Ele grava no arquivo de configurações de usuário do Zed — o target é detec
 | macOS | `~/.config/zed/settings.json` |
 | Windows | `%APPDATA%\Zed\settings.json` |
 
-> **Comentários no `settings.json`.** O arquivo de configurações do Zed costuma ter comentários. O sync82 nunca reescreve um arquivo com comentários ou vírgulas sobrando: o target falha, o arquivo fica exatamente como estava e a entrada é impressa para você colar à mão (passo 2).
+> **Comentários no `settings.json`.** O arquivo de configurações do Zed costuma ter comentários. O sync82 nunca reescreve um arquivo com comentários ou vírgulas sobrando: o target reporta `zed — manual step needed`, o arquivo fica exatamente como estava e a entrada é impressa para você colar à mão (passo 2).
 
 ### 2. Ou configure manualmente
 
@@ -65,7 +65,7 @@ Apaga a chave `sync82` de `context_servers`. Com comentários no arquivo, o targ
 
 ## ⚠️ Solução de Problemas
 
-- **`zed — failed` com "contains comments or trailing commas"** — esperado num arquivo de configurações com comentários; adicione (ou remova) a entrada impressa à mão.
+- **`zed — manual step needed` com "contains comments or trailing commas"** — esperado num arquivo de configurações com comentários; adicione (ou remova) a entrada impressa à mão.
 - **`command` não encontrado** — use um caminho absoluto; rode `sync82 install zed` de novo depois de mover o binário.
 - **Projeto errado resolvido** — pergunte _"Mostre a configuração atual do vault"_ (`get_vault_config`) e veja [Resolução de Contexto](../../architecture/context-resolution.md).
 

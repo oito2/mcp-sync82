@@ -21,12 +21,13 @@
 package logging
 
 import (
+	"io"
 	"log/slog"
-	"os"
 )
 
-// New returns a structured slog logger that writes text records exclusively to
-// stderr, using the default handler options.
-func New() *slog.Logger {
-	return slog.New(slog.NewTextHandler(os.Stderr, nil))
+// New returns a structured slog logger that writes text records to w, using
+// the default handler options. w is the process's stderr, or a stand-in for
+// it in tests; it must never be stdout.
+func New(w io.Writer) *slog.Logger {
+	return slog.New(slog.NewTextHandler(w, nil))
 }

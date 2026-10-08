@@ -21,24 +21,33 @@ import (
 	"strings"
 )
 
-// kindSlugPattern is the slug rule for document/entries "kind" names: a
-// leading letter or digit, then letters, digits, hyphens and underscores.
-// It is also the rule for project names.
-var kindSlugPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]*$`)
+// maxNameLength is the longest kind, project or subproject name, in
+// characters: "<name>.archived.md", the longest file export writes for a
+// name, then stays well within the 255-byte file name limit of common
+// filesystems.
+const maxNameLength = 128
 
-// validateKind checks a tool call's "filename" argument, raw, against the
-// kind slug rule and returns it lower-cased: kinds differing only in case
-// are the same kind. It returns an error when raw does not match the rule.
-// The argument is named "filename" in the tool schemas even though it
-// names a document/entries kind rather than a real file.
+// kindSlugPattern is the slug rule for document/entries "kind" names: a
+// leading letter or digit, then letters, digits, hyphens and underscores,
+// at most maxNameLength characters in all. It is also the rule for project
+// names.
+var kindSlugPattern = regexp.MustCompile(fmt.Sprintf(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,%d}$`, maxNameLength-1))
+
+// nameRuleText describes kindSlugPattern in error messages.
+var nameRuleText = fmt.Sprintf("must start with a letter or digit, contain only letters, digits, hyphens, and underscores, and be at most %d characters long", maxNameLength)
+
+// validateKind checks a tool call's "filename" argument, raw, trimmed of
+// surrounding white space, against the kind slug rule and returns it
+// lower-cased: kinds differing only in case are the same kind. It returns
+// an error when the name does not match the rule. The argument is named
+// "filename" in the tool schemas even though it names a document/entries
+// kind rather than a real file.
 func validateKind(raw string) (string, error) {
-	if !kindSlugPattern.MatchString(raw) {
-		return "", fmt.Errorf(
-			"invalid filename %q: must start with a letter or digit and contain only letters, digits, hyphens, and underscores",
-			raw,
-		)
+	name := strings.TrimSpace(raw)
+	if !kindSlugPattern.MatchString(name) {
+		return "", fmt.Errorf("invalid filename %q: %s", raw, nameRuleText)
 	}
-	return strings.ToLower(raw), nil
+	return strings.ToLower(name), nil
 }
 
 // standardKinds are the six kinds init_project_memory sets up for a

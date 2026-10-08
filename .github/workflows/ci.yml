@@ -11,10 +11,14 @@ on:
 permissions:
   contents: read
 
-# golangci-lint release the lint step runs (pinned, so a new linter release
-# cannot fail CI on unchanged code).
+# Tool versions, pinned so a new release cannot fail CI on unchanged code.
+# Dependabot doesn't update these; CONTRIBUTING's release checklist lists
+# them, and release.yml pins the same ones.
 env:
+  # golangci-lint release the lint step runs.
   GOLANGCI_LINT_VERSION: v2.14.0
+  # govulncheck release the vulnerability check runs.
+  GOVULNCHECK_VERSION: v1.8.0
 
 jobs:
   test:
@@ -56,6 +60,18 @@ jobs:
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
 
+      # The Windows- and macOS-only files (lock_windows.go, rename_windows.go…)
+      # are linted too, cross-checked from Linux with the same pinned version.
+      - name: golangci-lint (windows, darwin)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          # Built for the runner first: GOOS only applies to the lint run.
+          GOBIN="$RUNNER_TEMP/lint" go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}"
+          for goos in windows darwin; do
+            GOOS="$goos" "$RUNNER_TEMP/lint/golangci-lint" run ./...
+          done
+
       - name: Build
         run: go build ./...
 
@@ -64,16 +80,13 @@ jobs:
 
       - name: govulncheck
         if: runner.os == 'Linux'
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
 
   # Runs scripts/release, the program releases are built with, under a
   # pre-release tag, then checks that self-update can find, verify and run
   # its binaries and that server.json passes the MCP Registry validation.
   release-contract:
     runs-on: ubuntu-latest
-    env:
-      MCP_PUBLISHER_VERSION: v1.8.1
-      MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -94,12 +107,7 @@ jobs:
         run: SYNC82_DIST_DIR="$PWD/dist" go test -run TestReleaseContract -v ./internal/selfupdate
 
       - name: Install mcp-publisher
-        run: |
-          set -euo pipefail
-          curl -fsSL -o "$RUNNER_TEMP/mcp-publisher.tar.gz" \
-            "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
-          echo "${MCP_PUBLISHER_SHA256}  $RUNNER_TEMP/mcp-publisher.tar.gz" | sha256sum -c -
-          tar xzf "$RUNNER_TEMP/mcp-publisher.tar.gz" -C "$RUNNER_TEMP" mcp-publisher
+        uses: ./.github/actions/install-mcp-publisher
 
       - name: Validate server.json against the MCP Registry schema
         working-directory: dist

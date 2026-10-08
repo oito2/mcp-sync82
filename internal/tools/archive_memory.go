@@ -39,15 +39,11 @@ type ArchiveMemoryTool struct {
 // archiveMemoryArgs holds the decoded arguments of the archive_memory tool;
 // its JSON tags match the property names declared in InputSchema.
 type archiveMemoryArgs struct {
-	Project          string `json:"project,omitempty"`
-	Subproject       string `json:"subproject,omitempty"`
-	Filename         string `json:"filename"`
-	KeepDays         int    `json:"keep_days,omitempty"`
-	Summary          string `json:"summary,omitempty"`
-	DryRun           bool   `json:"dry_run,omitempty"`
-	Path             string `json:"path,omitempty"`
-	WorkspaceRoot    string `json:"workspace_root,omitempty"`
-	SearchParentDirs bool   `json:"search_parent_dirs,omitempty"`
+	targetArgs
+	Filename string `json:"filename"`
+	KeepDays int    `json:"keep_days,omitempty"`
+	Summary  string `json:"summary,omitempty"`
+	DryRun   bool   `json:"dry_run,omitempty"`
 }
 
 // maxKeepDays is the largest accepted keep_days (100 years). It keeps the
@@ -76,17 +72,12 @@ func (t *ArchiveMemoryTool) Description() string {
 func (t *ArchiveMemoryTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
-			"project":            map[string]any{"type": "string", "description": "Project name. If omitted, auto-discovered from workspace_root; unlike other tools, the last used project is refused."},
-			"subproject":         map[string]any{"type": "string", "description": "Subproject name."},
-			"filename":           map[string]any{"type": "string", "enum": []string{"progress", "decisions"}, "description": "Which append-only file to archive."},
-			"keep_days":          map[string]any{"type": "integer", "minimum": 1, "maximum": maxKeepDays, "description": "Entries older than this many days are archived (default 90, maximum 36500)."},
-			"summary":            map[string]any{"type": "string", "description": "A summary of the entries being archived, written by you, added as one new active entry in the same step. Without its own \"## YYYY-MM-DD\" header it gets one dated today; its own header must not be older than the archive cutoff (today minus keep_days). Not written when nothing is archived."},
-			"dry_run":            map[string]any{"type": "boolean", "description": "List the entries that would be archived (date and first line) without changing anything."},
-			"workspace_root":     map[string]any{"type": "string", "description": "Path to your project folder, used to auto-discover the project via .sync82.json."},
-			"search_parent_dirs": map[string]any{"type": "boolean", "description": SearchParentDirsDescription},
-			"path":               map[string]any{"type": "string", "description": PathDescription},
-		},
+		"properties": targetProperties(targetSchema{Project: projectRefusesLastDescription}, map[string]any{
+			"filename":  map[string]any{"type": "string", "enum": []string{"progress", "decisions"}, "description": "Which append-only file to archive."},
+			"keep_days": map[string]any{"type": "integer", "minimum": 1, "maximum": maxKeepDays, "description": "Entries older than this many days are archived (default 90, maximum 36500)."},
+			"summary":   map[string]any{"type": "string", "description": "A summary of the entries being archived, written by you, added as one new active entry in the same step. Without its own \"## YYYY-MM-DD\" header it gets one dated today; its own header must not be older than the archive cutoff (today minus keep_days). Not written when nothing is archived."},
+			"dry_run":   map[string]any{"type": "boolean", "description": "List the entries that would be archived (date and first line) without changing anything."},
+		}),
 		"required": []string{"filename"},
 	}
 }
@@ -142,10 +133,7 @@ func archiveCutoff(keepDays int) string {
 // failures are returned as errors.
 func (t *ArchiveMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(archiveMemoryArgs)
-	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, ContextArgs{
-		Project: args.Project, Subproject: args.Subproject, Path: args.Path,
-		WorkspaceRoot: args.WorkspaceRoot, SearchParentDirs: args.SearchParentDirs,
-	})
+	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, args.contextArgs())
 	if ready != nil {
 		return *ready, nil
 	}
@@ -180,11 +168,17 @@ func (t *ArchiveMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResul
 	}
 
 	if result.Archived == 0 {
-		plural := pluralize(result.Kept, "entry", "entries")
+		// Undated entries are never archived, so they are counted apart
+		// from the dated ones, which are all recent.
+		dated := result.Kept - result.NoDate
 		text := fmt.Sprintf(
-			"Nothing to archive in %s/%s: all %d %s are within the last %d days.",
-			label, args.Filename, result.Kept, plural, args.KeepDays,
+			"Nothing to archive in %s/%s: all %d dated %s are within the last %d days",
+			label, args.Filename, dated, pluralize(dated, "entry", "entries"), args.KeepDays,
 		)
+		if result.NoDate > 0 {
+			text += fmt.Sprintf(", and %d undated %s never archived", result.NoDate, pluralize(result.NoDate, "entry is", "entries are"))
+		}
+		text += "."
 		if args.Summary != "" {
 			text += " The summary was not written."
 		}

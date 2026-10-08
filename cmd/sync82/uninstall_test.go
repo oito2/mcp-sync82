@@ -220,7 +220,7 @@ func TestRunUninstall_NoTarget_AbortsWithoutConfirmation(t *testing.T) {
 func TestRunUninstall_NoTarget_ProceedsAndSummarizes(t *testing.T) {
 	f := newUninstallFixture(t)
 	code, out, _ := f.run(t, nil, "y\n")
-	if code != 0 || !strings.Contains(out, "Done. 1 removed, 0 skipped, 0 failed.") {
+	if code != 0 || !strings.Contains(out, "Done. 1 removed, 0 skipped, 0 need a manual step, 0 failed.") {
 		t.Fatalf("uninstall = %d, stdout %q", code, out)
 	}
 	if f.hasEntry(t) {
@@ -229,10 +229,13 @@ func TestRunUninstall_NoTarget_ProceedsAndSummarizes(t *testing.T) {
 }
 
 // TestRunUninstall_NoTarget_NoneDetected checks that with no client
-// detected nothing is asked or removed, while --purge still runs.
+// detected and no config holding an entry nothing is asked or removed, while
+// --purge still runs.
 func TestRunUninstall_NoTarget_NoneDetected(t *testing.T) {
 	f := newUninstallFixture(t)
 	f.targets[1].DetectDirs = func(env installer.Env) []string { return []string{filepath.Join(env.HomeDir, "missing")} }
+	const other = `{"mcpServers":{"other":{"command":"x"}}}`
+	writeTestFile(t, f.config, other)
 	dir := writeDataDir(t, f.home)
 	code, out, _ := f.run(t, []string{"--purge"}, "n\n")
 	if code != 0 {
@@ -244,11 +247,26 @@ func TestRunUninstall_NoTarget_NoneDetected(t *testing.T) {
 	if strings.Contains(out, "detected client(s)?") || !strings.Contains(out, "Purge cancelled.") {
 		t.Errorf("stdout = %q, want no target question and the purge question", out)
 	}
-	if !f.hasEntry(t) {
-		t.Error("an undetected target was cleaned")
+	if raw, err := os.ReadFile(f.config); err != nil || string(raw) != other {
+		t.Errorf("config = %q, %v; want it untouched", raw, err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "knowledge.db")); err != nil {
 		t.Error("declined purge deleted files")
+	}
+}
+
+// TestRunUninstall_NoTarget_UndetectedFileWithEntry checks that a file target
+// whose client is no longer detected, but whose config still holds a sync82
+// entry, is offered and cleaned.
+func TestRunUninstall_NoTarget_UndetectedFileWithEntry(t *testing.T) {
+	f := newUninstallFixture(t)
+	f.targets[1].DetectDirs = func(env installer.Env) []string { return []string{filepath.Join(env.HomeDir, "missing")} }
+	code, out, _ := f.run(t, nil, "y\n")
+	if code != 0 || !strings.Contains(out, "  - app\n") {
+		t.Fatalf("uninstall = %d, stdout %q; want app offered", code, out)
+	}
+	if f.hasEntry(t) {
+		t.Error("the undetected target holding an entry was not cleaned")
 	}
 }
 
@@ -268,14 +286,15 @@ func TestRunUninstall_SpecificTarget_NotDetected(t *testing.T) {
 	}
 }
 
-// TestRunUninstall_FailureSurfacesAsExitCode checks that a target whose
-// removal fails makes the command exit with code 1.
-func TestRunUninstall_FailureSurfacesAsExitCode(t *testing.T) {
+// TestRunUninstall_ManualStepSurfacesAsExitCode checks that a target whose
+// config has comments, so the entry must be removed by hand, is reported
+// as needing a manual step and makes the command exit with code 1.
+func TestRunUninstall_ManualStepSurfacesAsExitCode(t *testing.T) {
 	f := newUninstallFixture(t)
 	writeTestFile(t, f.config, "{\n// comment\n\"mcpServers\": {\"sync82\": {}}\n}")
 	code, out, _ := f.run(t, []string{"app"}, "")
-	if code != 1 || !strings.Contains(out, "app — failed") {
-		t.Fatalf("uninstall = %d, stdout %q; want a failure", code, out)
+	if code != 1 || !strings.Contains(out, "app — manual step needed") {
+		t.Fatalf("uninstall = %d, stdout %q; want a manual step", code, out)
 	}
 }
 
@@ -373,6 +392,9 @@ func TestRunUninstall_PurgeAfterDeclinedTargetsDoesNothing(t *testing.T) {
 	code, out, _ := f.run(t, []string{"--purge"}, "n\ny\n")
 	if code != 0 || strings.Contains(out, "Delete these files?") {
 		t.Fatalf("uninstall = %d, stdout %q; want no purge question after aborting", code, out)
+	}
+	if !strings.Contains(out, "--purge skipped too: nothing was removed or deleted.") {
+		t.Errorf("stdout = %q, want the purge-skipped notice", out)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "knowledge.db")); err != nil {
 		t.Error("aborted uninstall purged files")

@@ -260,7 +260,7 @@ func serverTools(version string) ([]mcpbTool, error) {
 	stores := store.NewManager()
 	defer stores.Close()
 	resolver := tools.NewResolver(filepath.Join(tmp, "knowledge.db"), logger)
-	srv := server.New(binary, version, logger, tools.Registered(resolver, stores), nil)
+	srv := server.New(binary, version, logger, server.Options{Tools: tools.Registered(resolver, stores), Prompts: tools.Prompts})
 
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	serverSession, err := srv.Connect(ctx, serverTransport, nil)

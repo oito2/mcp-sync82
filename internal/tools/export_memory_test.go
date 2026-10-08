@@ -263,3 +263,21 @@ func TestExportMemoryTool_ProjectNotFound(t *testing.T) {
 		t.Fatal("expected an execution error for a project that doesn't exist")
 	}
 }
+
+// TestExportMemoryTool_OverwriteRefusesTheLastSessionProject checks that
+// an export with overwrite, which can replace files on disk, refuses a
+// project taken only from the last session, while a plain export may use
+// it.
+func TestExportMemoryTool_OverwriteRefusesTheLastSessionProject(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	runTool(t, &CreateProjectTool{Resolver: r, Stores: mgr}, map[string]any{"project": "acme"})
+	runTool(t, &ListFilesTool{Resolver: r, Stores: mgr}, map[string]any{"project": "acme"}) // remembers acme
+	tool := &ExportMemoryTool{Resolver: r, Stores: mgr}
+	res := runTool(t, tool, map[string]any{"output_dir": t.TempDir(), "overwrite": true})
+	if !res.IsError || !strings.Contains(res.Text, "only taken from the last session") {
+		t.Errorf("overwrite on the last-session project = %+v, want a refusal", res)
+	}
+	if res := runTool(t, tool, map[string]any{"output_dir": t.TempDir()}); res.IsError {
+		t.Errorf("plain export on the last-session project = %+v, want it allowed", res)
+	}
+}

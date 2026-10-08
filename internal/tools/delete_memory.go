@@ -34,13 +34,9 @@ type DeleteMemoryTool struct {
 // deleteMemoryArgs holds the decoded arguments of the delete_memory tool;
 // its JSON tags match the property names declared in InputSchema.
 type deleteMemoryArgs struct {
-	Project          string `json:"project,omitempty"`
-	Subproject       string `json:"subproject,omitempty"`
-	Filename         string `json:"filename"`
-	Confirm          bool   `json:"confirm"`
-	Path             string `json:"path,omitempty"`
-	WorkspaceRoot    string `json:"workspace_root,omitempty"`
-	SearchParentDirs bool   `json:"search_parent_dirs,omitempty"`
+	targetArgs
+	Filename string `json:"filename"`
+	Confirm  bool   `json:"confirm"`
 }
 
 // Name returns the MCP tool name, "delete_memory".
@@ -58,15 +54,10 @@ func (t *DeleteMemoryTool) Description() string {
 func (t *DeleteMemoryTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
-			"project":            map[string]any{"type": "string", "description": "Project name. If omitted, auto-discovered from workspace_root; unlike other tools, the last used project is refused."},
-			"subproject":         map[string]any{"type": "string", "description": "Subproject name."},
-			"filename":           map[string]any{"type": "string", "description": "The custom file/kind to delete."},
-			"confirm":            map[string]any{"type": "boolean", "description": "Must be true to confirm permanent deletion. Ask the user before setting this."},
-			"workspace_root":     map[string]any{"type": "string", "description": "Path to your project folder, used to auto-discover the project via .sync82.json."},
-			"search_parent_dirs": map[string]any{"type": "boolean", "description": SearchParentDirsDescription},
-			"path":               map[string]any{"type": "string", "description": PathDescription},
-		},
+		"properties": targetProperties(targetSchema{Project: projectRefusesLastDescription}, map[string]any{
+			"filename": map[string]any{"type": "string", "description": "The custom file/kind to delete."},
+			"confirm":  map[string]any{"type": "boolean", "description": "Must be true to confirm permanent deletion. Ask the user before setting this."},
+		}),
 		"required": []string{"filename", "confirm"},
 	}
 }
@@ -99,10 +90,7 @@ func (t *DeleteMemoryTool) Validate(raw json.RawMessage) (any, error) {
 // are returned as errors.
 func (t *DeleteMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(deleteMemoryArgs)
-	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, ContextArgs{
-		Project: args.Project, Subproject: args.Subproject, Path: args.Path,
-		WorkspaceRoot: args.WorkspaceRoot, SearchParentDirs: args.SearchParentDirs,
-	})
+	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, args.contextArgs())
 	if ready != nil {
 		return *ready, nil
 	}

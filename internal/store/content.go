@@ -31,17 +31,21 @@ import (
 // exist, or a database error.
 func (s *Store) ReadContent(ctx context.Context, project, subproject, kind string) (content string, ok bool, err error) {
 	project, subproject, kind = normalizeName(project), normalizeName(subproject), normalizeName(kind)
-	docContent, found, err := s.ReadDocument(ctx, project, subproject, kind)
+	projectID, err := s.resolveProjectID(ctx, project, subproject)
 	if err != nil {
 		return "", false, err
+	}
+	docContent, found, err := readDocumentIn(ctx, s.db, projectID, kind)
+	if err != nil {
+		return "", false, fmt.Errorf("read document %s/%s: %w", label(project, subproject), kind, err)
 	}
 	if found {
 		return docContent, true, nil
 	}
 
-	entries, err := s.ReadEntries(ctx, project, subproject, kind, false)
+	entries, err := readEntriesIn(ctx, s.db, projectID, kind, false)
 	if err != nil {
-		return "", false, err
+		return "", false, fmt.Errorf("read entries %s/%s: %w", label(project, subproject), kind, err)
 	}
 	if len(entries) == 0 {
 		return "", false, nil
@@ -56,22 +60,11 @@ func (s *Store) ReadContent(ctx context.Context, project, subproject, kind strin
 
 // KindExists reports whether a kind has any data for the project: a documents
 // row (even with empty content) or at least one entries row, archived or not.
-// Errors are those of ReadDocument and ReadEntries.
+// It checks existence only, never loading the content. Errors are those of
+// KindMode.
 func (s *Store) KindExists(ctx context.Context, project, subproject, kind string) (bool, error) {
-	project, subproject, kind = normalizeName(project), normalizeName(subproject), normalizeName(kind)
-	_, found, err := s.ReadDocument(ctx, project, subproject, kind)
-	if err != nil {
-		return false, err
-	}
-	if found {
-		return true, nil
-	}
-
-	entries, err := s.ReadEntries(ctx, project, subproject, kind, true)
-	if err != nil {
-		return false, err
-	}
-	return len(entries) > 0, nil
+	mode, err := s.KindMode(ctx, project, subproject, kind)
+	return mode != KindStorageNone, err
 }
 
 // KindStorage names the table a kind's data lives in for a project.
@@ -99,16 +92,26 @@ func (s *Store) KindMode(ctx context.Context, project, subproject, kind string) 
 	if err != nil {
 		return KindStorageNone, err
 	}
+	mode, err := kindModeIn(ctx, s.db, projectID, kind)
+	if err != nil {
+		return KindStorageNone, fmt.Errorf("kind mode %s/%s: %w", label(project, subproject), kind, err)
+	}
+	return mode, nil
+}
+
+// kindModeIn returns the KindStorage of kind in the project with id
+// projectID, read through db: a documents row wins over entries rows, as
+// in KindMode. It returns a database error on failure.
+func kindModeIn(ctx context.Context, db execer, projectID int64, kind string) (KindStorage, error) {
 	var inDocuments, inEntries bool
-	err = s.db.QueryRowContext(ctx, `
+	err := db.QueryRowContext(ctx, `
 		SELECT EXISTS(SELECT 1 FROM documents WHERE project_id = ? AND kind = ?),
 		       EXISTS(SELECT 1 FROM entries WHERE project_id = ? AND kind = ?)`,
 		projectID, kind, projectID, kind,
 	).Scan(&inDocuments, &inEntries)
-	if err != nil {
-		return KindStorageNone, fmt.Errorf("kind mode %s/%s: %w", label(project, subproject), kind, err)
-	}
 	switch {
+	case err != nil:
+		return KindStorageNone, err
 	case inDocuments:
 		return KindStorageDocument, nil
 	case inEntries:
@@ -118,9 +121,50 @@ func (s *Store) KindMode(ctx context.Context, project, subproject, kind string) 
 	}
 }
 
+// KindModes returns the KindStorage of every kind with data in the
+// project, in one query: KindStorageDocument for a kind with a documents row
+// (even when it also has entries, as KindMode reports it), otherwise
+// KindStorageEntries for a kind with entries rows, archived or not. It
+// returns an error wrapping ErrNotFound when the project or subproject does
+// not exist, or a database error.
+func (s *Store) KindModes(ctx context.Context, project, subproject string) (map[string]KindStorage, error) {
+	project, subproject = normalizeName(project), normalizeName(subproject)
+	projectID, err := s.resolveProjectID(ctx, project, subproject)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT kind, 1 FROM documents WHERE project_id = ?
+		UNION
+		SELECT DISTINCT kind, 2 FROM entries WHERE project_id = ?`,
+		projectID, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("kind modes %s: %w", label(project, subproject), err)
+	}
+	defer rows.Close()
+	modes := map[string]KindStorage{}
+	for rows.Next() {
+		var kind string
+		var table int
+		if err := rows.Scan(&kind, &table); err != nil {
+			return nil, fmt.Errorf("scan kind mode: %w", err)
+		}
+		mode := KindStorageEntries
+		if table == 1 {
+			mode = KindStorageDocument
+		}
+		if mode == KindStorageDocument || modes[kind] == KindStorageNone {
+			modes[kind] = mode
+		}
+	}
+	return modes, rows.Err()
+}
+
 // KindMetadata describes the size and freshness of a kind's content.
 // SizeBytes is the content length in bytes, EstimatedTokens a rough estimate
-// (SizeBytes / 4), and LastModified the date of the last change.
+// (SizeBytes / 4), and LastModified the update date of a document, or the
+// creation date of the newest entry of a log: editing or archiving entries
+// does not change it.
 type KindMetadata struct {
 	SizeBytes       int
 	EstimatedTokens int

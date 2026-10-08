@@ -39,6 +39,22 @@ type ContextArgs struct {
 	SearchParentDirs bool
 }
 
+// targetArgs holds the project-resolution arguments of the project-scoped
+// tools. Embedded in a tool's args struct, its fields are decoded from the
+// top level of the call's arguments, like the tool's own fields.
+type targetArgs struct {
+	Project          string `json:"project,omitempty"`
+	Subproject       string `json:"subproject,omitempty"`
+	Path             string `json:"path,omitempty"`
+	WorkspaceRoot    string `json:"workspace_root,omitempty"`
+	SearchParentDirs bool   `json:"search_parent_dirs,omitempty"`
+}
+
+// contextArgs returns a's fields as the ContextArgs the Resolver takes.
+func (a targetArgs) contextArgs() ContextArgs {
+	return ContextArgs(a)
+}
+
 // ContextSource records which resolution tier produced a ResolvedContext,
 // so ContextNote can explain it back to the calling agent.
 type ContextSource string
@@ -93,9 +109,13 @@ func (c ResolvedContext) NeedsInput() string {
 // SearchParentDirs, discovered by walking up from it) and nothing else;
 // otherwise the global config's last-used project. DefaultDBPath is the
 // vault used when nothing else names one, and Logger receives diagnostics.
+// SkipRemember, when set, keeps RememberIfExists from recording the
+// last-used project, for callers such as the read-only CLI commands that
+// must leave the global config as it is.
 type Resolver struct {
 	DefaultDBPath string
 	Logger        *slog.Logger
+	SkipRemember  bool
 }
 
 // NewResolver returns a Resolver that falls back to defaultDBPath as the
@@ -109,12 +129,15 @@ func NewResolver(defaultDBPath string, logger *slog.Logger) *Resolver {
 // returns the resolved context, with the project and subproject names
 // validated and normalized. It never returns an error: a failure to
 // resolve is represented by OK: false, with Problem set when the cause is
-// an unusable workspace_root or an invalid name (InvalidName).
+// an unusable workspace_root, an invalid name (InvalidName) or a last-used
+// project remembered in another vault than the explicit path.
 //
 // An explicit subproject argument is kept in every tier. When
 // workspace_root is given, tier 3 is never consulted: a missing or invalid
 // .sync82.json there yields OK: false instead of silently falling back to
-// whatever project another session used last.
+// whatever project another session used last. With an explicit path, tier
+// 3 applies only when the last-used project was remembered in that same
+// vault, or with no vault at all.
 func (r *Resolver) Resolve(args ContextArgs) ResolvedContext {
 	rctx := r.resolve(args)
 	if rctx.OK {
@@ -129,6 +152,12 @@ func (r *Resolver) Resolve(args ContextArgs) ResolvedContext {
 // resolve runs the resolution tiers for Resolve, without validating or
 // normalizing the resulting names.
 func (r *Resolver) resolve(args ContextArgs) ResolvedContext {
+	// A workspace_root given but blank names no workspace: it is refused
+	// rather than read as absent, which would fall back to the last-used
+	// project.
+	if args.WorkspaceRoot != "" && strings.TrimSpace(args.WorkspaceRoot) == "" {
+		return ResolvedContext{Problem: `"workspace_root" is blank: pass the path of your project folder, or leave it out.`}
+	}
 	project := strings.TrimSpace(args.Project)
 	subproject := strings.TrimSpace(args.Subproject)
 
@@ -168,14 +197,21 @@ func (r *Resolver) resolve(args ContextArgs) ResolvedContext {
 	}
 
 	// Tier 3: global config's last-used project, in the vault it was
-	// last used in.
+	// last used in. An explicit path naming another vault doesn't reuse
+	// it: the remembered name says nothing about that vault's projects.
 	globalCfg, err := config.ReadGlobalConfig()
 	if err != nil {
 		r.Logger.Error("read global config", "error", err)
 	} else if globalCfg.LastProject != "" {
 		dbPath := r.vaultPath(args.Path, "", "")
-		if args.Path == "" && globalCfg.LastVaultPath != "" {
-			dbPath = absPath(config.ResolvePath(globalCfg.LastVaultPath))
+		if globalCfg.LastVaultPath != "" {
+			lastVault := absPath(config.ResolvePath(globalCfg.LastVaultPath))
+			if args.Path == "" {
+				dbPath = lastVault
+			} else if !samePath(dbPath, lastVault) {
+				return ResolvedContext{Problem: fmt.Sprintf("The last used project, %q, was used in another vault (%s), not in %s.",
+					FormatLabel(globalCfg.LastProject, globalCfg.LastSubproject), lastVault, dbPath)}
+			}
 		}
 		r.Logger.Info("using last known project from global config", "project", globalCfg.LastProject)
 		return ResolvedContext{
@@ -191,13 +227,109 @@ func (r *Resolver) resolve(args ContextArgs) ResolvedContext {
 	return ResolvedContext{}
 }
 
+// resolveSearchScope resolves the project scope and vault of a
+// search_memory call. Unlike Resolve, it never falls back to the global
+// config's last-used project: with neither project nor workspace_root,
+// the scope stays empty (search everything) rather than narrowing to the
+// project last used, and a workspace_root without a .sync82.json searches
+// the whole vault — unless a subproject was given, which then has no
+// project to belong to. The returned context always carries the vault
+// path; OK is true only when a project scope was resolved, and Problem is
+// set when the workspace's .sync82.json cannot be read or names an invalid
+// project, or a subproject was given without any project.
+func (r *Resolver) resolveSearchScope(args ContextArgs) ResolvedContext {
+	if strings.TrimSpace(args.Project) == "" && args.WorkspaceRoot != "" {
+		rctx := r.Resolve(args)
+		if !rctx.OK {
+			if rctx.Problem == "" && strings.TrimSpace(args.Subproject) != "" {
+				// Without a project the subproject can't narrow anything;
+				// searching the whole vault instead would mix projects.
+				rctx.Problem = fmt.Sprintf(`"subproject" was given, but no .sync82.json was found at workspace_root %s to tell which project it belongs to; pass "project" too`, args.WorkspaceRoot)
+			}
+			rctx.DBPath = r.DBPathOrDefault(args.Path)
+		}
+		return rctx
+	}
+	rctx := ResolvedContext{
+		Project:    NormalizeName(args.Project),
+		Subproject: NormalizeName(args.Subproject),
+		DBPath:     r.DBPathOrDefault(args.Path),
+		Source:     SourceProvided,
+	}
+	rctx.OK = rctx.Project != ""
+	return rctx
+}
+
+// resolveInitTarget determines the project, subproject and vault path
+// init_project_memory works on, from args. Unlike Resolver.Resolve, project
+// and subproject are filled in independently from args → local config →
+// global config, rather than all coming from a single winning tier. For
+// example, an explicit "project" argument with no "subproject" still picks
+// up a subproject from .sync82.json if one is found.
+//
+// A .sync82.json naming a different project than an explicit "project"
+// argument contributes neither its subproject nor its vault path. When
+// workspace_root is given, the global config's last-used project is never
+// consulted, and with an explicit path only when it was remembered in that
+// same vault, or with no vault at all. local is the .sync82.json found under workspace_root, if any;
+// project is empty when nothing determined one. err is set when a
+// .sync82.json under workspace_root exists but cannot be read or parsed.
+func (r *Resolver) resolveInitTarget(args ContextArgs) (project, subproject, dbPath string, local *config.LocalConfigResult, err error) {
+	project = NormalizeName(args.Project)
+	subproject = NormalizeName(args.Subproject)
+
+	if args.WorkspaceRoot != "" {
+		localPath, localRoot := "", ""
+		found, err := config.ReadLocalConfig(args.WorkspaceRoot, args.SearchParentDirs)
+		if err != nil {
+			return "", "", "", nil, err
+		}
+		if found != nil && strings.TrimSpace(found.Config.Project) != "" {
+			local = found
+			localProject := NormalizeName(found.Config.Project)
+			if project == "" || project == localProject {
+				project = localProject
+				if subproject == "" {
+					subproject = NormalizeName(found.Config.Subproject)
+				}
+				localPath, localRoot = found.Config.Path, found.ConfigRoot
+			}
+		}
+		return project, subproject, r.vaultPath(args.Path, localPath, localRoot), local, nil
+	}
+
+	dbPath = r.vaultPath(args.Path, "", "")
+	if project == "" {
+		if globalCfg, err := config.ReadGlobalConfig(); err == nil && globalCfg.LastProject != "" {
+			lastVault := ""
+			if globalCfg.LastVaultPath != "" {
+				lastVault = absPath(config.ResolvePath(globalCfg.LastVaultPath))
+			}
+			// As in Resolve, an explicit path naming another vault
+			// doesn't reuse the last project.
+			if args.Path != "" && lastVault != "" && !samePath(dbPath, lastVault) {
+				return "", subproject, dbPath, nil, nil
+			}
+			project = globalCfg.LastProject
+			if subproject == "" {
+				subproject = globalCfg.LastSubproject
+			}
+			if args.Path == "" && lastVault != "" {
+				dbPath = lastVault
+			}
+		}
+	}
+	return project, subproject, dbPath, nil, nil
+}
+
 // RememberIfExists records rctx as the last-used project, together with
 // its vault path, when that project exists in s, so a call naming a
 // project that doesn't exist (a typo) never becomes the default for later
 // calls. A context resolved from tier 3 is already the remembered one and
-// is left alone. Failures are logged and never returned.
+// is left alone, and nothing is recorded when r.SkipRemember is set.
+// Failures are logged and never returned.
 func (r *Resolver) RememberIfExists(ctx context.Context, s *store.Store, rctx ResolvedContext) {
-	if !rctx.OK || rctx.Source == SourceGlobalConfig {
+	if r.SkipRemember || !rctx.OK || rctx.Source == SourceGlobalConfig {
 		return
 	}
 	exists, err := s.ProjectExists(ctx, rctx.Project, rctx.Subproject)
@@ -322,7 +454,7 @@ func (r *Resolver) vaultPath(explicit, local, localRoot string) string {
 	} else if cfg.VaultPath != "" {
 		return absPath(config.ResolvePath(cfg.VaultPath))
 	}
-	return r.DefaultDBPath
+	return absPath(r.DefaultDBPath)
 }
 
 // absPath returns p made absolute against the current directory, or p
@@ -364,4 +496,10 @@ func ContextNote(ctx ResolvedContext) string {
 	default:
 		return ""
 	}
+}
+
+// samePath reports whether a and b name the same vault file once "~",
+// "HOME" or "$HOME" is expanded and both are made absolute and cleaned.
+func samePath(a, b string) bool {
+	return filepath.Clean(absPath(config.ResolvePath(a))) == filepath.Clean(absPath(config.ResolvePath(b)))
 }

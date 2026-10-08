@@ -24,7 +24,7 @@ It writes to Zed's user settings file — the target is detected by the presence
 | macOS | `~/.config/zed/settings.json` |
 | Windows | `%APPDATA%\Zed\settings.json` |
 
-> **Comments in `settings.json`.** Zed's settings file often contains comments. sync82 never rewrites a file with comments or trailing commas: the target fails, the file is left exactly as it was, and the entry is printed for you to paste in by hand (step 2).
+> **Comments in `settings.json`.** Zed's settings file often contains comments. sync82 never rewrites a file with comments or trailing commas: the target reports `zed — manual step needed`, the file is left exactly as it was, and the entry is printed for you to paste in by hand (step 2).
 
 ### 2. Or configure manually
 
@@ -65,7 +65,7 @@ Deletes the `sync82` key from `context_servers`. With comments in the file, the 
 
 ## ⚠️ Troubleshooting
 
-- **`zed — failed` with "contains comments or trailing commas"** — expected for a commented settings file; add (or remove) the printed entry by hand.
+- **`zed — manual step needed` with "contains comments or trailing commas"** — expected for a commented settings file; add (or remove) the printed entry by hand.
 - **`command` not found** — use an absolute path; run `sync82 install zed` again after moving the binary.
 - **Wrong project resolved** — ask _"Show me the current vault configuration"_ (`get_vault_config`), and see [Context Resolution](../../architecture/context-resolution.md).
 

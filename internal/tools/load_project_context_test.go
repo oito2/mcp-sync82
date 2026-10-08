@@ -554,3 +554,35 @@ func TestLoadProjectContextTool_LongLineKeepsMostOfTheBudget(t *testing.T) {
 		t.Error("the cut split a UTF-8 character")
 	}
 }
+
+// TestLoadProjectContextTool_ValidateListsEveryProblem checks that every
+// invalid argument is reported in one error.
+func TestLoadProjectContextTool_ValidateListsEveryProblem(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	_, err := (&LoadProjectContextTool{Resolver: r, Stores: mgr}).Validate(mustJSON(t, map[string]any{
+		"project": "acme", "max_entries": -1, "mode": "x", "since": "bad", "max_bytes": 1, "files": []string{"bad name"},
+	}))
+	if err == nil {
+		t.Fatal("invalid arguments accepted")
+	}
+	for _, want := range []string{"since", "max_entries", "mode", "max_bytes", "bad name"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q doesn't mention %s", err, want)
+		}
+	}
+}
+
+// TestLoadProjectContextTool_NamesUnknownFiles checks that a requested
+// file that doesn't exist is named, alone or next to files that do.
+func TestLoadProjectContextTool_NamesUnknownFiles(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	runTool(t, &InitProjectMemoryTool{Resolver: r, Stores: mgr}, map[string]any{"project": "acme"})
+	tool := &LoadProjectContextTool{Resolver: r, Stores: mgr}
+	if text := runTool(t, tool, map[string]any{"project": "acme", "files": []string{"decision"}}).Text; !strings.Contains(text, "[no file named: decision]") || strings.Contains(text, "no content yet") {
+		t.Errorf("a misspelled file alone: %q", text)
+	}
+	text := runTool(t, tool, map[string]any{"project": "acme", "files": []string{"memory", "decision"}}).Text
+	if !strings.Contains(text, "## memory") || !strings.Contains(text, "[no file named: decision]") {
+		t.Errorf("a misspelled file next to an existing one: %q", text)
+	}
+}

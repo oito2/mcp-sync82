@@ -61,36 +61,6 @@ func TestWriteDocument_OverwritesInPlaceWithoutKeepingHistory(t *testing.T) {
 	}
 }
 
-// TestIsBlankOrTemplate verifies that IsBlankOrTemplate is true for a missing,
-// empty or whitespace-only document and false for a document with content.
-func TestIsBlankOrTemplate(t *testing.T) {
-	ctx := context.Background()
-	s := newTestStore(t)
-
-	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
-		t.Fatalf("EnsureProject: %v", err)
-	}
-
-	blank, err := s.IsBlankOrTemplate(ctx, "acme", "", "memory")
-	if err != nil {
-		t.Fatalf("IsBlankOrTemplate (no row): %v", err)
-	}
-	if !blank {
-		t.Fatal("expected a kind with no document row to be blank")
-	}
-
-	if err := s.WriteDocument(ctx, "acme", "", "memory", "# Memory\n"); err != nil {
-		t.Fatalf("WriteDocument: %v", err)
-	}
-	blank, err = s.IsBlankOrTemplate(ctx, "acme", "", "memory")
-	if err != nil {
-		t.Fatalf("IsBlankOrTemplate (after write): %v", err)
-	}
-	if blank {
-		t.Fatal("expected a kind with real content to not be blank")
-	}
-}
-
 // TestWriteDocument_ConcurrentWritersAllSucceed runs many concurrent writes
 // through two independent Stores on the same vault file and verifies that
 // every write succeeds.

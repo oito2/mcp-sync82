@@ -101,7 +101,7 @@ func TestRunImport_UsesConfiguredGlobalVault(t *testing.T) {
 	t.Setenv("USERPROFILE", os.Getenv("HOME"))
 	defaultDB := filepath.Join(t.TempDir(), "default.db")
 	customDB := filepath.Join(t.TempDir(), "custom.db")
-	if err := config.WriteGlobalConfig(config.GlobalConfig{VaultPath: customDB}); err != nil {
+	if err := config.UpdateGlobalConfig(func(c *config.GlobalConfig) { *c = config.GlobalConfig{VaultPath: customDB} }); err != nil {
 		t.Fatal(err)
 	}
 	mgr := store.NewManager()
@@ -169,7 +169,7 @@ func TestRunImport_WrongArgCount(t *testing.T) {
 	if code != usageExitCode {
 		t.Fatalf("exit code = %d, want %d", code, usageExitCode)
 	}
-	if !strings.Contains(stderr.String(), "usage:") || !strings.Contains(stderr.String(), "Run 'sync82 --help' for usage.") {
+	if !strings.Contains(stderr.String(), "usage:") || !strings.Contains(stderr.String(), "--help' for usage.") {
 		t.Errorf("stderr = %q, want a usage message", stderr.String())
 	}
 }

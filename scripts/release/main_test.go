@@ -85,7 +85,7 @@ func TestPlatforms_MatchSelfUpdateAssetNames(t *testing.T) {
 		"sync82_windows_amd64.exe", "sync82_windows_arm64.exe",
 	}
 	var got []string
-	for _, p := range platforms {
+	for _, p := range selfupdate.ReleasePlatforms() {
 		got = append(got, selfupdate.AssetName(p[0], p[1]))
 	}
 	slices.Sort(got)
@@ -126,5 +126,24 @@ func TestWriteChecksumsFile_SHA256SumFormat(t *testing.T) {
 	}
 	if len(names) != len(sums) || !slices.IsSorted(names) {
 		t.Errorf("expected %d lines sorted by name, got %q", len(sums), names)
+	}
+}
+
+// TestReleaseBuildEnv_OverridesTheShell checks that the pinned entries come
+// after the caller's environment, so a GOAMD64 or GOFLAGS set in the shell
+// doesn't change the release binaries: the last entry of a key wins.
+func TestReleaseBuildEnv_OverridesTheShell(t *testing.T) {
+	t.Setenv("GOAMD64", "v3")
+	t.Setenv("GOFLAGS", "-tags=dev")
+	env := append(os.Environ(), releaseBuildEnv("linux", "amd64")...)
+	last := map[string]string{}
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		last[k] = v
+	}
+	for k, want := range map[string]string{"GOAMD64": "v1", "GOFLAGS": "", "CGO_ENABLED": "0", "GOOS": "linux", "GOARCH": "amd64", "GOARM64": "v8.0", "GOEXPERIMENT": ""} {
+		if last[k] != want {
+			t.Errorf("%s = %q, want %q", k, last[k], want)
+		}
 	}
 }

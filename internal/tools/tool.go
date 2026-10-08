@@ -30,6 +30,11 @@ type ToolResult struct {
 	// Structured, when set, is also returned as the result's structured
 	// content (a value that marshals to a JSON object).
 	Structured any
+	// ProjectsUnchanged is set on a successful result of a tool whose hints
+	// say it changes projects (ChangesProjects) when this call changed
+	// none, such as a question back to the agent, so no list change is
+	// announced.
+	ProjectsUnchanged bool
 }
 
 // Tool is the interface every one of sync82's tools implements, so the
@@ -74,4 +79,14 @@ type Tool interface {
 	// Execute runs the tool's business logic against the value Validate
 	// returned. A non-nil error here is always an execution failure.
 	Execute(ctx context.Context, args any) (ToolResult, error)
+}
+
+// OutputSchemaTool is implemented by the tools whose results carry a JSON
+// report. OutputSchema returns the JSON Schema of that report, an object
+// schema, which the server declares as the tool's output schema. Every
+// successful result of such a tool sets ToolResult.Structured to a value
+// that conforms to it, whatever the format of its text.
+type OutputSchemaTool interface {
+	Tool
+	OutputSchema() map[string]any
 }

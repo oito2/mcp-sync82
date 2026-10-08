@@ -36,14 +36,16 @@ type ReadMemoryTool struct {
 // readMemoryArgs holds the decoded arguments of the read_memory tool; its
 // JSON tags match the property names declared in InputSchema.
 type readMemoryArgs struct {
-	Project          string `json:"project,omitempty"`
-	Subproject       string `json:"subproject,omitempty"`
-	Filename         string `json:"filename"`
-	Path             string `json:"path,omitempty"`
-	WorkspaceRoot    string `json:"workspace_root,omitempty"`
-	SearchParentDirs bool   `json:"search_parent_dirs,omitempty"`
-	WithIDs          bool   `json:"with_ids,omitempty"`
+	targetArgs
+	Filename string `json:"filename"`
+	WithIDs  bool   `json:"with_ids,omitempty"`
+	MaxBytes int    `json:"max_bytes,omitempty"`
 }
+
+// readMemoryBytes is the default size cap of a read_memory response; the
+// max_bytes argument may set it between minContextBytes and
+// maxContextBytes.
+const readMemoryBytes = 1 << 20
 
 // Name returns the MCP tool name, "read_memory".
 func (t *ReadMemoryTool) Name() string { return "read_memory" }
@@ -51,7 +53,7 @@ func (t *ReadMemoryTool) Name() string { return "read_memory" }
 // Description returns the text shown to the calling agent that explains what
 // the tool does and how to use it.
 func (t *ReadMemoryTool) Description() string {
-	return `Read a memory file's content. For an append-only kind (progress, decisions, or a custom append kind), returns every non-archived entry concatenated in date order. With with_ids: true, each entry is preceded by a "<!-- entry:N -->" line giving the id that edit_entry takes; these lines are never stored if the content is written back.`
+	return `Read a memory file's content. For an append-only kind (progress, decisions, or a custom append kind), returns every non-archived entry concatenated in date order. With with_ids: true, each entry is preceded by a "<!-- entry:N -->" line giving the id that edit_entry takes; these lines are never stored if the content is written back. The response is cut at max_bytes (default 1 MB) with a note saying so; load_project_context with since or max_entries reads part of a long log.`
 }
 
 // InputSchema returns the JSON Schema of the tool's arguments: an object
@@ -60,46 +62,52 @@ func (t *ReadMemoryTool) Description() string {
 func (t *ReadMemoryTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"properties": map[string]any{
-			"project":            map[string]any{"type": "string", "description": "Project name. If omitted, auto-discovered from workspace_root or the last used project."},
-			"subproject":         map[string]any{"type": "string", "description": "Subproject name."},
-			"filename":           map[string]any{"type": "string", "description": "The file/kind to read (e.g. \"memory\", \"progress\", or a custom name)."},
-			"workspace_root":     map[string]any{"type": "string", "description": "Path to your project folder, used to auto-discover the project via .sync82.json."},
-			"search_parent_dirs": map[string]any{"type": "boolean", "description": SearchParentDirsDescription},
-			"with_ids":           map[string]any{"type": "boolean", "description": "Put a \"<!-- entry:N -->\" line before each entry of an append-only kind, with the id edit_entry takes. No effect on overwrite-style files."},
-			"path":               map[string]any{"type": "string", "description": PathDescription},
-		},
+		"properties": targetProperties(targetSchema{}, map[string]any{
+			"filename":  map[string]any{"type": "string", "description": "The file/kind to read (e.g. \"memory\", \"progress\", or a custom name)."},
+			"with_ids":  map[string]any{"type": "boolean", "description": "Put a \"<!-- entry:N -->\" line before each entry of an append-only kind, with the id edit_entry takes. No effect on overwrite-style files."},
+			"max_bytes": map[string]any{"type": "integer", "minimum": minContextBytes, "maximum": maxContextBytes, "description": "Size cap of the response in bytes (default 1048576, i.e. 1 MB). Longer content is cut at a line break, with a note."},
+		}),
 		"required": []string{"filename"},
 	}
 }
 
-// Validate decodes raw into readMemoryArgs and checks that filename is a
-// valid kind name. It returns the arguments with Filename lower-cased, or an
-// error.
+// Validate decodes raw into readMemoryArgs, checks that filename is a
+// valid kind name and that max_bytes, when given, is between
+// minContextBytes and maxContextBytes, defaulting it to readMemoryBytes. It
+// returns the arguments with Filename lower-cased, or an error listing
+// every problem.
 func (t *ReadMemoryTool) Validate(raw json.RawMessage) (any, error) {
 	var args readMemoryArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
 	}
+	var problems []string
 	kind, err := validateKind(args.Filename)
 	if err != nil {
-		return nil, err
+		problems = append(problems, err.Error())
 	}
 	args.Filename = kind
+	switch {
+	case args.MaxBytes == 0:
+		args.MaxBytes = readMemoryBytes
+	case args.MaxBytes < minContextBytes || args.MaxBytes > maxContextBytes:
+		problems = append(problems, fmt.Sprintf(`"max_bytes" must be between %d and %d`, minContextBytes, maxContextBytes))
+	}
+	if err := problemsError(problems); err != nil {
+		return nil, err
+	}
 	return args, nil
 }
 
 // Execute resolves the target project and returns the kind's content with
-// surrounding whitespace trimmed, or "(file is empty)" when nothing remains.
+// surrounding whitespace trimmed, or "(file is empty)" when nothing remains,
+// cut to MaxBytes by capReadMemory.
 // With WithIDs, an entries-backed kind is returned entry by entry, each
 // preceded by its entryMarker line. It returns an error when the project or
 // the kind does not exist.
 func (t *ReadMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(readMemoryArgs)
-	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, ContextArgs{
-		Project: args.Project, Subproject: args.Subproject, Path: args.Path,
-		WorkspaceRoot: args.WorkspaceRoot, SearchParentDirs: args.SearchParentDirs,
-	})
+	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, args.contextArgs())
 	if ready != nil {
 		return *ready, nil
 	}
@@ -118,7 +126,19 @@ func (t *ReadMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, 
 	if trimmed == "" {
 		trimmed = "(file is empty)"
 	}
-	return ToolResult{Text: trimmed}, nil
+	return ToolResult{Text: capReadMemory(trimmed, args.MaxBytes)}, nil
+}
+
+// capReadMemory returns text when it fits in maxBytes, and otherwise its
+// start, cut at a line break by cutPoint, followed by a note giving the
+// sizes; the result, note included, is never longer than maxBytes.
+func capReadMemory(text string, maxBytes int) string {
+	if len(text) <= maxBytes {
+		return text
+	}
+	note := fmt.Sprintf("\n\n[cut: %d of %d bytes shown; pass a larger max_bytes, or use load_project_context with since or max_entries to read part of a log]", maxBytes, len(text))
+	cut := cutPoint(text, maxBytes-len(note))
+	return text[:cut] + fmt.Sprintf("\n\n[cut: %d of %d bytes shown; pass a larger max_bytes, or use load_project_context with since or max_entries to read part of a log]", cut, len(text))
 }
 
 // readMemoryContent returns the readable content of kind like

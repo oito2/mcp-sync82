@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -58,13 +59,32 @@ func GlobalConfigPath() (string, error) {
 }
 
 // ReadGlobalConfig reads the global config. A missing file is not an
-// error: it returns the zero-value config. It returns an error when the
-// path cannot be resolved, the file cannot be read, or its content is not
+// error: it returns the zero-value config. The read holds a shared lock on
+// ~/.sync82/config.lock, so it never has the file open while
+// UpdateGlobalConfig, which holds the exclusive lock, renames a new file
+// over it (Windows refuses that rename while the file is open); in a
+// read-only ~/.sync82 or on a read-only filesystem, where the lock file
+// can't be created, it reads without the lock. It returns an error when the path cannot be resolved,
+// the lock cannot be taken, the file cannot be read, or its content is not
 // valid JSON.
 func ReadGlobalConfig() (GlobalConfig, error) {
 	path, err := GlobalConfigPath()
 	if err != nil {
 		return GlobalConfig{}, err
+	}
+
+	unlock, err := lockGlobalConfigShared(filepath.Dir(path))
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return GlobalConfig{}, nil // no ~/.sync82 yet, so no config
+	case errors.Is(err, os.ErrPermission) || isReadOnlyFS(err):
+		// A read-only ~/.sync82, or a read-only filesystem, can't hold a
+		// new lock file, and no update can rename the config there
+		// either: read it unlocked.
+	case err != nil:
+		return GlobalConfig{}, err
+	default:
+		defer unlock()
 	}
 
 	data, err := os.ReadFile(path)
@@ -82,11 +102,11 @@ func ReadGlobalConfig() (GlobalConfig, error) {
 	return cfg, nil
 }
 
-// WriteGlobalConfig overwrites the global config atomically with mode
+// writeGlobalConfig overwrites the global config atomically with mode
 // 0600. It does not take the update lock; use UpdateGlobalConfig for a
 // read-modify-write. It returns an error when the path cannot be
 // resolved, cfg cannot be encoded, or the file cannot be written.
-func WriteGlobalConfig(cfg GlobalConfig) error {
+func writeGlobalConfig(cfg GlobalConfig) error {
 	path, err := GlobalConfigPath()
 	if err != nil {
 		return err
@@ -117,7 +137,8 @@ var globalConfigMu sync.Mutex
 // (each MCP client runs its own server process, and the CLI is another
 // one). Both are released on every return path.
 //
-// When mutate leaves the config unchanged, nothing is written.
+// When mutate leaves the config unchanged, nothing is written, unless a
+// corrupt file was just set aside.
 //
 // A config file that exists but is empty, whitespace-only, or not valid
 // JSON is renamed to config.json.corrupt-<unix-timestamp> (keeping its
@@ -137,47 +158,58 @@ func UpdateGlobalConfig(mutate func(cfg *GlobalConfig)) error {
 	}
 	defer unlock()
 
-	cfg, err := readGlobalConfigForUpdate()
+	cfg, recovered, err := readGlobalConfigForUpdate()
 	if err != nil {
 		return err
 	}
 	before := cfg
 	mutate(&cfg)
-	if cfg == before {
+	if cfg == before && !recovered {
 		return nil
 	}
-	return WriteGlobalConfig(cfg)
+	return writeGlobalConfig(cfg)
 }
 
 // readGlobalConfigForUpdate reads the global config like ReadGlobalConfig,
 // except that an empty, whitespace-only, or unparsable file is moved aside
-// to config.json.corrupt-<unix-timestamp> and a zero-value config is
-// returned in its place. It returns an error when the path cannot be
+// to config.json.corrupt-<unix-timestamp> (copied there instead when
+// config.json is a symlink, which keeps the link) and a zero-value config
+// is returned in its place; recovered then reports it, so the caller writes
+// a fresh config even when nothing else changes (for a symlink, only a
+// write repairs the target). It returns an error when the path cannot be
 // resolved or the file cannot be read or moved aside.
-func readGlobalConfigForUpdate() (GlobalConfig, error) {
+func readGlobalConfigForUpdate() (cfg GlobalConfig, recovered bool, err error) {
 	path, err := GlobalConfigPath()
 	if err != nil {
-		return GlobalConfig{}, err
+		return GlobalConfig{}, false, err
 	}
 
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return GlobalConfig{}, nil
+		return GlobalConfig{}, false, nil
 	}
 	if err != nil {
-		return GlobalConfig{}, fmt.Errorf("read global config %s: %w", path, err)
+		return GlobalConfig{}, false, fmt.Errorf("read global config %s: %w", path, err)
 	}
 
-	var cfg GlobalConfig
 	if len(bytes.TrimSpace(data)) > 0 && json.Unmarshal(data, &cfg) == nil {
-		return cfg, nil
+		return cfg, false, nil
 	}
 
 	aside := path + ".corrupt-" + strconv.FormatInt(time.Now().Unix(), 10)
-	if err := os.Rename(path, aside); err != nil {
-		return GlobalConfig{}, fmt.Errorf("move corrupt global config %s aside: %w", path, err)
+	if info, err := os.Lstat(path); err == nil && info.Mode()&fs.ModeSymlink != 0 {
+		// Renaming a symlink (a dotfiles setup) would break the link: its
+		// content is copied aside instead, and the next write goes through
+		// the link to its target.
+		if err := os.WriteFile(aside, data, 0o600); err != nil {
+			return GlobalConfig{}, false, fmt.Errorf("copy corrupt global config %s aside: %w", path, err)
+		}
+		return GlobalConfig{}, true, nil
 	}
-	return GlobalConfig{}, nil
+	if err := os.Rename(path, aside); err != nil {
+		return GlobalConfig{}, false, fmt.Errorf("move corrupt global config %s aside: %w", path, err)
+	}
+	return GlobalConfig{}, true, nil
 }
 
 // lockGlobalConfig opens ~/.sync82/config.lock (creating the directory
@@ -196,12 +228,28 @@ func lockGlobalConfig() (func(), error) {
 		return nil, fmt.Errorf("create directory %s: %w", dir, err)
 	}
 
-	lockPath := filepath.Join(dir, globalLockFileName)
+	return openLock(filepath.Join(dir, globalLockFileName), true)
+}
+
+// lockGlobalConfigShared takes a shared lock on the config.lock file in
+// dir, creating the file with mode 0600 when missing but never dir itself,
+// so reading the config never creates ~/.sync82. The returned function
+// releases the lock and closes the file. It returns an error wrapping
+// os.ErrNotExist when dir does not exist, or an error when the file cannot
+// be opened or locked.
+func lockGlobalConfigShared(dir string) (func(), error) {
+	return openLock(filepath.Join(dir, globalLockFileName), false)
+}
+
+// openLock opens the lock file at lockPath, creating it with mode 0600
+// when missing, and blocks until it holds a lock on it, exclusive or
+// shared. The returned function releases the lock and closes the file.
+func openLock(lockPath string, exclusive bool) (func(), error) {
 	f, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open global config lock %s: %w", lockPath, err)
 	}
-	if err := lockFile(f); err != nil {
+	if err := lockFile(f, exclusive); err != nil {
 		f.Close()
 		return nil, fmt.Errorf("lock global config %s: %w", lockPath, err)
 	}

@@ -22,7 +22,8 @@ import (
 
 // projectNamePattern is the format of a project or subproject name:
 // alphanumeric characters, hyphens and underscores, starting with a letter
-// or digit. It is the same rule kindSlugPattern applies to kind slugs.
+// or digit, at most maxNameLength characters. It is the same rule
+// kindSlugPattern applies to kind slugs.
 var projectNamePattern = kindSlugPattern
 
 // validateProjectName checks name against projectNamePattern. field names
@@ -30,10 +31,7 @@ var projectNamePattern = kindSlugPattern
 // returns an error when name does not match.
 func validateProjectName(field, name string) error {
 	if !projectNamePattern.MatchString(name) {
-		return fmt.Errorf(
-			"%q must start with a letter or digit and contain only letters, digits, hyphens, and underscores: %q",
-			field, name,
-		)
+		return fmt.Errorf("%q %s: %q", field, nameRuleText, name)
 	}
 	return nil
 }

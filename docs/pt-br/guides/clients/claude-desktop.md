@@ -35,7 +35,7 @@ Ele mescla uma entrada `sync82` com o caminho absoluto do binário em:
 | SO | Arquivo |
 |---|---|
 | macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json`; no pacote MSIX (o download do claude.ai e a Microsoft Store), o app lê `%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude\claude_desktop_config.json` no lugar (o botão "Edit Config" dele pode abrir o outro arquivo). O `sync82 install` grava em cada um deles cujo diretório existe. |
 | Linux (beta) | `$XDG_CONFIG_HOME/Claude/claude_desktop_config.json` (padrão `~/.config/Claude/claude_desktop_config.json`) — o local que a beta para Linux usa; a documentação da Anthropic ainda não lista um caminho para Linux |
 
 O cliente é detectado quando esse diretório `Claude` existe; caso contrário, o target imprime `Skipped: claude-desktop not detected.` Em qualquer outro SO, imprime `Skipped: claude-desktop (Claude Desktop is only available for macOS, Windows and Linux).`
@@ -89,7 +89,7 @@ Isso remove a entrada do `claude_desktop_config.json` (Opção B). Uma extensão
 
 ## ⚠️ Solução de Problemas
 
-- **O sync82 não aparece** — confira se você fechou e reabriu o Claude Desktop por completo, e se o arquivo é JSON válido. Se o `sync82 install claude-desktop` reportou falha porque o arquivo tem comentários ou vírgulas sobrando, adicione à mão a entrada impressa.
+- **O sync82 não aparece** — confira se você fechou e reabriu o Claude Desktop por completo, e se o arquivo é JSON válido. Se o `sync82 install claude-desktop` reportou `manual step needed` porque o arquivo tem comentários ou vírgulas sobrando, adicione à mão a entrada impressa.
 - **`command` não encontrado** — o caminho em `command` precisa ser absoluto e apontar para um binário que existe; rode `sync82 install claude-desktop` de novo depois de mover o binário.
 - **Vault errado** — pergunte _"Mostre a configuração atual do vault"_ (`get_vault_config`) e veja [Resolução de Contexto](../../architecture/context-resolution.md).
 
