@@ -142,7 +142,8 @@ func (t *InitProjectMemoryTool) InputSchema() map[string]any {
 }
 
 // Validate decodes raw into initProjectMemoryArgs. It returns the arguments,
-// or an error when auto_detect is set without workspace_root, a given
+// or an error when workspace_root is blank, auto_detect is set without
+// workspace_root, a given
 // project or subproject name is invalid, or the answers exceed
 // maxContentSize in total.
 func (t *InitProjectMemoryTool) Validate(raw json.RawMessage) (any, error) {
@@ -179,8 +180,8 @@ func (t *InitProjectMemoryTool) Validate(raw json.RawMessage) (any, error) {
 	return args, nil
 }
 
-// Execute determines the target (see Resolver.resolveInitTarget), creates the project
-// when needed and writes the four standard documents that are missing or
+// Execute determines the target (see Resolver.resolveInitTarget), creates
+// the project when needed and writes the four standard documents that are missing or
 // still blank, filled from the answers and the analyzer's findings. With
 // workspace_root it also writes .sync82.json unless one already maps the
 // workspace to another project. It returns the instructional text when no

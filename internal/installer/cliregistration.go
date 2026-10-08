@@ -100,6 +100,13 @@ func cliError(command string, args []string, out []byte, err error) error {
 	return fmt.Errorf("%s %s failed: %s", command, strings.Join(args[:min(2, len(args))], " "), msg)
 }
 
+// notRegisteredOutput reports whether out, the output of a failed "mcp get"
+// or "mcp remove", says that no server of that name is registered ("No MCP
+// server named ..."), the answer of both the claude and the codex CLI.
+func notRegisteredOutput(out []byte) bool {
+	return strings.Contains(string(out), "No MCP server named")
+}
+
 // removeCLIRegistration removes every sync82 registration a CLI target
 // reports, so that a following MCP-add never collides with an existing
 // one. removed reports whether anything was removed; warnings describe
@@ -107,7 +114,9 @@ func cliError(command string, args []string, out []byte, err error) error {
 // RemoveArgs has nothing to remove.
 //
 // A target without Scope is queried once with GetArgs and, when sync82 is
-// registered, cleaned with RemoveArgs(""). A target with Scope is queried
+// registered, cleaned with RemoveArgs(""); a failed query counts as "not
+// registered" only when its output says so (notRegisteredOutput), and is
+// an error otherwise. A target with Scope is queried
 // again after each removal, since its GetArgs reports only the
 // registration that takes precedence: the reported scope is removed until
 // GetArgs fails. A scope that cannot be determined, or that is reported
@@ -120,8 +129,11 @@ func removeCLIRegistration(ctx context.Context, t Target) (removed bool, warning
 		return false, nil, nil
 	}
 	if t.Scope == nil {
-		if _, err := runCombined(ctx, t.Command, t.GetArgs); err != nil {
-			return false, nil, nil
+		if out, err := runCombined(ctx, t.Command, t.GetArgs); err != nil {
+			if notRegisteredOutput(out) {
+				return false, nil, nil
+			}
+			return false, nil, cliError(t.Command, t.GetArgs, out, err)
 		}
 		if err := runCLI(ctx, t.Command, t.RemoveArgs("")); err != nil {
 			return false, nil, err
@@ -147,7 +159,7 @@ func removeCLIRegistration(ctx context.Context, t Target) (removed bool, warning
 			if err == nil {
 				return true, warnings, nil
 			}
-			if strings.Contains(string(out), "No MCP server named") {
+			if notRegisteredOutput(out) {
 				return removed, warnings, nil
 			}
 			return removed, warnings, cliError(t.Command, args, out, err)

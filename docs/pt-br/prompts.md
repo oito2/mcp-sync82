@@ -155,6 +155,13 @@ Pedidos que você pode digitar para o seu agente de IA, em linguagem natural, pa
   > "As duas últimas entradas de progresso são iguais — apague a duplicada."
 - **Resultado esperado:** depois da sua confirmação, `edit_entry` com `action: "delete"` e `confirm: true` num dos dois ids.
 
+### Corrigir ou remover uma entrada arquivada
+
+- **Parâmetros esperados:** o log (`progress`, `decisions` ou um log personalizado) e o que mudar numa entrada que foi arquivada.
+- **Exemplo:**
+  > "Uma das entradas de progresso que arquivamos no ano passado diz que fomos para produção em março, mas foi em abril. Corrija no arquivo morto."
+- **Resultado esperado:** `read_memory` com `filename: "progress"`, `archived: true` e `with_ids: true` lista as entradas arquivadas com seus ids, depois `edit_entry` com `action: "replace"` (ou `"delete"` com `confirm: true`, depois da sua confirmação) nesse id. A entrada continua arquivada; `supersede` é recusado em entradas arquivadas.
+
 ---
 
 ## 🔍 Prompts de Análise e Busca
@@ -325,7 +332,7 @@ Pedidos que você pode digitar para o seu agente de IA, em linguagem natural, pa
 - **Parâmetros esperados:** o projeto (e o subprojeto); sua confirmação; para um projeto com subprojetos, o que fazer com eles.
 - **Exemplo:**
   > "Terminamos o projeto legacy-portal. Apague-o, e promova os subprojetos dele a projetos independentes."
-- **Resultado esperado:** depois da sua confirmação, `delete_project` com `confirm: true` e `subproject_action: "promote"` (ou `delete_all`, ou `cancel`). Sem `subproject_action`, o sync82 lista os subprojetos e pergunta.
+- **Resultado esperado:** depois da sua confirmação, `delete_project` com `confirm: true` e `subproject_action: "promote"` (ou `cancel`). Sem `subproject_action`, o sync82 lista os subprojetos e pergunta. Para apagar os subprojetos também, o agente mostra a lista deles antes e passa `subproject_action: "delete_all"` com `expected_subprojects`, a contagem deles; se até lá o projeto tiver outro número de subprojetos, nada é apagado e você recebe a lista nova.
 
 ### Renomear um projeto
 
@@ -343,7 +350,7 @@ Pedidos que você pode digitar para o seu agente de IA, em linguagem natural, pa
 - **Parâmetros esperados:** a pasta de destino; se arquivos existentes podem ser substituídos.
 - **Exemplo:**
   > "Exporte a memória deste projeto para ~/notes/acme-memory para eu versionar no git. Sobrescreva o que estiver lá."
-- **Resultado esperado:** `export_memory` com `output_dir` e `overwrite: true`: um arquivo `.md` por kind, mais `<kind>.archived.md` para as entradas arquivadas.
+- **Resultado esperado:** `export_memory` com `output_dir` e `overwrite: true`: um arquivo `.md` por kind, mais `<kind>.archived.md` para as entradas arquivadas e um manifesto `.sync82-kinds.json`; arquivos `.md` deixados por uma exportação anterior são listados.
 
 ### Restaurar um projeto a partir de Markdown
 

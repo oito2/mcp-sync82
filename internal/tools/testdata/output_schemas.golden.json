@@ -239,6 +239,9 @@
       },
       "scan_truncated": {
         "type": "boolean"
+      },
+      "substring_fallback": {
+        "type": "boolean"
       }
     },
     "required": [

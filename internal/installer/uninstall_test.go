@@ -71,6 +71,18 @@ func TestUninstallTarget_CLI_NotConfigured(t *testing.T) {
 	}
 }
 
+// TestUninstallTarget_CLI_FailedGetIsAnError verifies that a CLI target
+// whose "mcp get" fails without saying sync82 isn't registered is reported
+// as failed, with the CLI's output, instead of "not configured".
+func TestUninstallTarget_CLI_FailedGetIsAnError(t *testing.T) {
+	command, dir := fakeCLI(t)
+	writeFile(t, filepath.Join(dir, "broken"), "", 0o644)
+	got, out, errOut := uninstall(t, fakeCLITarget(command), testEnv("linux", t.TempDir(), nil))
+	if got != ResultFail || strings.Contains(out, "not configured") || !strings.Contains(errOut, "config.toml is not valid TOML") {
+		t.Fatalf("UninstallTarget() = %q, stdout %q, stderr %q; want a failure with the CLI's output", got, out, errOut)
+	}
+}
+
 // TestUninstallTarget_CLI_Removes verifies that a registered CLI target is removed
 // and reported as such.
 func TestUninstallTarget_CLI_Removes(t *testing.T) {

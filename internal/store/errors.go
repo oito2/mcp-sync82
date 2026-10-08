@@ -53,3 +53,12 @@ var ErrVaultNotFound = errors.New("vault not found")
 // entries, or as entries while it has a document. The message names the
 // kind and its current storage.
 var ErrStorageConflict = errors.New("storage conflict")
+
+// ErrEntryArchived is wrapped by SupersedeEntry when the entry to supersede
+// is archived.
+var ErrEntryArchived = errors.New("entry is archived")
+
+// ErrSubprojectCount is wrapped by DeleteProjectExpecting when the project
+// has a different number of subprojects than the caller expected. The
+// message gives the current count.
+var ErrSubprojectCount = errors.New("subproject count changed")

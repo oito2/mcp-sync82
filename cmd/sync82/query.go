@@ -187,11 +187,11 @@ var cliWording = strings.NewReplacer(
 
 // runToolCommand runs tool with toolArgs, as an MCP call would, and prints
 // its result; command names the subcommand in a usage error, and error
-// messages name CLI flags (cliWording). Invalid arguments are a usage
-// error (2). A result carrying a
-// report goes to stdout, and one without (a missing vault, for example) to
-// stderr; either way an error result exits with 1. A failure of the tool
-// itself is printed to stderr and exits with 1.
+// messages name CLI flags (cliWording). It returns the exit code: 2 when the
+// tool rejects the arguments (a usage error), 1 when the tool fails or its
+// result is an error, otherwise 0. A result carrying a report goes to
+// stdout, and an error result without one (a missing vault, for example) to
+// stderr.
 func runToolCommand(ctx context.Context, command string, tool tools.Tool, toolArgs map[string]any, deps memoryCmdDeps) int {
 	raw, err := json.Marshal(toolArgs)
 	if err != nil {

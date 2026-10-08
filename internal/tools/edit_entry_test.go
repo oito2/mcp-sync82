@@ -76,6 +76,28 @@ func TestEditEntryTool_Supersede(t *testing.T) {
 	}
 }
 
+// TestEditEntryTool_SupersedeArchivedIsRefused verifies that supersede on
+// an archived entry is an error result that points to replace and
+// append_memory, and that changes nothing.
+func TestEditEntryTool_SupersedeArchivedIsRefused(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	s, first, _ := seedLog(t, r, mgr)
+	ctx := context.Background()
+	if _, err := s.ArchiveEntries(ctx, "acme", "", "progress", "2026-01-15", nil); err != nil {
+		t.Fatal(err)
+	}
+	tool := &EditEntryTool{Resolver: r, Stores: mgr}
+
+	result := runTool(t, tool, map[string]any{"project": "acme", "filename": "progress", "entry_id": first, "action": "supersede", "content": "## 2026-02-15\n- new decision"})
+	if !result.IsError || !strings.Contains(result.Text, "is archived and can't be superseded") || !strings.Contains(result.Text, "append_memory") {
+		t.Fatalf("result = %+v, want the archived-entry error", result)
+	}
+	all, err := s.ReadEntries(ctx, "acme", "", "progress", true)
+	if err != nil || len(all) != 2 || strings.Contains(all[0].Body, "Superseded") {
+		t.Fatalf("entries = %+v, %v; want them unchanged", all, err)
+	}
+}
+
 // TestEditEntryTool_Delete verifies that delete requires confirm and then
 // removes only that entry.
 func TestEditEntryTool_Delete(t *testing.T) {

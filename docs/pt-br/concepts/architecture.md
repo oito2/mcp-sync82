@@ -106,6 +106,7 @@ release.yml (tag vX.Y.Z)
                                                │       └─ escrita + OIDC, sem código do repositório:
                                                │          baixa o dist/, sha256sum --check,
                                                │          cosign sign-blob → checksums.txt.sigstore.json,
+                                               │          cosign verify-blob (como o self-update faz),
                                                │          atestações de proveniência de build (binários + .mcpb),
                                                │          gh release create
                                                └─ somente leitura: scripts/release, --version == tag,

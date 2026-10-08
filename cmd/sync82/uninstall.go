@@ -28,8 +28,7 @@ import (
 	"github.com/oito2/mcp-sync82/internal/prompt"
 )
 
-// uninstallUsage is the help text printed for "sync82 uninstall --help" and for invalid
-// arguments.
+// uninstallUsage is the help text printed for "sync82 uninstall --help".
 const uninstallUsage = `Usage: sync82 uninstall [target] [--purge]
 
 Removes sync82's registration from the given target or, with no target,

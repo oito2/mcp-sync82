@@ -200,7 +200,7 @@ func (r *Resources) Read(ctx context.Context, uri string) (string, error) {
 		text, err = projectContext(ctx, s, target.project, target.subproject, summaryContextArgs())
 	} else {
 		var found bool
-		text, found, err = readMemoryContent(ctx, s, target.project, target.subproject, target.file, false)
+		text, found, err = readMemoryContent(ctx, s, target.project, target.subproject, target.file, false, false)
 		if err == nil && !found {
 			return "", ErrResourceNotFound
 		}

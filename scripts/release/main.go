@@ -202,8 +202,9 @@ func releaseLDFlags(version string) string {
 
 // buildOne cross-compiles ./cmd/sync82 from repoRoot for goos/goarch into
 // out, stamping version, with the pinned environment of releaseBuildEnv
-// and -trimpath so the binary does not embed local paths. Compiler output goes to the process's stdout and
-// stderr. It returns the error from the go build command.
+// and -trimpath so the binary does not embed local paths. Compiler output
+// goes to the process's stdout and stderr. It returns the error from the go
+// build command.
 func buildOne(repoRoot, goos, goarch, version, out string) error {
 	cmd := exec.Command("go", "build", "-trimpath",
 		"-ldflags", releaseLDFlags(version),
@@ -283,7 +284,7 @@ const serverJSONSchema = "https://static.modelcontextprotocol.io/schemas/2025-12
 var serverJSONIconSizes = []int{64, 128, 256, 512}
 
 // buildServerJSON assembles the MCP Registry descriptor for version (a
-// "vX.Y.Z" tag), describing the MCPB bundle whose SHA-256 is bundleSHA256.
+// "vX.Y.Z" tag, with an optional pre-release suffix), describing the MCPB bundle whose SHA-256 is bundleSHA256.
 func buildServerJSON(version, bundleSHA256 string) serverJSON {
 	repoURL := fmt.Sprintf("https://github.com/%s/%s", repoOrg, repoName)
 	semver := strings.TrimPrefix(version, "v")

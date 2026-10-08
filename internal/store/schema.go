@@ -230,8 +230,9 @@ var schemaV1 = []string{
 // migrate applies every pending entry of migrations in version order inside a
 // single transaction, recording each in schema_migrations. It is safe to call
 // on every Open: versions already recorded are skipped. It returns an error
-// when the vault's schema version is newer than the latest known version, or
-// when any statement fails, in which case nothing is applied.
+// wrapping ErrSchemaTooNew when the vault's schema version is newer than the
+// latest known version, or an error when any statement fails, in which case
+// nothing is applied.
 //
 // The migrations run on one connection with foreign keys off, which SQLite
 // only allows outside a transaction, so a table can be rebuilt without its

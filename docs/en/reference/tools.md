@@ -63,11 +63,12 @@ Permanently delete a project or subproject from the vault. **Requires `confirm: 
 | `subproject` | string | ❌ | Subproject name. When provided, only that subproject is deleted. |
 | `confirm` | boolean | ✅ | Must be `true` to confirm permanent deletion. |
 | `subproject_action` | string | conditionally | One of `cancel`, `promote`, `delete_all`. Required only when deleting a top-level project that has subprojects. |
+| `expected_subprojects` | integer (≥ 0) | with `delete_all` | The number of subprojects shown to the user. Only accepted with `subproject_action: "delete_all"`. |
 | `path` | string | ❌ | Vault path override. |
 
-If a top-level project has subprojects and `subproject_action` isn't given, the tool doesn't delete anything — it returns the list of subprojects and asks which action to take: `cancel` (abort), `promote` (move each subproject to the vault root as its own project), or `delete_all` (delete everything).
+If a top-level project has subprojects and `subproject_action` isn't given, the tool doesn't delete anything — it returns the list of subprojects and asks which action to take: `cancel` (abort), `promote` (move each subproject to the vault root as its own project), or `delete_all` (delete everything, also passing `expected_subprojects` with the count it gives).
 
-`subproject_action` can also be given on the first call, together with `confirm: true`: `delete_all` then deletes the project and every subproject without listing them first. Ask the user before passing it.
+`delete_all` deletes only when the project has exactly `expected_subprojects` subprojects, counted in the same transaction as the deletion, so a subproject the user never saw is never deleted. Without `expected_subprojects`, it answers with the list, as above; with another number, it is an error result that lists the current subprojects, and nothing is deleted. A project without subprojects and no `subproject_action` is deleted only while it still has none.
 
 ---
 
@@ -124,6 +125,7 @@ Read a memory file's content. For an append-only kind (`progress`, `decisions`, 
 | `project`, `subproject`, `workspace_root`, `search_parent_dirs` | — | ❌ | Standard context arguments. |
 | `filename` | string | ✅ | The file/kind to read (e.g. `"memory"`, `"progress"`, or a custom name). |
 | `with_ids` | boolean | ❌ | Put a `<!-- entry:N -->` line before each entry of an append-only kind, with the id [`edit_entry`](#edit_entry) takes. No effect on overwrite-style files. |
+| `archived` | boolean | ❌ | Read only the entries [`archive_memory`](#archive_memory) archived, instead of the active ones; with `with_ids`, each comes with its id, so `edit_entry` can replace or delete it. `(no archived entries)` when there are none. An overwrite-style file has no archived entries: the call is an error result. |
 | `max_bytes` | integer | ❌ | Size cap of the response in bytes (1024 to 52428800, default 1048576 — 1 MB). Longer content is cut at a line break and ends with `[cut: N of M bytes shown; …]`; [`load_project_context`](#load_project_context) with `since` or `max_entries` reads part of a long log. |
 | `path` | string | ❌ | Vault path override. |
 
@@ -192,7 +194,7 @@ Change one entry of an append-only memory file (`progress`, `decisions`, or a cu
 | `supersede` | Appends `content` as a new entry and adds a `> Superseded by entry N on YYYY-MM-DD.` line to the old one, in one transaction. The old text stays in the history, marked. Prefer it when a decision changed rather than was recorded wrong. |
 | `delete` | Removes the entry permanently. |
 
-Entry ids are unique within a vault and stay the same while the entry exists. Rewriting a whole file (`write_memory`, `update_project_memory`) or importing it (`import_memory`) creates new entries with new ids, so read the ids again after one of those. An id is never given to another entry, even after its entry is deleted, so an old id is reported as not found instead of changing a different entry. Archived entries can be edited too, but `read_memory` doesn't show them. Superseding an archived entry marks it in the archive and appends its replacement as an active entry.
+Entry ids are unique within a vault and stay the same while the entry exists. Rewriting a whole file (`write_memory`, `update_project_memory`) or importing it (`import_memory`) creates new entries with new ids, so read the ids again after one of those. An id is never given to another entry, even after its entry is deleted, so an old id is reported as not found instead of changing a different entry. Archived entries can be replaced or deleted too; `read_memory` with `archived: true` and `with_ids: true` lists them with their ids. An archived entry can't be superseded: the call is an error result that changes nothing and points to `replace`, or to `append_memory` for a new entry.
 
 ---
 
@@ -242,13 +244,15 @@ Search memory files. By default it finds the documents and entries that hold eve
 
 | `match` | Finds | Order |
 |---|---|---|
-| `words` (default) | Documents and entries holding **every** word of the query, anywhere in them and in any order. Case and the accents of Latin letters are ignored (`sessao` finds `Sessão`). A word ending in `*` matches as a prefix (`instal*` finds `instalador`). Punctuation only separates words: `edit_entry` searches `edit` and `entry`, and `"`, `NEAR`, `OR`, `:` or `-` have no special meaning. Words follow the SQLite `unicode61` tokenizer, so a word with a recent symbol (`100₽`) may need `exact`. | Relevance (best first) |
+| `words` (default) | Documents and entries holding **every** word of the query, anywhere in them and in any order. Case and the accents of Latin letters are ignored (`sessao` finds `Sessão`). A word ending in `*` matches as a prefix (`instal*` finds `instalador`). Punctuation only separates words: `edit_entry` searches `edit` and `entry`, and `"`, `NEAR`, `OR`, `:` or `-` have no special meaning. Words follow the SQLite `unicode61` tokenizer; when it finds nothing for a query holding characters outside the Latin, Greek and Cyrillic scripts (`100₽`, Cherokee, recent letters), the words are matched inside the text instead — see below. | Relevance (best first) |
 | `phrase` | Documents and entries holding the words **in that order**, with the same rules as `words` (`sobre o instal*` works). | Relevance (best first) |
 | `exact` | Lines holding the query as a literal substring, case-insensitive but accent-sensitive (`decisão` finds `DECISÃO`, not `decisao`). Use it for paths, identifiers or punctuation (`100%`, `foo_bar`, `v1.0`). | File order |
 
 In `words` mode, each line holding one of the words is reported, so a document where the words sit on different lines shows each of those lines. A phrase that continues onto the next line is reported by the lines holding its words. A query with no letter or number is rejected in `words` and `phrase` modes — use `exact` for it.
 
-Each match is labeled `project/file:line`, or `project/file[YYYY-MM-DD]:line` for an entry of a dated log (the line is counted within that entry). Results come in a stable order — by relevance in `words`/`phrase` mode, ties broken by project, file and reading order; by project, file and reading order in `exact` mode — so `offset` pages are consistent. In text format, a search with no match answers `No results for "<query>"`, and an `offset` past the last result `No more results for "<query>" at offset N`. Each matching or context line is cut at 4 KB, ending in `…`. The response is capped at about 1 MB as sent, its text and its structured content together (JSON escaping included); past that it ends with a note telling you to continue with `offset`. On a very large vault the scan stops after 5000 rows (per table in `exact` mode) or 64 MB of content, and the result says so.
+**Substring fallback.** The full-text index can split or fold some text differently from sync82: characters newer than the SQLite build's Unicode tables (`₽`, letters added since), or scripts whose case it doesn't know (Cherokee). When a `words` or `phrase` search finds nothing and the query holds a character outside ASCII and the Latin, Greek and Cyrillic blocks, sync82 searches again with each word as a substring of the folded text, then keeps the same rules: whole words for `words` (`100₽` doesn't find `1000₽`), the words in order for `phrase`. These results come in reading order, not by relevance, and the text ends with a note saying so (`substring_fallback: true` in the JSON report). The fallback reads every row in scope, so it is slower than the index. A query of only Latin, Greek or Cyrillic characters never falls back: `100` doesn't find `100₽`, which the index holds as one word — use `exact` for it. Words in scripts written without spaces (Chinese, Japanese) are whole runs of text, in the index and in the fallback alike, so a part of one needs `exact`.
+
+Each match is labeled `project/file:line`, or `project/file[YYYY-MM-DD]:line` for an entry of a dated log (the line is counted within that entry). Results come in a stable order — by relevance in `words`/`phrase` mode (reading order after the substring fallback), ties broken by project, file and reading order; by project, file and reading order in `exact` mode — so `offset` pages are consistent. In text format, a search with no match answers `No results for "<query>"`, and an `offset` past the last result `No more results for "<query>" at offset N`. Each matching or context line is cut at 4 KB, ending in `…`. The response is capped at about 1 MB as sent, its text and its structured content together (JSON escaping included); past that it ends with a note telling you to continue with `offset`. On a very large vault the scan stops after 5000 rows (per table in `exact` mode) or 64 MB of content, and the result says so.
 
 > `search_memory` deliberately never falls back to "the last used project" on its own the way other tools do — an unscoped search should search the whole vault, not silently guess a project. With `workspace_root` and no `project`, a workspace without `.sync82.json` also searches the whole vault, while a `.sync82.json` that can't be read or names an invalid project gives an error result instead of a search.
 
@@ -263,7 +267,7 @@ Load a project's memory (every non-blank file) concatenated into one context blo
 | Argument | Type | Required | Description |
 |---|---|---|---|
 | `project`, `subproject`, `workspace_root`, `search_parent_dirs` | — | ❌ | Standard context arguments. |
-| `files` | array of strings | ❌ | Only load these specific files/kinds, instead of everything. A name with no file is listed as `[no file named: …]`. |
+| `files` | array of strings | ❌ | Only load these specific files/kinds, instead of everything. A name with no file is listed as `[no file named: …]`, or counted (`[N requested files not found]`) when that note would take more than a quarter of `max_bytes`. |
 | `mode` | string (`summary` \| `full`) | ❌ | `summary` (default): the 10 most recent dated entries per append-only kind, response cut at 40 KB. `full`: every entry, response cut at 200 KB. `since`, `max_entries` and `max_bytes` override these defaults. |
 | `since` | string (`YYYY-MM-DD`) | ❌ | Only include dated entries (`progress`, `decisions`, or a custom append kind) on or after this date. Undated entries are always included. Overwrite-style files are unaffected. In `summary` mode, giving `since` lifts the default 10-entry limit. |
 | `max_entries` | integer | ❌ | Only include the most recent N dated entries per append-only kind (default 10 in `summary` mode). Undated entries (such as a title before the first dated entry) are always included and don't count toward N. Overwrite-style files are unaffected. |
@@ -491,6 +495,7 @@ With `all_projects: true`:
 | `results[].context_before`, `results[].context_after` | array of strings | Surrounding lines — only with `context_lines` > 0, omitted when empty. |
 | `next_offset` | integer | `offset` to pass for the next page — omitted when there are no more results. |
 | `scan_truncated` | boolean | `true` when the scan stopped early on a very large vault — omitted otherwise. |
+| `substring_fallback` | boolean | `true` when the full-text index found nothing and the words were matched inside the text, in reading order (see [Substring fallback](#search_memory)) — omitted otherwise. |
 
 ---
 

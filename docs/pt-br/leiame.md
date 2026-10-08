@@ -81,7 +81,7 @@ O agente de IA chama essas tools via MCP — ele nunca toca o banco de dados dir
 | `sync82 install [alvo]` | Conecta o sync82 a um ou todos os clientes MCP suportados |
 | `sync82 uninstall [alvo] [--purge]` | Remove o sync82 de um ou de todos os clientes; `--purge` também apaga os arquivos de `~/.sync82` após uma confirmação separada |
 | `sync82 config set-vault\|get-vault\|unset-vault` | Gerencia o override global do caminho do vault |
-| `sync82 self-update [--check] [--yes] \| --rollback` | Verifica o GitHub Releases e atualiza o binário no lugar (`--rollback` restaura a versão anterior) |
+| `sync82 self-update [--check] [--yes] [--require-signature] \| --rollback` | Verifica o GitHub Releases e atualiza o binário no lugar, verificando a assinatura quando o `cosign` está instalado (`--rollback` restaura a versão anterior) |
 | `sync82 export <projeto> [subprojeto] <pasta-de-saída>` | Extrai a memória de um projeto para arquivos `.md` (`--all` para o vault inteiro) |
 | `sync82 import <projeto> [subprojeto] <pasta-de-entrada> [--dry-run]` | Restaura a memória de um projeto a partir de arquivos `.md` (o inverso de `export`); `--dry-run` só mostra o que mudaria |
 | `sync82 search <consulta> [--project P] [--json]` | Busca na memória, como a tool `search_memory` |
@@ -186,8 +186,8 @@ Guias por cliente, com configuração manual e solução de problemas: [Claude C
 ## Atualização e manutenção
 
 ```bash
-sync82 self-update --check      # informa se existe uma release mais nova, sem instalar
-sync82 self-update              # baixa, verifica (SHA-256) e instala a release mais recente
+sync82 self-update --check      # informa se existe uma release mais nova (código de saída 10 quando existe)
+sync82 self-update              # baixa, verifica (assinatura com cosign, SHA-256) e instala a release mais recente
 sync82 self-update --rollback   # restaura a versão anterior, guardada como <binário>.bak
 ```
 

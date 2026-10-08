@@ -64,9 +64,9 @@ func GlobalConfigPath() (string, error) {
 // UpdateGlobalConfig, which holds the exclusive lock, renames a new file
 // over it (Windows refuses that rename while the file is open); in a
 // read-only ~/.sync82 or on a read-only filesystem, where the lock file
-// can't be created, it reads without the lock. It returns an error when the path cannot be resolved,
-// the lock cannot be taken, the file cannot be read, or its content is not
-// valid JSON.
+// can't be created, it reads without the lock. It returns an error when the
+// path cannot be resolved, the lock cannot be taken, the file cannot be
+// read, or its content is not valid JSON.
 func ReadGlobalConfig() (GlobalConfig, error) {
 	path, err := GlobalConfigPath()
 	if err != nil {

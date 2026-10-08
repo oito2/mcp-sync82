@@ -98,21 +98,26 @@ func appendEntryIn(ctx context.Context, db execer, projectID int64, kind, entryD
 // ReplaceAllEntries atomically replaces every non-archived entries row for
 // (project, kind) with the given sections, in order. Archived rows are left
 // untouched. The result reads the same as appending the sections one by one
-// with AppendEntry. It returns an error wrapping ErrNotFound when the project or subproject does not exist, or a database error.
+// with AppendEntry, except that a Preamble section is placed first. It
+// returns an error wrapping ErrNotFound when the project or subproject does
+// not exist, or a database error.
 func (s *Store) ReplaceAllEntries(ctx context.Context, project, subproject, kind string, sections []EntrySection) error {
 	return s.replaceEntries(ctx, project, subproject, kind, sections, false)
 }
 
 // ReplaceArchivedEntries atomically replaces every archived entries row for
 // (project, kind) with the given sections, stored as archived. Non-archived
-// rows are left untouched. It returns an error wrapping ErrNotFound when the project or subproject does not exist, or a database error.
+// rows are left untouched. It returns an error wrapping ErrNotFound when the
+// project or subproject does not exist, or a database error.
 func (s *Store) ReplaceArchivedEntries(ctx context.Context, project, subproject, kind string, sections []EntrySection) error {
 	return s.replaceEntries(ctx, project, subproject, kind, sections, true)
 }
 
 // replaceEntries deletes the (project, kind) entries rows whose archived flag
 // equals archived and inserts sections in their place with that same flag,
-// positioned after every remaining row, all in one transaction. It returns an error wrapping ErrNotFound when the project or subproject does not exist, or a database error.
+// positioned after every remaining row, all in one transaction. It returns an
+// error wrapping ErrNotFound when the project or subproject does not exist,
+// or a database error.
 func (s *Store) replaceEntries(ctx context.Context, project, subproject, kind string, sections []EntrySection, archived bool) error {
 	project, subproject, kind = normalizeName(project), normalizeName(subproject), normalizeName(kind)
 	return s.withProjectTx(ctx, project, subproject, func(tx *sql.Tx, projectID int64) error {
@@ -270,7 +275,8 @@ func readEntriesIn(ctx context.Context, db *sql.DB, projectID int64, kind string
 // preamble first, then dated entries by date, then other undated entries,
 // ties broken by insertion position. Archived entries are excluded unless
 // includeArchived is true. A kind with no entries yields an empty slice and
-// no error. It returns an error wrapping ErrNotFound when the project or subproject does not exist, or a database error.
+// no error. It returns an error wrapping ErrNotFound when the project or
+// subproject does not exist, or a database error.
 func (s *Store) ReadEntries(ctx context.Context, project, subproject, kind string, includeArchived bool) ([]Entry, error) {
 	project, subproject, kind = normalizeName(project), normalizeName(subproject), normalizeName(kind)
 	projectID, err := s.resolveProjectID(ctx, project, subproject)
@@ -291,7 +297,9 @@ func (s *Store) ReadEntries(ctx context.Context, project, subproject, kind strin
 // undated notes) are always kept, as in ArchiveEntries. since, if non-empty
 // (format "YYYY-MM-DD"), keeps only dated entries on or after it. maxEntries,
 // if > 0, then keeps only the most recent maxEntries of those dated entries.
-// The result is in the same reading order ReadEntries uses. It returns an error wrapping ErrNotFound when the project or subproject does not exist, or a database error.
+// The result is in the same reading order ReadEntries uses. It returns an
+// error wrapping ErrNotFound when the project or subproject does not exist,
+// or a database error.
 func (s *Store) ReadEntriesSince(ctx context.Context, project, subproject, kind, since string, maxEntries int) ([]Entry, error) {
 	project, subproject, kind = normalizeName(project), normalizeName(subproject), normalizeName(kind)
 	projectID, err := s.resolveProjectID(ctx, project, subproject)
@@ -413,7 +421,8 @@ func (s *Store) DeleteEntry(ctx context.Context, project, subproject, kind strin
 // connection: it must not call any *Store method.
 // It returns the new entry's id. It returns an error wrapping ErrNotFound
 // when the project or subproject does not exist or no such entry belongs
-// to (project, kind), or a database error.
+// to (project, kind), an error wrapping ErrEntryArchived, with nothing
+// changed, when the entry is archived, or a database error.
 func (s *Store) SupersedeEntry(ctx context.Context, project, subproject, kind string, id int64, entryDate, body string, mark func(oldBody string, newID int64) string) (int64, error) {
 	project, subproject, kind = normalizeName(project), normalizeName(subproject), normalizeName(kind)
 	where := label(project, subproject)
@@ -422,6 +431,9 @@ func (s *Store) SupersedeEntry(ctx context.Context, project, subproject, kind st
 		old, err := readEntryIn(ctx, tx, projectID, kind, id, where)
 		if err != nil {
 			return err
+		}
+		if old.Archived {
+			return fmt.Errorf("supersede entry %s/%s entry %d: %w", where, kind, id, ErrEntryArchived)
 		}
 		if newID, err = appendEntryIn(ctx, tx, projectID, kind, entryDate, body); err != nil {
 			return fmt.Errorf("supersede entry %s/%s entry %d: %w", where, kind, id, err)

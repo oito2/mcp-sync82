@@ -144,8 +144,8 @@ func TestGetVaultConfigTool_WorkspaceRootWithLocalConfig_ReportsSubprojects(t *t
 	}
 }
 
-// TestGetVaultConfigTool_WorkspaceRootWithLocalConfigPath_ReportsSubprojectsFr
-// omThatVault verifies that the subprojects in "local_config" are read from
+// TestGetVaultConfigTool_WorkspaceRootWithLocalConfigPath_ReportsSubprojectsFromThatVault
+// verifies that the subprojects in "local_config" are read from
 // the vault named by the "path" field of .sync82.json, not from the default
 // vault.
 func TestGetVaultConfigTool_WorkspaceRootWithLocalConfigPath_ReportsSubprojectsFromThatVault(t *testing.T) {

@@ -525,6 +525,30 @@ func TestSupersedeEntry_AppendsAndMarksAtomically(t *testing.T) {
 	}
 }
 
+// TestSupersedeEntry_RefusesAnArchivedEntry verifies that superseding an
+// archived entry fails with ErrEntryArchived and changes nothing, while
+// UpdateEntry still rewrites it.
+func TestSupersedeEntry_RefusesAnArchivedEntry(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	first, _, _ := seedEntries(t, ctx, s)
+	if _, err := s.db.ExecContext(ctx, `UPDATE entries SET archived = 1 WHERE id = ?`, first); err != nil {
+		t.Fatal(err)
+	}
+	mark := func(old string, newID int64) string { return fmt.Sprintf("%s\n(superseded by %d)", old, newID) }
+
+	if _, err := s.SupersedeEntry(ctx, "acme", "", "progress", first, "2026-02-01", "## 2026-02-01\n- replacement", mark); !errors.Is(err, ErrEntryArchived) {
+		t.Fatalf("SupersedeEntry of an archived entry: err = %v, want ErrEntryArchived", err)
+	}
+	all, err := s.ReadEntries(ctx, "acme", "", "progress", true)
+	if err != nil || len(all) != 2 || all[0].Body != "## 2026-01-01\n- first" {
+		t.Fatalf("entries after a refused supersede = %+v, %v; want them unchanged", all, err)
+	}
+	if err := s.UpdateEntry(ctx, "acme", "", "progress", first, "## 2026-01-01\n- fixed", nil); err != nil {
+		t.Fatalf("UpdateEntry of an archived entry: %v", err)
+	}
+}
+
 // TestUpdateEntry_ConcurrentWithAppends verifies that editing an entry while
 // other goroutines append keeps every append, with distinct positions.
 func TestUpdateEntry_ConcurrentWithAppends(t *testing.T) {

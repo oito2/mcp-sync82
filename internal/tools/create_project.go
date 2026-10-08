@@ -66,7 +66,8 @@ func (t *CreateProjectTool) InputSchema() map[string]any {
 
 // Validate decodes raw into createProjectArgs, normalizes the names and
 // checks them against the project-name rules. It returns the arguments, or
-// an error listing every invalid field.
+// an error when project is empty or one that lists every name that breaks
+// the rules.
 func (t *CreateProjectTool) Validate(raw json.RawMessage) (any, error) {
 	var args createProjectArgs
 	if err := decodeArgs(raw, &args); err != nil {

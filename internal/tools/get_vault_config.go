@@ -80,8 +80,8 @@ func (t *GetVaultConfigTool) Validate(raw json.RawMessage) (any, error) {
 // Execute returns a JSON report with the active vault path, the global
 // config's vault and last-used project with its vault and, when
 // workspace_root is given, the local .sync82.json together with the vault
-// it resolves to and the subprojects of its project.
-// Failure to read a config or the vault is returned as an error.
+// it resolves to and the subprojects of its project. A failure to read a
+// config or the vault is returned as an error.
 func (t *GetVaultConfigTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(getVaultConfigArgs)
 
@@ -132,8 +132,8 @@ func (t *GetVaultConfigTool) Execute(ctx context.Context, rawArgs any) (ToolResu
 // localConfigReport builds the "local_config" section of the report for
 // the .sync82.json found in local: its location, project, subproject and
 // path, the vault it resolves to, dbPath, and the names of the project's
-// subprojects read from that vault. A vault or project that doesn't exist yields an empty
-// subproject list. Store failures are returned as errors.
+// subprojects read from that vault. A vault or project that doesn't exist
+// yields an empty subproject list. Store failures are returned as errors.
 func (t *GetVaultConfigTool) localConfigReport(ctx context.Context, dbPath string, local *config.LocalConfigResult) (map[string]any, error) {
 	subNames := []string{}
 	// A vault that doesn't exist yet has no subprojects to list, and is

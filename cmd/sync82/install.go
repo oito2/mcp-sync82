@@ -31,8 +31,8 @@ import (
 // lists the detected targets and asks for confirmation before installing
 // into all of them. It returns the process exit code: 0 on success or when
 // the user declines, 1 on an unknown target, a closed stdin at the prompt,
-// any failed installation or one left for a manual edit, 2 on a usage error (a flag or more than one
-// target).
+// any failed installation or one left for a manual edit, 2 on a usage error
+// (a flag or more than one target).
 //
 // binaryPath is the absolute path every client is configured to launch.
 // targets and homeDir are passed in explicitly so tests can run the flow
@@ -100,10 +100,11 @@ func runInstall(ctx context.Context, args []string, stdin io.Reader, stdout, std
 	return 0
 }
 
-// confirmDetected lists the detected targets and asks prompt, formatted
-// with their count, reporting whether the answer read from in was yes. A
-// refusal prints "Aborted.". With no target detected it prints the names of
-// all targets instead and returns false without asking.
+// confirmDetected lists the detected targets and asks question, a format
+// string that receives their count, reporting whether the answer read from
+// in was yes. A refusal prints "Aborted.". With no target detected it prints
+// the names of all targets instead and returns false without asking. It
+// returns the error of the prompt (a closed input or a cancelled context).
 func confirmDetected(ctx context.Context, in *bufio.Reader, stdout io.Writer, targets, detected []installer.Target, question string) (bool, error) {
 	if len(detected) == 0 {
 		fmt.Fprintf(stdout, "No supported MCP clients detected. Supported targets: %s\n", strings.Join(installer.TargetNamesIn(targets), ", "))

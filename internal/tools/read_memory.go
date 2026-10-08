@@ -18,6 +18,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -26,8 +27,9 @@ import (
 
 // ReadMemoryTool implements read_memory: for an overwrite-style document,
 // return its content; for an append-only entries collection, concatenate
-// all non-archived entries in date order, each preceded by an entry id
-// marker line when with_ids is set.
+// all non-archived entries (or, with archived set, only the archived ones)
+// in date order, each preceded by an entry id marker line when with_ids is
+// set.
 type ReadMemoryTool struct {
 	Resolver *Resolver
 	Stores   *store.Manager
@@ -39,6 +41,7 @@ type readMemoryArgs struct {
 	targetArgs
 	Filename string `json:"filename"`
 	WithIDs  bool   `json:"with_ids,omitempty"`
+	Archived bool   `json:"archived,omitempty"`
 	MaxBytes int    `json:"max_bytes,omitempty"`
 }
 
@@ -53,7 +56,7 @@ func (t *ReadMemoryTool) Name() string { return "read_memory" }
 // Description returns the text shown to the calling agent that explains what
 // the tool does and how to use it.
 func (t *ReadMemoryTool) Description() string {
-	return `Read a memory file's content. For an append-only kind (progress, decisions, or a custom append kind), returns every non-archived entry concatenated in date order. With with_ids: true, each entry is preceded by a "<!-- entry:N -->" line giving the id that edit_entry takes; these lines are never stored if the content is written back. The response is cut at max_bytes (default 1 MB) with a note saying so; load_project_context with since or max_entries reads part of a long log.`
+	return `Read a memory file's content. For an append-only kind (progress, decisions, or a custom append kind), returns every non-archived entry concatenated in date order. With with_ids: true, each entry is preceded by a "<!-- entry:N -->" line giving the id that edit_entry takes; these lines are never stored if the content is written back. With archived: true, it returns only the entries archive_memory archived instead, so with with_ids: true they can be replaced or deleted with edit_entry. The response is cut at max_bytes (default 1 MB) with a note saying so; load_project_context with since or max_entries reads part of a long log.`
 }
 
 // InputSchema returns the JSON Schema of the tool's arguments: an object
@@ -65,6 +68,7 @@ func (t *ReadMemoryTool) InputSchema() map[string]any {
 		"properties": targetProperties(targetSchema{}, map[string]any{
 			"filename":  map[string]any{"type": "string", "description": "The file/kind to read (e.g. \"memory\", \"progress\", or a custom name)."},
 			"with_ids":  map[string]any{"type": "boolean", "description": "Put a \"<!-- entry:N -->\" line before each entry of an append-only kind, with the id edit_entry takes. No effect on overwrite-style files."},
+			"archived":  map[string]any{"type": "boolean", "description": "Read only the archived entries of an append-only kind instead of the active ones. An overwrite-style file has no archived entries and is refused."},
 			"max_bytes": map[string]any{"type": "integer", "minimum": minContextBytes, "maximum": maxContextBytes, "description": "Size cap of the response in bytes (default 1048576, i.e. 1 MB). Longer content is cut at a line break, with a note."},
 		}),
 		"required": []string{"filename"},
@@ -101,10 +105,12 @@ func (t *ReadMemoryTool) Validate(raw json.RawMessage) (any, error) {
 
 // Execute resolves the target project and returns the kind's content with
 // surrounding whitespace trimmed, or "(file is empty)" when nothing remains,
-// cut to MaxBytes by capReadMemory.
-// With WithIDs, an entries-backed kind is returned entry by entry, each
-// preceded by its entryMarker line. It returns an error when the project or
-// the kind does not exist.
+// cut to MaxBytes by capReadMemory. With WithIDs, an entries-backed kind is
+// returned entry by entry, each preceded by its entryMarker line. With
+// Archived, only the archived entries are returned, "(no archived entries)"
+// when there are none, and a kind stored as a document is an error result.
+// An unresolved project returns the instructional result; it returns an
+// error when the project or the kind does not exist.
 func (t *ReadMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(readMemoryArgs)
 	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, args.contextArgs())
@@ -114,7 +120,10 @@ func (t *ReadMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, 
 	if err != nil {
 		return ToolResult{}, err
 	}
-	content, ok, err := readMemoryContent(ctx, s, rctx.Project, rctx.Subproject, args.Filename, args.WithIDs)
+	content, ok, err := readMemoryContent(ctx, s, rctx.Project, rctx.Subproject, args.Filename, args.WithIDs, args.Archived)
+	if errors.Is(err, errNoArchive) {
+		return ToolResult{IsError: true, Text: fmt.Sprintf("%s/%s is an overwrite-style file, which has no archived entries; read it without archived.", rctx.Label(), args.Filename)}, nil
+	}
 	if err != nil {
 		return ToolResult{}, wrapNotFound(err, rctx.Label())
 	}
@@ -123,7 +132,10 @@ func (t *ReadMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, 
 	}
 
 	trimmed := strings.TrimSpace(content)
-	if trimmed == "" {
+	switch {
+	case trimmed == "" && args.Archived:
+		trimmed = "(no archived entries)"
+	case trimmed == "":
 		trimmed = "(file is empty)"
 	}
 	return ToolResult{Text: capReadMemory(trimmed, args.MaxBytes)}, nil
@@ -141,31 +153,50 @@ func capReadMemory(text string, maxBytes int) string {
 	return text[:cut] + fmt.Sprintf("\n\n[cut: %d of %d bytes shown; pass a larger max_bytes, or use load_project_context with since or max_entries to read part of a log]", cut, len(text))
 }
 
+// errNoArchive is returned by readMemoryContent when archived entries are
+// requested from a kind stored as a document.
+var errNoArchive = errors.New("an overwrite-style file has no archived entries")
+
 // readMemoryContent returns the readable content of kind like
-// store.ReadContent does. When withIDs is set and kind is stored as
-// entries, every entry body is preceded by its entryMarker line. ok is
-// false when the kind has no content. Store errors are returned unchanged.
-func readMemoryContent(ctx context.Context, s *store.Store, project, subproject, kind string, withIDs bool) (content string, ok bool, err error) {
-	if !withIDs {
+// store.ReadContent does. With archived set, it returns the archived
+// entries of a kind stored as entries instead (ok true, content empty when
+// there are none), and errNoArchive for a kind stored as a document. When
+// withIDs is set and kind is stored as entries, every entry body is
+// preceded by its entryMarker line. ok is false when the kind has no
+// content. Store errors are returned unchanged.
+func readMemoryContent(ctx context.Context, s *store.Store, project, subproject, kind string, withIDs, archived bool) (content string, ok bool, err error) {
+	if !withIDs && !archived {
 		return s.ReadContent(ctx, project, subproject, kind)
 	}
 	mode, err := s.KindMode(ctx, project, subproject, kind)
 	if err != nil {
 		return "", false, err
 	}
-	if mode != store.KindStorageEntries {
+	switch {
+	case mode == store.KindStorageNone && archived:
+		return "", false, nil
+	case mode == store.KindStorageDocument && archived:
+		return "", false, errNoArchive
+	case mode != store.KindStorageEntries:
 		return s.ReadContent(ctx, project, subproject, kind)
 	}
-	entries, err := s.ReadEntries(ctx, project, subproject, kind, false)
+	entries, err := s.ReadEntries(ctx, project, subproject, kind, archived)
 	if err != nil {
 		return "", false, err
 	}
-	if len(entries) == 0 {
-		return "", false, nil
+	var parts []string
+	for _, e := range entries {
+		if e.Archived != archived {
+			continue
+		}
+		if withIDs {
+			parts = append(parts, entryMarker(e.ID)+"\n"+e.Body)
+		} else {
+			parts = append(parts, e.Body)
+		}
 	}
-	parts := make([]string, len(entries))
-	for i, e := range entries {
-		parts[i] = entryMarker(e.ID) + "\n" + e.Body
+	if len(parts) == 0 && !archived {
+		return "", false, nil
 	}
 	return strings.Join(parts, "\n\n"), true, nil
 }

@@ -51,7 +51,8 @@ func newToolTestEnv(t *testing.T) (*Resolver, *store.Manager) {
 	return r, mgr
 }
 
-// mustJSON marshals v for use as a tool's raw json.RawMessage input.
+// mustJSON marshals v for use as a tool's raw json.RawMessage input. It
+// fails the test if v cannot be marshaled.
 func mustJSON(t *testing.T, v any) json.RawMessage {
 	t.Helper()
 	data, err := json.Marshal(v)

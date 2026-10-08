@@ -199,6 +199,16 @@ jobs:
         working-directory: dist
         run: cosign sign-blob --yes --bundle checksums.txt.sigstore.json checksums.txt
 
+      # The same check "sync82 self-update" runs when cosign is installed:
+      # the certificate must name this repository's release workflow for
+      # exactly this tag. A bundle it would refuse is never published.
+      - name: Verify the signature as self-update does
+        working-directory: dist
+        run: |
+          cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
       # Records SLSA build provenance for each binary and the bundle.
       # Verify a downloaded asset with:
       #   gh attestation verify <file> --repo oito2/mcp-sync82

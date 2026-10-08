@@ -78,8 +78,8 @@ func (t *ListProjectsTool) Validate(raw json.RawMessage) (any, error) {
 
 // Execute lists every top-level project with its subprojects in the vault. A
 // vault that does not exist is reported as an empty list rather than
-// created. The output is text or JSON; store failures are returned as
-// errors.
+// created. The output is text or JSON, with the list also returned as
+// structured content; store failures are returned as errors.
 func (t *ListProjectsTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(listProjectsArgs)
 	dbPath := t.Resolver.DBPathOrDefault(args.Path)

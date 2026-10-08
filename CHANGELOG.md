@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-08
+
+### Added
+
+- `read_memory`: new `archived` argument that reads only the archived entries of a log. With `with_ids`, each one comes with its id, so `edit_entry` can replace or delete an archived entry; before, no tool showed those ids.
+- `sync82 self-update` verifies the Sigstore signature of the release's `checksums.txt` when `cosign` v3 or later is on `PATH`. The certificate must name this repository's release workflow for exactly the new tag, and a failed verification aborts the update. Without cosign, it warns and relies on the checksum. The new `--require-signature` option refuses to update without a verified signature.
+
+### Changed
+
+- **`sync82 self-update --check` exits with `10` when an update is available**, and with `0` only when the binary is up to date. Before, both cases exited with `0`.
+- `search_memory` in `words` and `phrase` mode finds text the full-text index splits or folds differently, such as `100₽`, Cherokee or letters newer than SQLite's Unicode tables. When the index finds nothing for a query holding characters outside the Latin, Greek and Cyrillic scripts, the words are matched inside the text instead, still as whole words (or in order, for a phrase). These results come in reading order, with a note in the text and `substring_fallback: true` in the JSON report.
+- **`delete_project` with `subproject_action: "delete_all"` needs `expected_subprojects`**, the number of subprojects shown to the user, checked in the same transaction as the deletion. Without it, the tool answers with the list of subprojects; with another number, it deletes nothing. Before, `delete_all` on a first call deleted subprojects nobody had seen. A project without subprojects is now deleted only while it still has none.
+- `sync82 install` and `uninstall` keep the order of the keys in the JSON config files they rewrite, and every value as written; only the indentation changes. Before, keys came out in alphabetical order. A new `sync82` entry goes at the end of the server list.
+- **`edit_entry` refuses `supersede` on an archived entry**, with an error result that changes nothing. Before, the replacement was added as an active entry. `replace` and `delete` still work on archived entries.
+
+### Fixed
+
+- `load_project_context` keeps its response within `max_bytes` when `files` names many long files that don't exist: they are counted (`[N requested files not found]`) instead of named when the note would take more than a quarter of `max_bytes`.
+- `sync82 install codex` and `uninstall codex` no longer take a failed `codex mcp get` (a broken `config.toml`, a timeout) for "not registered". Only `No MCP server named` means that; any other failure fails the target with Codex's output. Before, `uninstall` could report `not configured` while sync82 was still registered.
+
+### Security
+
+- The release workflow runs the same `cosign verify-blob` check as `self-update` (exact workflow identity and tag) before it publishes a release.
+
 ## [1.2.0] - 2026-10-08
 
 ### Added
@@ -158,7 +182,8 @@ First public release.
 - `sync82 install` for Claude Code, Claude Desktop, Antigravity, Codex, OpenCode, Cursor, Zed and Cline.
 - Release binaries for Linux, macOS and Windows (amd64/arm64), a Claude Desktop extension (`sync82.mcpb`) and an MCP Registry entry (`io.github.oito2/mcp-sync82`), with SHA-256 checksums, a Sigstore signature and GitHub build provenance attestations.
 
-[Unreleased]: https://github.com/oito2/mcp-sync82/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/oito2/mcp-sync82/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/oito2/mcp-sync82/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/oito2/mcp-sync82/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/oito2/mcp-sync82/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/oito2/mcp-sync82/compare/v1.0.0...v1.1.0

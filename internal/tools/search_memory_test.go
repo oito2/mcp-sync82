@@ -153,6 +153,33 @@ func TestSearchMemoryTool_NoResults(t *testing.T) {
 	}
 }
 
+// TestSearchMemoryTool_SubstringFallbackIsReported verifies that a search
+// answered by the substring fallback says so in the text and sets
+// substring_fallback in the structured report.
+func TestSearchMemoryTool_SubstringFallbackIsReported(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	ctx := context.Background()
+	s, err := mgr.Get(ctx, r.DefaultDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteDocument(ctx, "acme", "", "memory", "price 100₽ today"); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := &SearchMemoryTool{Resolver: r, Stores: mgr}
+	result := runTool(t, tool, map[string]any{"query": "100₽", "project": "acme"})
+	if result.IsError || !strings.Contains(result.Text, "acme/memory:1  price 100₽ today") || !strings.Contains(result.Text, "the words were matched inside the text instead") {
+		t.Fatalf("result = %q, want the match and the fallback note", result.Text)
+	}
+	if report, ok := result.Structured.(searchReport); !ok || !report.SubstringFallback || len(report.Results) != 1 {
+		t.Fatalf("structured = %+v, want substring_fallback and one result", result.Structured)
+	}
+}
+
 // TestSearchMemoryTool_PaginationTruncationMessage verifies that, when matches
 // exceed the limit, the output contains only limit matches and a message
 // saying the limit was reached.
@@ -603,7 +630,8 @@ func TestSearchMemoryTool_RejectsInvalidProjectName(t *testing.T) {
 // TestSearchMemoryTool_ResponseCapCountsEncodedCopies fills the results
 // with lines of "<", which JSON encodes in six bytes each, and checks that
 // the whole response as sent — the text and the structured content, both
-// JSON-encoded — stays within maxSearchResponseSize, in text and JSON
+// JSON-encoded — stays within about maxSearchResponseSize (a 4096-byte
+// allowance for the envelope), in text and JSON
 // format, while reporting where to continue.
 func TestSearchMemoryTool_ResponseCapCountsEncodedCopies(t *testing.T) {
 	r, mgr := newToolTestEnv(t)

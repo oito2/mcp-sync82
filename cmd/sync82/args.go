@@ -50,8 +50,8 @@ type parsedArgs struct {
 // most likely; "--name=-value" passes such a value on purpose), and a flag
 // given twice are errors — so a typo is reported instead of being taken as
 // a project, directory or vault name. Every argument after "--" is
-// positional. It returns the
-// split command line, or the first such error found.
+// positional. It returns the split command line, or the first such error
+// found.
 func parseArgs(args []string, boolFlags, valueFlags []string) (parsedArgs, error) {
 	p := parsedArgs{flags: map[string]bool{}, values: map[string]string{}}
 	isBool := map[string]bool{}

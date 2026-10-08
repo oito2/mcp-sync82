@@ -63,11 +63,12 @@ Apaga permanentemente um projeto ou subprojeto do vault. **Exige `confirm: true`
 | `subproject` | string | ❌ | Nome do subprojeto. Quando fornecido, só aquele subprojeto é apagado. |
 | `confirm` | boolean | ✅ | Deve ser `true` para confirmar a exclusão permanente. |
 | `subproject_action` | string | condicional | Um de `cancel`, `promote`, `delete_all`. Obrigatório só ao apagar um projeto de nível superior que tem subprojetos. |
+| `expected_subprojects` | integer (≥ 0) | com `delete_all` | O número de subprojetos mostrados ao usuário. Só é aceito com `subproject_action: "delete_all"`. |
 | `path` | string | ❌ | Override do caminho do vault. |
 
-Se um projeto de nível superior tem subprojetos e `subproject_action` não é dado, a tool não apaga nada — retorna a lista de subprojetos e pergunta qual ação tomar: `cancel` (abortar), `promote` (mover cada subprojeto pra raiz do vault como projeto próprio), ou `delete_all` (apagar tudo).
+Se um projeto de nível superior tem subprojetos e `subproject_action` não é dado, a tool não apaga nada — retorna a lista de subprojetos e pergunta qual ação tomar: `cancel` (abortar), `promote` (mover cada subprojeto pra raiz do vault como projeto próprio), ou `delete_all` (apagar tudo, passando também `expected_subprojects` com a contagem que ela informa).
 
-`subproject_action` também pode ser passado na primeira chamada, junto com `confirm: true`: `delete_all` então apaga o projeto e todos os subprojetos sem listá-los antes. Pergunte ao usuário antes de passá-lo.
+`delete_all` só apaga quando o projeto tem exatamente `expected_subprojects` subprojetos, contados na mesma transação que apaga, então um subprojeto que o usuário nunca viu nunca é apagado. Sem `expected_subprojects`, a tool responde com a lista, como acima; com outro número, é um resultado de erro que lista os subprojetos atuais, e nada é apagado. Um projeto sem subprojetos e sem `subproject_action` só é apagado enquanto continuar sem nenhum.
 
 ---
 
@@ -124,6 +125,7 @@ Lê o conteúdo de um arquivo de memória. Para um kind só-anexa (`progress`, `
 | `project`, `subproject`, `workspace_root`, `search_parent_dirs` | — | ❌ | Argumentos de contexto padrão. |
 | `filename` | string | ✅ | O arquivo/kind a ler (ex. `"memory"`, `"progress"`, ou um nome customizado). |
 | `with_ids` | boolean | ❌ | Coloca uma linha `<!-- entry:N -->` antes de cada entrada de um kind só-anexa, com o id que o [`edit_entry`](#edit_entry) recebe. Não muda nada em arquivos de sobrescrita. |
+| `archived` | boolean | ❌ | Lê só as entradas que o [`archive_memory`](#archive_memory) arquivou, em vez das ativas; com `with_ids`, cada uma vem com seu id, para que o `edit_entry` possa substituí-la ou apagá-la. `(no archived entries)` quando não há nenhuma. Um arquivo de sobrescrita não tem entradas arquivadas: a chamada é um resultado de erro. |
 | `max_bytes` | integer | ❌ | Limite de tamanho da resposta em bytes (1024 a 52428800, padrão 1048576 — 1 MB). Um conteúdo maior é cortado numa quebra de linha e termina com `[cut: N of M bytes shown; …]`; o [`load_project_context`](#load_project_context) com `since` ou `max_entries` lê parte de um log longo. |
 | `path` | string | ❌ | Override do caminho do vault. |
 
@@ -192,7 +194,7 @@ Altera uma entrada de um arquivo de memória só-anexa (`progress`, `decisions`,
 | `supersede` | Anexa `content` como uma nova entrada e acrescenta uma linha `> Superseded by entry N on YYYY-MM-DD.` à antiga, numa única transação. O texto antigo continua no histórico, marcado. Prefira quando uma decisão mudou, e não quando foi registrada errada. |
 | `delete` | Remove a entrada permanentemente. |
 
-Os ids de entrada são únicos dentro de um vault e não mudam enquanto a entrada existir. Reescrever um arquivo inteiro (`write_memory`, `update_project_memory`) ou importá-lo (`import_memory`) cria entradas novas, com ids novos, então leia os ids de novo depois disso. Um id nunca é dado a outra entrada, nem depois que a entrada dele é apagada, então um id antigo é reportado como não encontrado em vez de alterar outra entrada. Entradas arquivadas também podem ser editadas, mas o `read_memory` não as mostra. Substituir (`supersede`) uma entrada arquivada a marca no arquivo morto e acrescenta a substituta como entrada ativa.
+Os ids de entrada são únicos dentro de um vault e não mudam enquanto a entrada existir. Reescrever um arquivo inteiro (`write_memory`, `update_project_memory`) ou importá-lo (`import_memory`) cria entradas novas, com ids novos, então leia os ids de novo depois disso. Um id nunca é dado a outra entrada, nem depois que a entrada dele é apagada, então um id antigo é reportado como não encontrado em vez de alterar outra entrada. Entradas arquivadas também podem ser substituídas no lugar (`replace`) ou apagadas; o `read_memory` com `archived: true` e `with_ids: true` as lista com seus ids. Uma entrada arquivada não pode receber `supersede`: a chamada é um resultado de erro que não muda nada e aponta para `replace`, ou para `append_memory` no caso de uma entrada nova.
 
 ---
 
@@ -242,13 +244,15 @@ Busca nos arquivos de memória. Por padrão encontra os documentos e entradas qu
 
 | `match` | Encontra | Ordem |
 |---|---|---|
-| `words` (padrão) | Documentos e entradas que têm **todas** as palavras da consulta, em qualquer lugar e em qualquer ordem. Maiúsculas/minúsculas e os acentos de letras latinas são ignorados (`sessao` encontra `Sessão`). Uma palavra terminada em `*` casa como prefixo (`instal*` encontra `instalador`). Pontuação só separa palavras: `edit_entry` busca `edit` e `entry`, e `"`, `NEAR`, `OR`, `:` ou `-` não têm significado especial. As palavras seguem o tokenizer `unicode61` do SQLite, então uma palavra com um símbolo recente (`100₽`) pode precisar de `exact`. | Relevância (melhores primeiro) |
+| `words` (padrão) | Documentos e entradas que têm **todas** as palavras da consulta, em qualquer lugar e em qualquer ordem. Maiúsculas/minúsculas e os acentos de letras latinas são ignorados (`sessao` encontra `Sessão`). Uma palavra terminada em `*` casa como prefixo (`instal*` encontra `instalador`). Pontuação só separa palavras: `edit_entry` busca `edit` e `entry`, e `"`, `NEAR`, `OR`, `:` ou `-` não têm significado especial. As palavras seguem o tokenizer `unicode61` do SQLite; quando ele não acha nada para uma consulta com caracteres fora das escritas latina, grega e cirílica (`100₽`, cherokee, letras recentes), as palavras são buscadas dentro do texto — veja abaixo. | Relevância (melhores primeiro) |
 | `phrase` | Documentos e entradas que têm as palavras **nessa ordem**, com as mesmas regras do `words` (`sobre o instal*` funciona). | Relevância (melhores primeiro) |
 | `exact` | Linhas que têm a consulta como substring literal, sem diferenciar maiúsculas/minúsculas mas diferenciando acentos (`decisão` encontra `DECISÃO`, não `decisao`). Use para caminhos, identificadores ou pontuação (`100%`, `foo_bar`, `v1.0`). | Ordem do arquivo |
 
 No modo `words`, cada linha que tem uma das palavras é reportada, então um documento com as palavras em linhas diferentes mostra cada uma dessas linhas. Uma frase que continua na linha seguinte é reportada pelas linhas que têm as palavras dela. Uma consulta sem letras nem números é recusada nos modos `words` e `phrase` — use `exact` para ela.
 
-Cada resultado é rotulado `project/file:line`, ou `project/file[YYYY-MM-DD]:line` para uma entrada de um log datado (a linha é contada dentro daquela entrada). Os resultados vêm numa ordem estável — por relevância nos modos `words`/`phrase`, com empates resolvidos por projeto, arquivo e ordem de leitura; por projeto, arquivo e ordem de leitura no modo `exact` —, então as páginas de `offset` são consistentes. No formato texto, uma busca sem resultado responde `No results for "<consulta>"`, e um `offset` depois do último resultado `No more results for "<consulta>" at offset N`. Cada linha encontrada ou de contexto é cortada em 4 KB, terminando em `…`. A resposta é limitada a cerca de 1 MB como enviada, somando o texto e o conteúdo estruturado (com o escape do JSON); passando disso, ela termina com uma nota dizendo para continuar com `offset`. Num vault muito grande, a varredura para depois de 5000 linhas (por tabela no modo `exact`) ou 64 MB de conteúdo, e o resultado avisa.
+**Busca por substring como alternativa.** O índice de texto completo pode dividir ou normalizar alguns textos de um jeito diferente do sync82: caracteres mais novos que as tabelas Unicode do SQLite (`₽`, letras adicionadas depois) ou escritas cujas maiúsculas ele não conhece (cherokee). Quando uma busca `words` ou `phrase` não acha nada e a consulta tem um caractere fora do ASCII e dos blocos latino, grego e cirílico, o sync82 busca de novo com cada palavra como substring do texto normalizado e depois mantém as mesmas regras: palavras inteiras em `words` (`100₽` não encontra `1000₽`), as palavras em ordem em `phrase`. Esses resultados vêm na ordem de leitura, não por relevância, e o texto termina com uma nota que diz isso (`substring_fallback: true` no relatório JSON). A alternativa lê todas as linhas do escopo, então é mais lenta que o índice. Uma consulta só com caracteres latinos, gregos ou cirílicos nunca cai nela: `100` não encontra `100₽`, que o índice guarda como uma palavra só — use `exact` para isso. Palavras em escritas sem espaços (chinês, japonês) são trechos inteiros de texto, no índice e na alternativa, então uma parte delas precisa de `exact`.
+
+Cada resultado é rotulado `project/file:line`, ou `project/file[YYYY-MM-DD]:line` para uma entrada de um log datado (a linha é contada dentro daquela entrada). Os resultados vêm numa ordem estável — por relevância nos modos `words`/`phrase` (ordem de leitura depois da busca por substring), com empates resolvidos por projeto, arquivo e ordem de leitura; por projeto, arquivo e ordem de leitura no modo `exact` —, então as páginas de `offset` são consistentes. No formato texto, uma busca sem resultado responde `No results for "<consulta>"`, e um `offset` depois do último resultado `No more results for "<consulta>" at offset N`. Cada linha encontrada ou de contexto é cortada em 4 KB, terminando em `…`. A resposta é limitada a cerca de 1 MB como enviada, somando o texto e o conteúdo estruturado (com o escape do JSON); passando disso, ela termina com uma nota dizendo para continuar com `offset`. Num vault muito grande, a varredura para depois de 5000 linhas (por tabela no modo `exact`) ou 64 MB de conteúdo, e o resultado avisa.
 
 > `search_memory` deliberadamente nunca cai sozinha no "último projeto usado" como as outras tools fazem — uma busca sem escopo deve buscar o vault inteiro, não adivinhar um projeto silenciosamente. Com `workspace_root` e sem `project`, um workspace sem `.sync82.json` também busca o vault inteiro, enquanto um `.sync82.json` que não pode ser lido ou que nomeia um projeto inválido dá um resultado de erro em vez de uma busca.
 
@@ -263,7 +267,7 @@ Carrega a memória de um projeto (todo arquivo não-vazio) concatenada num únic
 | Argumento | Tipo | Obrigatório | Descrição |
 |---|---|---|---|
 | `project`, `subproject`, `workspace_root`, `search_parent_dirs` | — | ❌ | Argumentos de contexto padrão. |
-| `files` | array de strings | ❌ | Carrega só esses arquivos/kinds específicos, em vez de tudo. Um nome sem arquivo aparece como `[no file named: …]`. |
+| `files` | array de strings | ❌ | Carrega só esses arquivos/kinds específicos, em vez de tudo. Um nome sem arquivo aparece como `[no file named: …]`, ou é contado (`[N requested files not found]`) quando essa nota ocuparia mais de um quarto de `max_bytes`. |
 | `mode` | string (`summary` \| `full`) | ❌ | `summary` (padrão): as 10 entradas datadas mais recentes por kind append-only, resposta cortada em 40 KB. `full`: todas as entradas, resposta cortada em 200 KB. `since`, `max_entries` e `max_bytes` substituem esses padrões. |
 | `since` | string (`YYYY-MM-DD`) | ❌ | Inclui só entradas datadas (`progress`, `decisions`, ou um kind customizado de anexação) nessa data ou depois. Entradas sem data são sempre incluídas. Arquivos de sobrescrita não são afetados. No modo `summary`, informar `since` remove o limite padrão de 10 entradas. |
 | `max_entries` | integer | ❌ | Inclui só as N entradas datadas mais recentes por kind append-only (padrão 10 no modo `summary`). Entradas sem data (como um título antes da primeira entrada datada) são sempre incluídas e não contam para N. Arquivos de sobrescrita não são afetados. |
@@ -491,6 +495,7 @@ Com `all_projects: true`:
 | `results[].context_before`, `results[].context_after` | array de strings | Linhas ao redor — só com `context_lines` > 0, omitidas quando vazias. |
 | `next_offset` | integer | `offset` a passar para a próxima página — omitido quando não há mais resultados. |
 | `scan_truncated` | boolean | `true` quando a varredura parou cedo num vault muito grande — omitido caso contrário. |
+| `substring_fallback` | boolean | `true` quando o índice de texto completo não achou nada e as palavras foram buscadas dentro do texto, na ordem de leitura (veja [Busca por substring como alternativa](#search_memory)) — omitido caso contrário. |
 
 ---
 

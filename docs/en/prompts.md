@@ -155,6 +155,13 @@ Requests you can type to your AI agent, in plain language, to make it use sync82
   > "The last two progress entries are the same — delete the duplicate."
 - **Expected output:** after you confirm, `edit_entry` with `action: "delete"` and `confirm: true` on one of the two ids.
 
+### Fix or remove an archived entry
+
+- **Expected parameters:** the log (`progress`, `decisions` or a custom log) and what to change in an entry that was archived.
+- **Example:**
+  > "One of the progress entries we archived last year says we shipped to production in March, but it was April. Fix it in the archive."
+- **Expected output:** `read_memory` with `filename: "progress"`, `archived: true` and `with_ids: true` lists the archived entries with their ids, then `edit_entry` with `action: "replace"` (or `"delete"` with `confirm: true`, after you confirm) on that id. The entry stays archived; `supersede` is refused on archived entries.
+
 ---
 
 ## 🔍 Analysis and Search Prompts
@@ -325,7 +332,7 @@ Requests you can type to your AI agent, in plain language, to make it use sync82
 - **Expected parameters:** the project (and subproject); your confirmation; for a project with subprojects, what to do with them.
 - **Example:**
   > "We're done with the legacy-portal project. Delete it, and promote its subprojects to standalone projects."
-- **Expected output:** after your confirmation, `delete_project` with `confirm: true` and `subproject_action: "promote"` (or `delete_all`, or `cancel`). Without `subproject_action`, sync82 lists the subprojects and asks.
+- **Expected output:** after your confirmation, `delete_project` with `confirm: true` and `subproject_action: "promote"` (or `cancel`). Without `subproject_action`, sync82 lists the subprojects and asks. To delete the subprojects too, the agent shows you their list first and passes `subproject_action: "delete_all"` with `expected_subprojects`, their count; if the project has another number of subprojects by then, nothing is deleted and you get the new list.
 
 ### Rename a project
 
@@ -343,7 +350,7 @@ Requests you can type to your AI agent, in plain language, to make it use sync82
 - **Expected parameters:** the destination folder; whether existing files may be replaced.
 - **Example:**
   > "Export this project's memory to ~/notes/acme-memory so I can commit it to git. Overwrite what's there."
-- **Expected output:** `export_memory` with `output_dir` and `overwrite: true`: one `.md` file per kind, plus `<kind>.archived.md` for archived entries.
+- **Expected output:** `export_memory` with `output_dir` and `overwrite: true`: one `.md` file per kind, plus `<kind>.archived.md` for archived entries and a `.sync82-kinds.json` manifest; `.md` files left by an earlier export are listed.
 
 ### Restore a project from Markdown
 

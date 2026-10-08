@@ -25,9 +25,9 @@ import (
 	"github.com/oito2/mcp-sync82/internal/store"
 )
 
-// TestExportProjectCore_RefusesKindThatWouldEscapeOutputDir verifies that
-// ExportProject skips a kind such as "../evil" instead of writing outside
-// the output directory. The kind is written with Store.WriteDocument directly,
+// TestExportProjectCore_SkipsKindThatWouldEscapeOutputDir verifies that
+// ExportProject skips a kind such as "../evil", lists it as skipped and
+// writes nothing outside the output directory. The kind is written with Store.WriteDocument directly,
 // bypassing the kind validation done by the tools layer, to simulate an
 // unsanitized kind reaching the export.
 func TestExportProjectCore_SkipsKindThatWouldEscapeOutputDir(t *testing.T) {
@@ -56,8 +56,8 @@ func TestExportProjectCore_SkipsKindThatWouldEscapeOutputDir(t *testing.T) {
 }
 
 // TestExportProject_SkipsAKindWhoseNameCantBeAFileName stores a kind whose
-// name is longer than validateKind allows, as an older version could, and
-// checks that the export writes the other kinds and lists it as skipped
+// name is longer than validateKind allows (written straight to the store),
+// and checks that the export writes the other kinds and lists it as skipped
 // instead of failing.
 func TestExportProject_SkipsAKindWhoseNameCantBeAFileName(t *testing.T) {
 	r, mgr := newToolTestEnv(t)
@@ -85,7 +85,8 @@ func TestExportProject_SkipsAKindWhoseNameCantBeAFileName(t *testing.T) {
 }
 
 // TestValidateKind_LengthAndSpaces checks the 128-character limit of kind
-// names and that surrounding spaces are trimmed.
+// names, that surrounding spaces are trimmed and the name lower-cased, and
+// that validateProjectName enforces the same limit.
 func TestValidateKind_LengthAndSpaces(t *testing.T) {
 	if _, err := validateKind(strings.Repeat("a", maxNameLength)); err != nil {
 		t.Errorf("a %d-character name: %v", maxNameLength, err)

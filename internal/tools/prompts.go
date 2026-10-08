@@ -29,8 +29,9 @@ type PromptArgument struct {
 
 // PromptDefinition is one MCP prompt sync82 exposes: its name, texts,
 // arguments, and Render, which turns the arguments given by the client
-// into the instruction sent to the agent as a user message. Prompts never
-// read or write the vault: they only tell the agent which tools to call.
+// into the instruction sent to the agent as a user message; it returns an
+// error for an invalid project or subproject argument. Prompts never read
+// or write the vault: they only tell the agent which tools to call.
 type PromptDefinition struct {
 	Name        string
 	Title       string

@@ -92,8 +92,8 @@ func TestRunConfig_SetVaultThenGetVault(t *testing.T) {
 	}
 }
 
-// TestRunConfig_SetVault_ExpandsHomeToken verifies that a leading home token in the path is expanded before
-// it is stored.
+// TestRunConfig_SetVault_ExpandsHomeToken verifies that a leading home token
+// in the path is expanded before it is stored.
 func TestRunConfig_SetVault_ExpandsHomeToken(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -196,7 +196,7 @@ func TestRunConfig_UnknownSubcommand(t *testing.T) {
 	}
 }
 
-// TestRunConfig_NoSubcommand verifies that a missing subcommand exits with 1.
+// TestRunConfig_NoSubcommand verifies that a missing subcommand exits with a non-zero code.
 func TestRunConfig_NoSubcommand(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", os.Getenv("HOME"))

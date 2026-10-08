@@ -25,7 +25,7 @@ import (
 )
 
 // maxCompletionValues is the most values a completion returns, the limit
-// the MCP specification sets for one completion result.
+// the protocol allows in one completion result.
 const maxCompletionValues = 100
 
 // Complete returns the values of the prompt or resource-template argument

@@ -196,12 +196,14 @@ func installFileTarget(t Target, env Env, binaryPath string, stdout, stderr io.W
 // path. existed reports whether an entry for sync82 was already there. A
 // file that already holds the wanted entry is left unchanged. Otherwise, a
 // file with comments or trailing commas is left unchanged and the error,
-// a *manualEditError, carries the entry to add by hand.
+// a *manualEditError, carries the entry to add by hand. It returns an error
+// when the file cannot be read or parsed, shape has no Entry, the shape's key
+// holds a value that is not a JSON object, or the file cannot be written.
 func writeEntry(shape Shape, path, binaryPath string) (existed bool, err error) {
 	if shape.Entry == nil {
 		return false, fmt.Errorf("%s: no entry format defined", path)
 	}
-	cfg, strict, err := readConfig(path)
+	cfg, strict, raw, err := loadConfig(path)
 	if err != nil {
 		return false, err
 	}
@@ -224,24 +226,138 @@ func writeEntry(shape Shape, path, binaryPath string) (existed bool, err error) 
 		snippet, _ := json.MarshalIndent(map[string]any{shape.Key: map[string]any{serverName: entry}}, "", "  ")
 		return existed, &manualEditError{fmt.Sprintf("%s contains comments or trailing commas, so it was left unchanged. Add this entry to it by hand:\n%s", path, snippet)}
 	}
-	servers[serverName] = entry
-	cfg[shape.Key] = servers
-	return existed, writeConfig(path, cfg)
+	value, err := marshalNoEscape(entry)
+	if err != nil {
+		return existed, err
+	}
+	return existed, writeServers(path, raw, shape.Key, func(servers []jsonMember) []jsonMember {
+		return setMember(servers, serverName, value)
+	})
 }
 
-// writeConfig writes cfg as indented JSON with a trailing newline to
-// path, keeping the mode of an existing file. Characters such as "&", "<"
-// and ">" are written as they are, not escaped, so values the user wrote
-// (URLs, commands) don't change form when the file is rewritten.
-func writeConfig(path string, cfg map[string]any) error {
+// jsonMember is one key of a JSON object and its value as written.
+type jsonMember struct {
+	key   string
+	value json.RawMessage
+}
+
+// writeServers rewrites the config file at path, whose content is raw (a
+// JSON object, or blank), after passing the members of its key object
+// through edit; a missing or null key object counts as empty, and is added
+// at the end when missing. Every other key and value stays as in raw, and
+// keys keep their order. The file is written indented with two spaces and
+// a trailing newline, keeping the mode of an existing file and a symlink at
+// path.
+func writeServers(path string, raw []byte, key string, edit func([]jsonMember) []jsonMember) error {
+	top, err := objectMembers(raw)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	var servers []jsonMember
+	if v, ok := memberValue(top, key); ok && !bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
+		if servers, err = objectMembers(v); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+	}
+	top = setMember(top, key, encodeMembers(edit(servers)))
+	var out bytes.Buffer
+	if err := json.Indent(&out, encodeMembers(top), "", "  "); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	out.WriteByte('\n')
+	return fsutil.AtomicWriteFile(path, out.Bytes(), 0o644)
+}
+
+// objectMembers decodes raw, a JSON object, into its members in the order
+// they are written, with each value compacted. A key written more than once
+// keeps its first position and its last value, the value encoding/json
+// decodes. Blank raw has no members. It returns an error when raw is not a
+// single JSON object.
+func objectMembers(raw []byte) ([]jsonMember, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return nil, errUnparsableConfig
+	}
+	var members []jsonMember
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, ok := tok.(string)
+		if !ok {
+			return nil, errUnparsableConfig
+		}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return nil, err
+		}
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, value); err != nil {
+			return nil, err
+		}
+		members = setMember(members, key, compact.Bytes())
+	}
+	if _, err := dec.Token(); err != nil {
+		return nil, err
+	}
+	return members, nil
+}
+
+// memberValue returns the value of key in members, and whether it is there.
+func memberValue(members []jsonMember, key string) (json.RawMessage, bool) {
+	for _, m := range members {
+		if m.key == key {
+			return m.value, true
+		}
+	}
+	return nil, false
+}
+
+// setMember sets key to value in members: in place when key is there,
+// otherwise appended at the end. It returns the updated members.
+func setMember(members []jsonMember, key string, value json.RawMessage) []jsonMember {
+	for i := range members {
+		if members[i].key == key {
+			members[i].value = value
+			return members
+		}
+	}
+	return append(members, jsonMember{key: key, value: value})
+}
+
+// encodeMembers returns members as one compact JSON object, in order. Each
+// value is written as it is held.
+func encodeMembers(members []jsonMember) json.RawMessage {
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for i, m := range members {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		key, _ := marshalNoEscape(m.key) // a string always encodes
+		buf.Write(key)
+		buf.WriteByte(':')
+		buf.Write(m.value)
+	}
+	buf.WriteByte('}')
+	return buf.Bytes()
+}
+
+// marshalNoEscape encodes v as compact JSON, writing characters such as
+// "&", "<" and ">" as they are, not escaped, so values the user wrote (URLs,
+// commands) don't change form when the file is rewritten.
+func marshalNoEscape(v any) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(cfg); err != nil {
-		return err
+	if err := enc.Encode(v); err != nil {
+		return nil, err
 	}
-	return fsutil.AtomicWriteFile(path, buf.Bytes(), 0o644)
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
 // fileHasEntry reports whether the config file at path holds an entry
@@ -272,26 +388,34 @@ var errUnparsableConfig = errors.New("config is not a JSON object")
 // not rewrite. Content that parses neither way returns an error wrapping
 // errUnparsableConfig.
 func readConfig(path string) (cfg map[string]any, strict bool, err error) {
-	raw, err := os.ReadFile(path)
+	cfg, strict, _, err = loadConfig(path)
+	return cfg, strict, err
+}
+
+// loadConfig reads the config file at path as readConfig does, and also
+// returns its content, without a UTF-8 byte order mark (nil for a missing
+// file), for a rewrite that keeps it as written.
+func loadConfig(path string) (cfg map[string]any, strict bool, raw []byte, err error) {
+	raw, err = os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return map[string]any{}, true, nil
+		return map[string]any{}, true, nil, nil
 	}
 	if err != nil {
-		return nil, false, err
+		return nil, false, nil, err
 	}
 	// A UTF-8 byte order mark, which some Windows editors write, is not
 	// JSON; it is left out, and a rewrite drops it.
 	raw = bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf"))
 	if len(bytes.TrimSpace(raw)) == 0 {
-		return map[string]any{}, true, nil
+		return map[string]any{}, true, raw, nil
 	}
 	if cfg, ok := decodeObject(raw); ok {
-		return cfg, true, nil
+		return cfg, true, raw, nil
 	}
 	if cfg, ok := decodeObject(stripJSONC(raw)); ok {
-		return cfg, false, nil
+		return cfg, false, raw, nil
 	}
-	return nil, false, fmt.Errorf("%s: %w", path, errUnparsableConfig)
+	return nil, false, nil, fmt.Errorf("%s: %w", path, errUnparsableConfig)
 }
 
 // decodeObject decodes raw as exactly one JSON object, keeping numbers as

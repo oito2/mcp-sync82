@@ -404,8 +404,10 @@ func TestMigrate_V3IndexesAnExistingV2Vault(t *testing.T) {
 	}
 }
 
-// BenchmarkSearchText compares the words and exact modes on a vault with
-// 10,000 entries.
+// BenchmarkSearchText compares the words, phrase and exact modes on a vault
+// with 10,000 entries, plus a words search for "ᏣᎳᎩ", which matches no
+// entry and holds a word outside the scripts the index is known to handle,
+// so the substring fallback scans every row.
 func BenchmarkSearchText(b *testing.B) {
 	ctx := context.Background()
 	s, err := Open(ctx, filepath.Join(b.TempDir(), "vault.db"))
@@ -424,10 +426,18 @@ func BenchmarkSearchText(b *testing.B) {
 	if err := s.ReplaceAllEntries(ctx, "acme", "", "progress", sections); err != nil {
 		b.Fatal(err)
 	}
-	for _, mode := range []SearchMode{SearchWords, SearchExact} {
-		b.Run(string(mode), func(b *testing.B) {
+	for _, c := range []struct {
+		name, query string
+		mode        SearchMode
+	}{
+		{"words", "session 42", SearchWords},
+		{"phrase", "session 42", SearchPhrase},
+		{"exact", "session 42", SearchExact},
+		{"words-fallback", "ᏣᎳᎩ", SearchWords},
+	} {
+		b.Run(c.name, func(b *testing.B) {
 			for b.Loop() {
-				if _, _, err := s.SearchText(ctx, SearchOptions{Query: "session 42", Mode: mode, Scope: SearchScope{Project: "acme"}, Limit: 100}); err != nil {
+				if _, _, err := s.SearchText(ctx, SearchOptions{Query: c.query, Mode: c.mode, Scope: SearchScope{Project: "acme"}, Limit: 100}); err != nil {
 					b.Fatal(err)
 				}
 			}

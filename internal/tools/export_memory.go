@@ -82,8 +82,11 @@ func (t *ExportMemoryTool) Validate(raw json.RawMessage) (any, error) {
 
 // Execute resolves the target project and exports its kinds to output_dir
 // through exportProjectCore. It reports the number of files written;
-// existing destination files without Overwrite yield an error result, and
-// other failures are returned as errors.
+// existing destination files without Overwrite yield an error result, as
+// does Overwrite on a project that was only taken from the last session. An
+// unresolved project returns the instructional result; a missing project
+// yields the error built by wrapNotFound, and other failures are returned as
+// errors.
 func (t *ExportMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(exportMemoryArgs)
 	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, args.contextArgs())

@@ -18,6 +18,7 @@ package selfupdate
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/oito2/mcp-sync82/internal/fsutil"
@@ -60,6 +61,28 @@ func TestReleaseContract_DistMatchesSelfUpdate(t *testing.T) {
 		}
 		if got, err := fsutil.SHA256File(asset); err != nil || got != want {
 			t.Errorf("%s: sha256 = %s (err %v), checksums.txt says %s", name, got, err, want)
+		}
+	}
+}
+
+// TestReleaseContract_WorkflowSignsTheBundleSelfUpdateReads checks that the
+// release workflow writes the signature bundle under signatureBundleName,
+// signing checksums.txt, and checks it with the identity self-update
+// requires.
+func TestReleaseContract_WorkflowSignsTheBundleSelfUpdateReads(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(raw)
+	for _, want := range []string{
+		"cosign sign-blob --yes --bundle " + signatureBundleName + " checksums.txt",
+		"cosign verify-blob checksums.txt --bundle " + signatureBundleName,
+		`--certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}"`,
+		"--certificate-oidc-issuer https://token.actions.githubusercontent.com",
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Errorf("release.yml lacks %q", want)
 		}
 	}
 }

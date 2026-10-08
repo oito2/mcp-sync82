@@ -48,13 +48,13 @@ func TestFind(t *testing.T) {
 	}
 }
 
-// mustFind returns the built-in target named name, failing the test when it does
-// not exist.
 // absRoot is a filesystem root that filepath.IsAbs accepts on the host OS
 // ("/" on Unix, the temp directory's volume plus a separator on Windows),
 // for environment variables the code ignores unless they are absolute.
 var absRoot = filepath.VolumeName(os.TempDir()) + string(filepath.Separator)
 
+// mustFind returns the built-in target named name, failing the test when it does
+// not exist.
 func mustFind(t *testing.T, name string) Target {
 	t.Helper()
 	target, ok := Find(name)

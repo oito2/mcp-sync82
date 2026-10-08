@@ -41,9 +41,11 @@ func testEnv(goos, home string, vars map[string]string) Env {
 // fakeCLI writes an executable script standing in for a client CLI. It
 // appends every argument list it receives to <dir>/calls.log and keeps the
 // registration as the file <dir>/registered: "mcp get" exits 0 only while
-// that file exists, "mcp add" creates it and "mcp remove" deletes it,
-// exiting 1 when there was nothing to remove. It returns the script path
-// and the directory.
+// that file exists, and otherwise prints "No MCP server named ..." and
+// exits 1, as the codex CLI does; "mcp add" creates the file and "mcp
+// remove" deletes it, exiting 1 when there was nothing to remove. While
+// the file <dir>/broken exists, "mcp get" fails with other output. It
+// returns the script path and the directory.
 func fakeCLI(t *testing.T) (command, dir string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -55,7 +57,9 @@ func fakeCLI(t *testing.T) (command, dir string) {
 d="$(dirname "$0")"
 echo "$*" >> "$d/calls.log"
 case "$2" in
-get) [ -f "$d/registered" ] ;;
+get)
+	if [ -f "$d/broken" ]; then echo "Error: config.toml is not valid TOML" >&2; exit 1; fi
+	[ -f "$d/registered" ] || { echo "Error: No MCP server named 'sync82' found." >&2; exit 1; } ;;
 add) touch "$d/registered" ;;
 remove) [ -f "$d/registered" ] && rm -f "$d/registered" ;;
 esac
@@ -174,6 +178,21 @@ func TestInstallTarget_CLI_ConfiguredThenUpdated(t *testing.T) {
 	}
 	if got := calls(t, dir); strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("calls = %q, want %q", got, want)
+	}
+}
+
+// TestInstallTarget_CLI_FailedGetIsAnError checks that a scope-less CLI
+// target whose "mcp get" fails without saying sync82 isn't registered
+// fails the install, with the CLI's output, and never runs "mcp add".
+func TestInstallTarget_CLI_FailedGetIsAnError(t *testing.T) {
+	command, dir := fakeCLI(t)
+	writeFile(t, filepath.Join(dir, "broken"), "", 0o644)
+	got, _, errOut := install(t, fakeCLITarget(command), testEnv("linux", t.TempDir(), nil))
+	if got != ResultFail || !strings.Contains(errOut, "config.toml is not valid TOML") {
+		t.Fatalf("InstallTarget() = %q, stderr %q; want a failure with the CLI's output", got, errOut)
+	}
+	if c := calls(t, dir); len(c) != 1 || c[0] != "mcp get sync82" {
+		t.Errorf("calls = %q, want only the registration check", c)
 	}
 }
 
@@ -505,5 +524,105 @@ func TestClineCLIDirs_ClineDir(t *testing.T) {
 	}
 	if marker, _ := clineCLIDirs(testEnv("linux", home, map[string]string{"CLINE_DIR": "relative"})); marker != filepath.Join(home, ".cline") {
 		t.Errorf("relative CLINE_DIR: %s, want ~/.cline", marker)
+	}
+}
+
+// TestWriteEntry_KeepsKeyOrder verifies that install and uninstall rewrite
+// a config file with its keys in their original order: a new sync82 entry
+// is added at the end of the server object, an existing one is replaced in
+// place, and every other value comes back as written, re-indented.
+func TestWriteEntry_KeepsKeyOrder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	const original = `{
+	"zeta": {"big": 12345678901234567890, "exp": 1e3, "text": "café & <tag>"},
+	"mcpServers": {"zzz": {"command": "z"}, "aaa": {"command": "a"}},
+	"alpha": [3, 1, 2]
+}`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	read := func() string {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+
+	if _, err := writeEntry(shapeMCPServers, path, "/opt/sync82"); err != nil {
+		t.Fatalf("writeEntry: %v", err)
+	}
+	want := `{
+  "zeta": {
+    "big": 12345678901234567890,
+    "exp": 1e3,
+    "text": "café & <tag>"
+  },
+  "mcpServers": {
+    "zzz": {
+      "command": "z"
+    },
+    "aaa": {
+      "command": "a"
+    },
+    "sync82": {
+      "args": [],
+      "command": "/opt/sync82"
+    }
+  },
+  "alpha": [
+    3,
+    1,
+    2
+  ]
+}
+`
+	if got := read(); got != want {
+		t.Fatalf("after install:\n%s\nwant:\n%s", got, want)
+	}
+
+	// A changed binary path replaces the entry where it is.
+	if _, err := writeEntry(shapeMCPServers, path, "/new/sync82"); err != nil {
+		t.Fatalf("writeEntry again: %v", err)
+	}
+	if got := read(); got != strings.Replace(want, "/opt/sync82", "/new/sync82", 1) {
+		t.Fatalf("after reinstall:\n%s", got)
+	}
+
+	if err := removeEntry(shapeMCPServers, path); err != nil {
+		t.Fatalf("removeEntry: %v", err)
+	}
+	removed := strings.Replace(want, `,
+    "sync82": {
+      "args": [],
+      "command": "/opt/sync82"
+    }`, "", 1)
+	if got := read(); got != removed {
+		t.Fatalf("after uninstall:\n%s\nwant:\n%s", got, removed)
+	}
+}
+
+// TestWriteEntry_MissingNullAndDuplicateKeys verifies that a missing server
+// object is added at the end, a null one is replaced in place, and a key
+// written twice keeps its first position and its last value, as
+// encoding/json reads it.
+func TestWriteEntry_MissingNullAndDuplicateKeys(t *testing.T) {
+	dir := t.TempDir()
+	for _, c := range []struct{ name, in, want string }{
+		{"missing", `{"b": 1, "a": 2}`, "{\n  \"b\": 1,\n  \"a\": 2,\n  \"mcpServers\": {\n    \"sync82\": {\n      \"args\": [],\n      \"command\": \"/opt/sync82\"\n    }\n  }\n}\n"},
+		{"null", `{"mcpServers": null, "a": 2}`, "{\n  \"mcpServers\": {\n    \"sync82\": {\n      \"args\": [],\n      \"command\": \"/opt/sync82\"\n    }\n  },\n  \"a\": 2\n}\n"},
+		{"duplicate", `{"a": 1, "b": 2, "a": 3}`, "{\n  \"a\": 3,\n  \"b\": 2,\n  \"mcpServers\": {\n    \"sync82\": {\n      \"args\": [],\n      \"command\": \"/opt/sync82\"\n    }\n  }\n}\n"},
+		{"blank", "  \n", "{\n  \"mcpServers\": {\n    \"sync82\": {\n      \"args\": [],\n      \"command\": \"/opt/sync82\"\n    }\n  }\n}\n"},
+	} {
+		path := filepath.Join(dir, c.name+".json")
+		if err := os.WriteFile(path, []byte(c.in), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writeEntry(shapeMCPServers, path, "/opt/sync82"); err != nil {
+			t.Fatalf("%s: writeEntry: %v", c.name, err)
+		}
+		if raw, err := os.ReadFile(path); err != nil || string(raw) != c.want {
+			t.Errorf("%s: file = %q, %v; want %q", c.name, raw, err, c.want)
+		}
 	}
 }

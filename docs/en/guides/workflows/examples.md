@@ -138,7 +138,7 @@ The AI calls `check_project_health` first, then `archive_memory filename="progre
 Export this project's memory to a folder I can commit to git as a backup.
 ```
 
-`export_memory` writes one plain `.md` file per kind into the directory you specify — useful for diffing memory changes in a PR, or as a portable backup outside the SQLite vault.
+`export_memory` writes one plain `.md` file per kind into the directory you specify, plus a small `.sync82-kinds.json` manifest that lets an import restore custom logs as logs — useful for diffing memory changes in a PR, or as a portable backup outside the SQLite vault.
 
 ---
 

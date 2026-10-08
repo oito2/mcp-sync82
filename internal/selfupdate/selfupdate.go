@@ -81,31 +81,54 @@ type Deps struct {
 	// RunVersion runs a binary with --version and returns its trimmed
 	// output. Defaults to runVersion.
 	RunVersion func(ctx context.Context, path string) (string, error)
+
+	// LookCosign returns the path of the cosign binary used to verify the
+	// release signature, or an error when there is none. Defaults to
+	// exec.LookPath("cosign").
+	LookCosign func() (string, error)
+
+	// RunCosign runs the cosign binary at path with args and returns its
+	// combined output. Defaults to runCosign.
+	RunCosign func(ctx context.Context, path string, args ...string) ([]byte, error)
+
+	// Rename moves a file, for the swap of the binary and its backup.
+	// Defaults to fsutil.Rename.
+	Rename func(oldpath, newpath string) error
 }
 
-// Timeouts for the release metadata request, the binary download and the
-// "--version" check of a candidate binary.
+// ExitUpdateAvailable is the exit code of "self-update --check" when a
+// newer release exists.
+const ExitUpdateAvailable = 10
+
+// Timeouts for the release metadata request (also used for the checksums and
+// signature bundle downloads), the binary download, the "--version" check of
+// a binary, and each cosign invocation.
 const (
 	apiTimeout       = 30 * time.Second
 	downloadTimeout  = 5 * time.Minute
 	smokeTestTimeout = 10 * time.Second
+	cosignTimeout    = 2 * time.Minute
 )
 
 // RunSelfUpdate implements "sync82 self-update [--check] [--yes|-y]" and
-// "sync82 self-update --rollback". args are the options after the
-// subcommand name; deps supplies the environment; stdin is read for the
-// confirmation answer; progress goes to stdout and errors to stderr.
+// "sync82 self-update --rollback". "--require-signature" is also accepted
+// with an update. args are the options after the subcommand name; deps
+// supplies the environment; stdin is read for the confirmation answer;
+// progress goes to stdout and errors to stderr.
 //
-// It returns the process exit code: 0 = up to date / update available
-// with --check / aborted / updated / rolled back, 1 = error (development
-// build, closed stdin at the confirmation prompt, failed check, download,
-// verification or replacement), 2 = usage error (unknown option).
+// It returns the process exit code: 0 = up to date / aborted / updated /
+// rolled back, ExitUpdateAvailable = update available with --check, 1 =
+// error (development build, closed stdin at the confirmation prompt, failed
+// check, download, verification or replacement, or no usable cosign with
+// --require-signature), 2 = usage error (unknown option or combination).
 //
 // An update downloads the new binary into a temporary directory next to
-// the running one, checks it against the release's checksums.txt, runs it
-// with --version and requires the release tag back, then swaps it in,
-// keeping the replaced binary as "<binary>.bak" — restored automatically
-// if the swap fails, and by hand with --rollback.
+// the running one, verifies the Sigstore signature of the release's
+// checksums.txt with cosign v3 or later when one is found (see
+// verifySignature), checks the binary against checksums.txt, runs it with
+// --version and requires the release tag back, then swaps it in, keeping
+// the replaced binary as "<binary>.bak" — restored automatically if the
+// swap fails, and by hand with --rollback.
 func RunSelfUpdate(ctx context.Context, args []string, deps Deps, stdin io.Reader, stdout, stderr io.Writer) int {
 	seen := map[string]bool{}
 	for _, a := range args {
@@ -114,9 +137,9 @@ func RunSelfUpdate(ctx context.Context, args []string, deps Deps, stdin io.Reade
 			name = "--yes"
 		}
 		switch name {
-		case "--check", "--yes", "--rollback":
+		case "--check", "--yes", "--rollback", "--require-signature":
 		default:
-			fmt.Fprintf(stderr, "Error: unknown self-update option %q (usage: sync82 self-update [--check] [--yes] | --rollback)\nRun 'sync82 self-update --help' for usage.\n", a)
+			fmt.Fprintf(stderr, "Error: unknown self-update option %q (usage: sync82 self-update [--check] [--yes] [--require-signature] | --rollback)\nRun 'sync82 self-update --help' for usage.\n", a)
 			return 2
 		}
 		if seen[name] {
@@ -126,8 +149,13 @@ func RunSelfUpdate(ctx context.Context, args []string, deps Deps, stdin io.Reade
 		seen[name] = true
 	}
 	checkOnly, skipConfirm, rollback := seen["--check"], seen["--yes"], seen["--rollback"]
-	if rollback && (checkOnly || skipConfirm) {
-		fmt.Fprintln(stderr, "Error: --rollback can't be combined with --check or --yes\nRun 'sync82 self-update --help' for usage.")
+	requireSignature := seen["--require-signature"]
+	if rollback && (checkOnly || skipConfirm || requireSignature) {
+		fmt.Fprintln(stderr, "Error: --rollback can't be combined with --check, --yes or --require-signature\nRun 'sync82 self-update --help' for usage.")
+		return 2
+	}
+	if checkOnly && requireSignature {
+		fmt.Fprintln(stderr, "Error: --require-signature can't be combined with --check, which downloads nothing\nRun 'sync82 self-update --help' for usage.")
 		return 2
 	}
 	if deps.ValidateURL == nil {
@@ -138,6 +166,15 @@ func RunSelfUpdate(ctx context.Context, args []string, deps Deps, stdin io.Reade
 	}
 	if deps.RunVersion == nil {
 		deps.RunVersion = runVersion
+	}
+	if deps.LookCosign == nil {
+		deps.LookCosign = func() (string, error) { return exec.LookPath("cosign") }
+	}
+	if deps.RunCosign == nil {
+		deps.RunCosign = runCosign
+	}
+	if deps.Rename == nil {
+		deps.Rename = fsutil.Rename
 	}
 
 	if rollback {
@@ -172,7 +209,18 @@ func RunSelfUpdate(ctx context.Context, args []string, deps Deps, stdin io.Reade
 
 	fmt.Fprintf(stdout, "Update available: %s → %s\n", deps.Version, latest)
 	if checkOnly {
-		return 0
+		return ExitUpdateAvailable
+	}
+
+	// The cosign check comes before the confirmation, so a missing cosign
+	// is known before anything is downloaded.
+	cosignPath, cosignProblem := findCosign(ctx, deps)
+	if cosignProblem != "" {
+		if requireSignature {
+			fmt.Fprintf(stderr, "Error: %s; --require-signature refuses to update without verifying the signature. Nothing was changed.\n", cosignProblem)
+			return 1
+		}
+		fmt.Fprintf(stderr, "Warning: %s; the signature will not be verified, only the checksum. Install cosign v3 or later to verify it.\n", cosignProblem)
 	}
 
 	if !skipConfirm {
@@ -201,7 +249,16 @@ func RunSelfUpdate(ctx context.Context, args []string, deps Deps, stdin io.Reade
 		fmt.Fprintln(stderr, "No checksums.txt found in the release assets.")
 		return 1
 	}
-	for _, u := range []string{assetURL, checksumsURL} {
+	urls := []string{assetURL, checksumsURL}
+	var bundleURL string
+	if cosignPath != "" {
+		if bundleURL, ok = findAssetURL(release, signatureBundleName); !ok {
+			fmt.Fprintf(stderr, "No %s found in the release assets, so its signature can't be verified; nothing was changed.\n", signatureBundleName)
+			return 1
+		}
+		urls = append(urls, bundleURL)
+	}
+	for _, u := range urls {
 		err := deps.ValidateAsset(u, latest)
 		if err == nil {
 			err = deps.ValidateURL(u)
@@ -248,6 +305,19 @@ func RunSelfUpdate(ctx context.Context, args []string, deps Deps, stdin io.Reade
 		return 1
 	}
 
+	if cosignPath != "" {
+		bundlePath := filepath.Join(workDir, signatureBundleName)
+		if err := downloadToFile(checksumsCtx, deps.HTTPClient, bundleURL, bundlePath, deps.ValidateURL); err != nil {
+			fmt.Fprintf(stderr, "Download failed: %v\n", err)
+			return 1
+		}
+		if err := verifySignature(ctx, deps, cosignPath, checksumsPath, bundlePath, latest); err != nil {
+			fmt.Fprintf(stderr, "Signature verification failed — aborting, nothing was changed: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, "Signature verified (cosign).")
+	}
+
 	expectedSum, err := findChecksum(checksumsPath, name)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -272,7 +342,7 @@ func RunSelfUpdate(ctx context.Context, args []string, deps Deps, stdin io.Reade
 		return 1
 	}
 
-	if err := replaceWithBackup(currentExePath, newBinaryPath); err != nil {
+	if err := replaceWithBackup(currentExePath, newBinaryPath, deps.Rename); err != nil {
 		reportReplaceError(stderr, currentExePath, err)
 		return 1
 	}
@@ -306,12 +376,12 @@ func runRollback(ctx context.Context, deps Deps, stdout, stderr io.Writer) int {
 	}
 
 	staged := currentExePath + ".rollback"
-	if err := fsutil.Rename(bak, staged); err != nil {
+	if err := deps.Rename(bak, staged); err != nil {
 		reportReplaceError(stderr, currentExePath, err)
 		return 1
 	}
-	if err := replaceWithBackup(currentExePath, staged); err != nil {
-		_ = fsutil.Rename(staged, bak)
+	if err := replaceWithBackup(currentExePath, staged, deps.Rename); err != nil {
+		_ = deps.Rename(staged, bak)
 		reportReplaceError(stderr, currentExePath, err)
 		return 1
 	}
@@ -383,16 +453,16 @@ func backupPath(exePath string) string {
 // the swap survives a crash. It returns an error when clearing the backup
 // or either move fails; the error also reports when the restore itself
 // failed.
-func replaceWithBackup(currentPath, newPath string) error {
+func replaceWithBackup(currentPath, newPath string, rename func(oldpath, newpath string) error) error {
 	bak := backupPath(currentPath)
 	if err := clearBackup(bak); err != nil {
 		return err
 	}
-	if err := fsutil.Rename(currentPath, bak); err != nil {
+	if err := rename(currentPath, bak); err != nil {
 		return fmt.Errorf("move the current binary to %s: %w", bak, err)
 	}
-	if err := fsutil.Rename(newPath, currentPath); err != nil {
-		if rerr := fsutil.Rename(bak, currentPath); rerr != nil {
+	if err := rename(newPath, currentPath); err != nil {
+		if rerr := rename(bak, currentPath); rerr != nil {
 			return fmt.Errorf("%w (restoring the previous binary also failed: %v; it is at %s)", err, rerr, bak)
 		}
 		return err
@@ -443,6 +513,62 @@ func runVersion(ctx context.Context, path string) (string, error) {
 		return "", fmt.Errorf("run %s --version: %w", filepath.Base(path), err)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// signatureBundleName is the release asset holding the Sigstore bundle
+// that signs checksums.txt.
+const signatureBundleName = "checksums.txt.sigstore.json"
+
+// minCosignMajor is the oldest cosign major version that verifies the
+// release's signature bundle without extra flags.
+const minCosignMajor = 3
+
+// runCosign runs the cosign binary at path with args, within cosignTimeout,
+// and returns its combined output and the error of the run.
+func runCosign(ctx context.Context, path string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, cosignTimeout)
+	defer cancel()
+	return exec.CommandContext(ctx, path, args...).CombinedOutput()
+}
+
+// findCosign returns the path of a cosign binary that can verify the
+// release signature, or "" and the reason there is none: no cosign found
+// by deps.LookCosign, a "cosign version --json" that fails or gives no
+// version, or a version older than minCosignMajor.
+func findCosign(ctx context.Context, deps Deps) (path, problem string) {
+	path, err := deps.LookCosign()
+	if err != nil {
+		return "", "cosign was not found on PATH"
+	}
+	out, err := deps.RunCosign(ctx, path, "version", "--json")
+	var info struct {
+		GitVersion string `json:"gitVersion"`
+	}
+	if err != nil || json.Unmarshal(out, &info) != nil {
+		return "", fmt.Sprintf("could not read the version of %s", path)
+	}
+	major, _, _ := strings.Cut(strings.TrimPrefix(info.GitVersion, "v"), ".")
+	if n, err := strconv.Atoi(major); err != nil || n < minCosignMajor {
+		return "", fmt.Sprintf("%s is cosign %q, older than the v%d.0.0 needed to verify the release signature", path, info.GitVersion, minCosignMajor)
+	}
+	return path, ""
+}
+
+// verifySignature runs "cosign verify-blob" on the checksums.txt at
+// checksumsPath with the Sigstore bundle at bundlePath, requiring a
+// certificate issued by GitHub Actions to this repository's release
+// workflow for exactly tag. It returns an error holding cosign's output
+// when the verification fails.
+func verifySignature(ctx context.Context, deps Deps, cosignPath, checksumsPath, bundlePath, tag string) error {
+	identity := "https://github.com/" + Repo + "/.github/workflows/release.yml@refs/tags/" + tag
+	out, err := deps.RunCosign(ctx, cosignPath, "verify-blob", checksumsPath,
+		"--bundle", bundlePath,
+		"--certificate-identity", identity,
+		"--certificate-oidc-issuer", "https://token.actions.githubusercontent.com")
+	if err != nil {
+		return fmt.Errorf("%w\n%s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // assetHosts are the hosts a release download may be served from:

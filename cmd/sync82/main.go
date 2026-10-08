@@ -267,14 +267,17 @@ Targets: ` + strings.Join(installer.TargetNamesIn(installer.Targets), ", ")
 Manages the global vault path, used when no path argument or .sync82.json
 names one. get-vault shows it, or the vault used instead.`
 	case "self-update":
-		return `Usage: sync82 self-update [--check] [--yes]
+		return `Usage: sync82 self-update [--check] [--yes] [--require-signature]
        sync82 self-update --rollback
 
-Updates sync82 to the latest release, after confirmation.
+Updates sync82 to the latest release, after confirmation. When cosign v3 or
+later is on PATH, the release signature is verified too.
 
-  --check      Only report whether an update is available
-  --yes, -y    Update without asking
-  --rollback   Restore the version replaced by the last update`
+  --check               Only report whether an update is available
+                        (exit code 10 when one is, 0 when up to date)
+  --yes, -y             Update without asking
+  --require-signature   Refuse to update unless cosign verifies the signature
+  --rollback            Restore the version replaced by the last update`
 	case "export":
 		return `Usage: sync82 export <project> [subproject] <output-dir> [--path <vault>]
        sync82 export --all <output-dir> [--path <vault>]

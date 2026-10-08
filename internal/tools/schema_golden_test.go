@@ -30,7 +30,7 @@ var updateGolden = flag.Bool("update", false, "rewrite the golden input schemas"
 
 // TestInputSchemas_MatchGolden renders every registered tool's InputSchema
 // and compares it with testdata/input_schemas.golden.json, so a change to
-// any tool's argument schema shows up as a reviewed golden-file change.
+// any tool's argument schema shows up as a golden-file difference.
 func TestInputSchemas_MatchGolden(t *testing.T) {
 	schemas := map[string]any{}
 	for _, tool := range Registered(nil, nil) {

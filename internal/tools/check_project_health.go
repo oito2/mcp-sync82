@@ -32,11 +32,11 @@ import (
 // the six standard kinds exist for the resolved project. "Exists" means a
 // documents row is present (even empty — it was written on purpose) or at
 // least one entries row is present, archived or not. A missing
-// current-state document makes the project unhealthy; a log
-// (progress, decisions) with no entry yet only gets an empty_log warning. It also reports
-// warnings that never make the project unhealthy: a current-state document
-// left behind by newer log entries, a standard document still empty or
-// holding the blank template, undated log entries and a long active log.
+// current-state document makes the project unhealthy; a log (progress,
+// decisions) with no entry yet only gets an empty_log warning. It also
+// reports warnings that never make the project unhealthy: a current-state
+// document left behind by newer log entries, a standard document still empty
+// or holding the blank template, undated log entries and a long active log.
 type CheckProjectHealthTool struct {
 	Resolver *Resolver
 	Stores   *store.Manager
@@ -143,8 +143,10 @@ func (t *CheckProjectHealthTool) Validate(raw json.RawMessage) (any, error) {
 // Execute checks the target project, or with AllProjects every project of
 // the vault, and returns a text or JSON report; in both formats the report
 // is also the structured content. Its IsError flag is set when any checked
-// project misses a standard kind, never for warnings alone. Store failures
-// are returned as errors.
+// project misses a standard kind, never for warnings alone. An unresolved
+// project returns the instructional result; a project that does not exist
+// yields an error wrapping store.ErrNotFound, and other store failures are
+// returned as errors.
 func (t *CheckProjectHealthTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(checkProjectHealthArgs)
 	if args.AllProjects {
@@ -377,15 +379,16 @@ func VaultHealthText(report VaultHealthReport) string {
 }
 
 // healthWarnings returns the warnings for the project or subproject named
-// by project and subproject in s, current state files first, in standard kind order; modes is the project's
-// store.KindModes, so only the kinds stored as documents are read. A
-// current-state document still
-// empty or equal to its blank template gets a template warning; otherwise it
-// gets a stale warning when it was last updated more than staleDays days ago
-// and progress or decisions has a dated entry after that day. The two logs
-// get an undated_entries warning for undated entries other than a preamble
-// and a large_history warning above largeHistoryLength active dated
-// entries. Store failures are returned as errors.
+// by project and subproject in s: those of the current-state documents
+// first, in standard kind order, then those of the two logs. modes is the
+// project's store.KindModes, so only the kinds stored as documents are read.
+// A current-state document still empty or equal to its blank template gets a
+// template warning; otherwise it gets a stale warning when it was last
+// updated more than staleDays days ago and progress or decisions has a dated
+// entry after that day. Each log gets an undated_entries warning for undated
+// entries other than a preamble and a large_history warning above
+// largeHistoryLength active dated entries. Store failures are returned as
+// errors.
 func healthWarnings(ctx context.Context, s *store.Store, project, subproject string, modes map[string]store.KindStorage, staleDays int) ([]healthWarning, error) {
 	var warnings []healthWarning
 	newestEntry := ""

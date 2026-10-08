@@ -59,7 +59,7 @@ func (t *EditEntryTool) Name() string { return "edit_entry" }
 // Description returns the text shown to the calling agent that explains what
 // the tool does and how to use it.
 func (t *EditEntryTool) Description() string {
-	return `Change one entry of an append-only memory file (progress, decisions, or a custom append kind), identified by entry_id — get the ids from read_memory with with_ids: true, or from search_memory with format "json". action "replace" rewrites the entry in place (its position is kept; for progress/decisions content must contain a "## YYYY-MM-DD" header, which also sets the entry's date). action "supersede" appends content as a new entry and adds a "> Superseded by entry N on YYYY-MM-DD." line (today in UTC) to the old one, keeping the history auditable — prefer it when a decision changed rather than was wrong. action "delete" removes the entry permanently and requires confirm: true — ask the user first. The project must be given via project or workspace_root, not taken from the last session.`
+	return `Change one entry of an append-only memory file (progress, decisions, or a custom append kind), identified by entry_id — get the ids from read_memory with with_ids: true (add archived: true for an archived entry), or from search_memory with format "json". action "replace" rewrites the entry in place (its position is kept; for progress/decisions content must contain a "## YYYY-MM-DD" header, which also sets the entry's date). action "supersede" appends content as a new entry and adds a "> Superseded by entry N on YYYY-MM-DD." line (today in UTC) to the old one, keeping the history auditable — prefer it when a decision changed rather than was wrong; an archived entry can't be superseded. action "delete" removes the entry permanently and requires confirm: true — ask the user first. The project must be given via project or workspace_root, not taken from the last session.`
 }
 
 // InputSchema returns the JSON Schema of the tool's arguments: an object
@@ -83,8 +83,9 @@ func (t *EditEntryTool) InputSchema() map[string]any {
 // removes entry id marker lines from content and checks filename and
 // content with validateAppendInput; for delete it checks filename, that no
 // content is given and that confirm is true. It returns the arguments with
-// Filename lower-cased, or an error when an argument is invalid, the kind
-// is an overwrite-style standard kind, or entry_id is not positive.
+// Filename lower-cased, or an error when an argument is invalid, action is
+// not one of the three actions, the kind is an overwrite-style standard
+// kind, or entry_id is not positive.
 func (t *EditEntryTool) Validate(raw json.RawMessage) (any, error) {
 	var args editEntryArgs
 	if err := decodeArgs(raw, &args); err != nil {
@@ -174,6 +175,11 @@ func (t *EditEntryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, e
 	if errors.Is(err, store.ErrNotFound) {
 		return ToolResult{IsError: true, Text: fmt.Sprintf(
 			"Entry %d not found in %s/%s. Use read_memory with with_ids: true to list the entry ids.",
+			args.EntryID, rctx.Label(), args.Filename)}, nil
+	}
+	if errors.Is(err, store.ErrEntryArchived) {
+		return ToolResult{IsError: true, Text: fmt.Sprintf(
+			"Entry %d in %s/%s is archived and can't be superseded. Use action \"replace\" to change it, or append_memory to record a new entry.",
 			args.EntryID, rctx.Label(), args.Filename)}, nil
 	}
 	if err != nil {

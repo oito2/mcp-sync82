@@ -80,8 +80,10 @@ func (t *ListFilesTool) Validate(raw json.RawMessage) (any, error) {
 
 // Execute resolves the target project and lists its kinds, with size,
 // estimated tokens and last-modified date per kind when Metadata is set. The
-// output is text or JSON; the JSON form is also returned as structured
-// content. Store failures are returned as errors.
+// output is text or JSON, and the list is also returned as structured
+// content in both. An unresolved project returns the instructional result; a
+// missing project yields the error built by wrapNotFound, and other store
+// failures are returned as errors.
 func (t *ListFilesTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(listFilesArgs)
 	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, args.contextArgs())

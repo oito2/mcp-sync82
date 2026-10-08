@@ -82,9 +82,11 @@ func (t *ImportMemoryTool) Validate(raw json.RawMessage) (any, error) {
 
 // Execute resolves the target project, creating the vault if needed (but
 // not on a dry run), and imports the Markdown files in input_dir through
-// importProjectCore, or only reports what would change when DryRun is set. A project taken only from
-// the last session yields an error result instead of being imported into;
-// other failures are returned as errors.
+// importProjectCore, or only reports what would change when DryRun is set
+// (a dry run against a missing vault previews the import as if the vault
+// were empty). A project taken only from the last session yields an error
+// result instead of being imported into; an unresolved project returns the
+// instructional result, and other failures are returned as errors.
 func (t *ImportMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(importMemoryArgs)
 	ctxArgs := args.contextArgs()

@@ -139,7 +139,7 @@ Exporte a memória deste projeto para uma pasta que eu possa commitar
 no git como backup.
 ```
 
-`export_memory` escreve um arquivo `.md` simples por kind no diretório que você especificar — útil para diffar mudanças de memória em um PR, ou como backup portável fora do vault SQLite.
+`export_memory` escreve um arquivo `.md` simples por kind no diretório que você especificar, mais um pequeno manifesto `.sync82-kinds.json` que permite a uma importação restaurar logs personalizados como logs — útil para diffar mudanças de memória em um PR, ou como backup portável fora do vault SQLite.
 
 ---
 

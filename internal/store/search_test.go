@@ -127,23 +127,23 @@ func TestSearchText_CapsScannedRowsAtMaxScannedRows(t *testing.T) {
 		t.Fatalf("ReplaceAllEntries: %v", err)
 	}
 
-	results, truncated, err := s.SearchText(ctx, SearchOptions{Query: "cap-target", Mode: SearchExact, Scope: SearchScope{Project: "acme"}, Offset: 0, Limit: maxScannedRows * 2, ContextLines: 0})
+	results, info, err := s.SearchText(ctx, SearchOptions{Query: "cap-target", Mode: SearchExact, Scope: SearchScope{Project: "acme"}, Offset: 0, Limit: maxScannedRows * 2, ContextLines: 0})
 	if err != nil {
 		t.Fatalf("SearchText: %v", err)
 	}
 	if len(results) != maxScannedRows {
 		t.Fatalf("len(results) = %d, want %d (the maxScannedRows ceiling)", len(results), maxScannedRows)
 	}
-	if !truncated {
+	if !info.Truncated {
 		t.Fatal("truncated = false, want the cut reported")
 	}
 
-	results, truncated, err = s.SearchText(ctx, SearchOptions{Query: "cap target", Mode: SearchWords, Scope: SearchScope{Project: "acme"}, Limit: maxScannedRows * 2})
+	results, info, err = s.SearchText(ctx, SearchOptions{Query: "cap target", Mode: SearchWords, Scope: SearchScope{Project: "acme"}, Limit: maxScannedRows * 2})
 	if err != nil {
 		t.Fatalf("SearchText (words): %v", err)
 	}
-	if len(results) != maxScannedRows || !truncated {
-		t.Fatalf("words mode: %d results, truncated %v; want %d and true", len(results), truncated, maxScannedRows)
+	if len(results) != maxScannedRows || !info.Truncated {
+		t.Fatalf("words mode: %d results, truncated %v; want %d and true", len(results), info.Truncated, maxScannedRows)
 	}
 }
 
@@ -159,12 +159,12 @@ func TestSearchText_UnicodeCaseInsensitive(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, q := range []string{"decisão", "DECISÃO", "água", "ÁGUA"} {
-		results, truncated, err := s.SearchText(ctx, SearchOptions{Query: q, Mode: SearchExact, Scope: SearchScope{Project: "acme"}, Offset: 0, Limit: 10, ContextLines: 0})
+		results, info, err := s.SearchText(ctx, SearchOptions{Query: q, Mode: SearchExact, Scope: SearchScope{Project: "acme"}, Offset: 0, Limit: 10, ContextLines: 0})
 		if err != nil {
 			t.Fatalf("SearchText(%q): %v", q, err)
 		}
-		if len(results) != 1 || truncated {
-			t.Errorf("SearchText(%q) = %d results (truncated %v), want 1", q, len(results), truncated)
+		if len(results) != 1 || info.Truncated {
+			t.Errorf("SearchText(%q) = %d results (truncated %v), want 1", q, len(results), info.Truncated)
 		}
 	}
 }
@@ -356,6 +356,81 @@ func TestSearchText_NegativePagingAndCRLF(t *testing.T) {
 			if strings.HasSuffix(r.Line, "\r") {
 				t.Errorf("%s: line %q keeps its carriage return", mode, r.Line)
 			}
+		}
+	}
+}
+
+// TestSearchText_SubstringFallback verifies that words and phrase searches
+// for text the full-text index tokenizes or folds differently from foldText
+// (a currency sign newer than its tables, Cherokee, Adlam) find their entry
+// through the substring fallback, in reading order, and keep the words and
+// phrase semantics: whole words only ("100₽" doesn't find "1000₽"), and the
+// phrase in order.
+func TestSearchText_SubstringFallback(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{
+		"## 2026-01-01\n- price 100₽ today",
+		"## 2026-01-02\n- the ᏣᎳᎩ language",
+		"## 2026-01-03\n- adlam 𞤀𞤁𞤂 word",
+		"## 2026-01-04\n- price 1000₽ later",
+	} {
+		if err := s.AppendEntry(ctx, "acme", "", "progress", body[3:13], body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		query string
+		mode  SearchMode
+		dates []string
+	}{
+		{"100₽", SearchWords, []string{"2026-01-01"}},
+		{"100₽", SearchPhrase, []string{"2026-01-01"}},
+		{"ᏣᎳᎩ", SearchWords, []string{"2026-01-02"}},
+		{"ᏣᎳᎩ language", SearchPhrase, []string{"2026-01-02"}},
+		{"language ᏣᎳᎩ", SearchPhrase, nil},
+		{"𞤀𞤁𞤂", SearchWords, []string{"2026-01-03"}},
+	} {
+		results, info, err := s.SearchText(ctx, SearchOptions{Query: c.query, Mode: c.mode, Limit: 10})
+		if err != nil {
+			t.Fatalf("SearchText(%q, %s): %v", c.query, c.mode, err)
+		}
+		var dates []string
+		for _, r := range results {
+			dates = append(dates, r.EntryDate)
+		}
+		if !info.Substring || !slices.Equal(dates, c.dates) {
+			t.Errorf("SearchText(%q, %s) = %v, substring %v; want %v through the fallback", c.query, c.mode, dates, info.Substring, c.dates)
+		}
+	}
+}
+
+// TestSearchText_NoSubstringFallback verifies that the fallback doesn't run
+// when the full-text index finds a row, or when the query holds only runes
+// the index handles, even without a match.
+func TestSearchText_NoSubstringFallback(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendEntry(ctx, "acme", "", "progress", "2026-01-01", "## 2026-01-01\n- Sessão de manutenção\n- 東京都に行く"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		query string
+		want  int
+	}{
+		{"sessao", 1},
+		{"東京都に行く", 1},
+		{"zebra", 0},
+	} {
+		results, info, err := s.SearchText(ctx, SearchOptions{Query: c.query, Mode: SearchWords, Limit: 10})
+		if err != nil || len(results) != c.want || info.Substring {
+			t.Errorf("SearchText(%q) = %d results, substring %v, %v; want %d without the fallback", c.query, len(results), info.Substring, err, c.want)
 		}
 	}
 }

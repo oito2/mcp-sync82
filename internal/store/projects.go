@@ -75,8 +75,7 @@ func (s *Store) ProjectExists(ctx context.Context, project, subproject string) (
 // created Project, an error wrapping ErrAlreadyExists when a project with
 // that name already exists in the same scope, one wrapping ErrNotFound when
 // parentID names no project (it was deleted meanwhile), or a database
-// error. The
-// existence of parentID is checked by the foreign key.
+// error. The existence of parentID is checked by the foreign key.
 func (s *Store) CreateProject(ctx context.Context, name string, parentID *int64) (*Project, error) {
 	name = normalizeName(name)
 	var parent sql.NullInt64
@@ -366,6 +365,28 @@ func (s *Store) DeleteProject(ctx context.Context, name string) error {
 		return fmt.Errorf("project not found: %q: %w", name, ErrNotFound)
 	}
 	return nil
+}
+
+// DeleteProjectExpecting deletes the top-level project name as DeleteProject
+// does, in one transaction that first checks that it has exactly expected
+// subprojects. It returns an error wrapping ErrNotFound when no such project
+// exists, an error wrapping ErrSubprojectCount, with nothing deleted, when
+// the count differs, or a database error.
+func (s *Store) DeleteProjectExpecting(ctx context.Context, name string, expected int) error {
+	name = normalizeName(name)
+	return s.withProjectTx(ctx, name, "", func(tx *sql.Tx, projectID int64) error {
+		var n int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM projects WHERE parent_id = ?`, projectID).Scan(&n); err != nil {
+			return fmt.Errorf("count subprojects of %q: %w", name, err)
+		}
+		if n != expected {
+			return fmt.Errorf("project %q has %d subproject(s), not %d: %w", name, n, expected, ErrSubprojectCount)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM projects WHERE id = ?`, projectID); err != nil {
+			return fmt.Errorf("delete project %q: %w", name, err)
+		}
+		return nil
+	})
 }
 
 // DeleteSubproject deletes the subproject subName of parentName, cascading to

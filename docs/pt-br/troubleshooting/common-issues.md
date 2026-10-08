@@ -166,6 +166,14 @@ sync82 config set-vault /um/caminho/gravavel/vault.db
 
 **Solução:** feche e reabra seus clientes MCP (ou encerre os processos `sync82.exe`) e rode `sync82 self-update` de novo. Arquivos `sync82.exe.bak.old-*` que sobrarem são removidos pela próxima atualização quando nada mais os estiver rodando.
 
+### O `self-update` diz que a verificação da assinatura falhou
+
+**Sintoma:** o `sync82 self-update` para com `Signature verification failed — aborting, nothing was changed:` seguido da saída do cosign.
+
+**Causa:** o `cosign` (v3 ou mais novo) está instalado, então o `self-update` confere se o `checksums.txt` da release foi assinado pelo workflow de release deste repositório para exatamente a tag nova, e a conferência falhou. A saída do cosign diz o motivo: um certificado de outra identidade ou tag (`no matching CertificateIdentity found`), um `checksums.txt` que não bate com a assinatura (`invalid signature`), ou um erro de rede enquanto o cosign busca a raiz de confiança do Sigstore (ele precisa de `tuf-repo-cdn.sigstore.dev` na primeira vez, e depois guarda em `~/.sigstore`).
+
+**Solução:** num erro de rede, rode `sync82 self-update` de novo quando a rede voltar. Em qualquer outra falha, não instale essa release à mão: reporte-a (veja [Reportando um Novo Bug](#-reportando-um-novo-bug)) com a saída do cosign. Nada foi mudado, então o binário atual continua funcionando. Para atualizar sem a conferência do cosign, tire o cosign do `PATH`: o `self-update` então avisa e confia só no checksum, a menos que você passe `--require-signature`.
+
 ---
 
 ## 🔄 Confusão de Projeto e Vault

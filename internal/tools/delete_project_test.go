@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/oito2/mcp-sync82/internal/config"
+	"github.com/oito2/mcp-sync82/internal/store"
 )
 
 // TestDeleteProjectTool_Validate verifies that validation rejects a missing
@@ -274,8 +275,8 @@ func TestDeleteProjectTool_Promote_CollisionReportsErrorAndAbortsDeletion(t *tes
 }
 
 // TestDeleteProjectTool_DeleteAll verifies that the "delete_all"
-// subproject_action deletes the project together with its subprojects and
-// mentions them in the result.
+// subproject_action with the right expected_subprojects deletes the project
+// together with its subprojects and mentions them in the result.
 func TestDeleteProjectTool_DeleteAll(t *testing.T) {
 	r, mgr := newToolTestEnv(t)
 	ctx := context.Background()
@@ -288,7 +289,7 @@ func TestDeleteProjectTool_DeleteAll(t *testing.T) {
 	}
 
 	tool := &DeleteProjectTool{Resolver: r, Stores: mgr}
-	parsed, err := tool.Validate(mustJSON(t, map[string]any{"project": "oito2", "confirm": true, "subproject_action": "delete_all"}))
+	parsed, err := tool.Validate(mustJSON(t, map[string]any{"project": "oito2", "confirm": true, "subproject_action": "delete_all", "expected_subprojects": 1}))
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
@@ -305,6 +306,108 @@ func TestDeleteProjectTool_DeleteAll(t *testing.T) {
 	} else if p != nil {
 		t.Fatal("expected \"oito2\" to be deleted")
 	}
+}
+
+// TestDeleteProjectTool_DeleteAllNeedsTheExpectedCount verifies that
+// "delete_all" without expected_subprojects lists the subprojects and the
+// count to pass, and that a wrong count is an error result; neither deletes
+// anything.
+func TestDeleteProjectTool_DeleteAllNeedsTheExpectedCount(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	ctx := context.Background()
+	s, err := mgr.Get(ctx, r.DefaultDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sub := range []string{"api", "web"} {
+		if _, _, err := s.EnsureProject(ctx, "oito2", sub); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tool := &DeleteProjectTool{Resolver: r, Stores: mgr}
+
+	result := runTool(t, tool, map[string]any{"project": "oito2", "confirm": true, "subproject_action": "delete_all"})
+	if result.IsError || !result.ProjectsUnchanged || !strings.Contains(result.Text, `"delete_all" also needs "expected_subprojects"`) ||
+		!strings.Contains(result.Text, "  - api\n  - web") || !strings.Contains(result.Text, `"expected_subprojects": 2`) {
+		t.Fatalf("result = %+v, want the list and the count to pass", result)
+	}
+	result = runTool(t, tool, map[string]any{"project": "oito2", "confirm": true, "subproject_action": "delete_all", "expected_subprojects": 1})
+	if !result.IsError || !strings.Contains(result.Text, `Nothing was deleted: project "oito2" has 2 subproject(s), not 1.`) {
+		t.Fatalf("result = %+v, want the count mismatch", result)
+	}
+	if subs, err := s.ListSubprojects(ctx, mustFindProject(t, s, "oito2").ID); err != nil || len(subs) != 2 {
+		t.Fatalf("subprojects = %+v, %v; want both kept", subs, err)
+	}
+}
+
+// TestDeleteProjectTool_DeleteAllRefusesASubprojectAddedSinceTheList
+// verifies that a subproject created after the caller saw the list makes the
+// count differ, so nothing is deleted.
+func TestDeleteProjectTool_DeleteAllRefusesASubprojectAddedSinceTheList(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	ctx := context.Background()
+	s, err := mgr.Get(ctx, r.DefaultDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.EnsureProject(ctx, "oito2", "api"); err != nil {
+		t.Fatal(err)
+	}
+	tool := &DeleteProjectTool{Resolver: r, Stores: mgr}
+	if result := runTool(t, tool, map[string]any{"project": "oito2", "confirm": true}); !strings.Contains(result.Text, `"expected_subprojects": 1`) {
+		t.Fatalf("result = %q, want the list with one subproject", result.Text)
+	}
+	if _, _, err := s.EnsureProject(ctx, "oito2", "late"); err != nil {
+		t.Fatal(err)
+	}
+	result := runTool(t, tool, map[string]any{"project": "oito2", "confirm": true, "subproject_action": "delete_all", "expected_subprojects": 1})
+	if !result.IsError || !strings.Contains(result.Text, "  - late") {
+		t.Fatalf("result = %+v, want the mismatch listing the new subproject", result)
+	}
+	if mustFindProject(t, s, "oito2") == nil {
+		t.Fatal("the project was deleted")
+	}
+}
+
+// TestDeleteProjectTool_DeleteAllWithoutSubprojects verifies that
+// "delete_all" with expected_subprojects 0 deletes a project that has no
+// subprojects, and that expected_subprojects is refused without
+// "delete_all" or when negative.
+func TestDeleteProjectTool_DeleteAllWithoutSubprojects(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	ctx := context.Background()
+	s, err := mgr.Get(ctx, r.DefaultDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.EnsureProject(ctx, "solo", ""); err != nil {
+		t.Fatal(err)
+	}
+	tool := &DeleteProjectTool{Resolver: r, Stores: mgr}
+	for _, args := range []map[string]any{
+		{"project": "solo", "confirm": true, "expected_subprojects": 0},
+		{"project": "solo", "confirm": true, "subproject_action": "promote", "expected_subprojects": 0},
+		{"project": "solo", "confirm": true, "subproject_action": "delete_all", "expected_subprojects": -1},
+	} {
+		if _, err := tool.Validate(mustJSON(t, args)); err == nil || !strings.Contains(err.Error(), "expected_subprojects") {
+			t.Errorf("Validate(%v) = %v, want an expected_subprojects problem", args, err)
+		}
+	}
+	result := runTool(t, tool, map[string]any{"project": "solo", "confirm": true, "subproject_action": "delete_all", "expected_subprojects": 0})
+	if result.IsError || mustFindProject(t, s, "solo") != nil {
+		t.Fatalf("result = %+v; want the project deleted", result)
+	}
+}
+
+// mustFindProject returns the top-level project called name in s, or nil
+// when it doesn't exist. It fails the test on a database error.
+func mustFindProject(t *testing.T, s *store.Store, name string) *store.Project {
+	t.Helper()
+	p, err := s.FindProjectByName(context.Background(), name, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }
 
 // TestDeleteProjectTool_PlainDeleteNoSubprojects verifies that a confirmed

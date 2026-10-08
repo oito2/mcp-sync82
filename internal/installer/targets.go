@@ -310,8 +310,8 @@ func antigravityConfigDir(env Env) string {
 	return filepath.Join(env.HomeDir, ".gemini", "config")
 }
 
-// antigravityLegacyDir returns ~/.gemini/antigravity, the directory read
-// by older Antigravity builds.
+// antigravityLegacyDir returns ~/.gemini/antigravity, the legacy
+// Antigravity directory, which holds its own mcp_config.json.
 func antigravityLegacyDir(env Env) string {
 	return filepath.Join(env.HomeDir, ".gemini", "antigravity")
 }

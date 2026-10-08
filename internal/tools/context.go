@@ -28,9 +28,8 @@ import (
 )
 
 // ContextArgs holds the subset of a tool call's arguments relevant to
-// context resolution. Every field is the empty string when the calling
-// agent omitted it — exactly how a parsed JSON-RPC request would leave an
-// absent optional field.
+// context resolution. Every string field is empty (and SearchParentDirs
+// false) when the calling agent omitted it.
 type ContextArgs struct {
 	Project          string
 	Subproject       string
@@ -271,9 +270,10 @@ func (r *Resolver) resolveSearchScope(args ContextArgs) ResolvedContext {
 // argument contributes neither its subproject nor its vault path. When
 // workspace_root is given, the global config's last-used project is never
 // consulted, and with an explicit path only when it was remembered in that
-// same vault, or with no vault at all. local is the .sync82.json found under workspace_root, if any;
-// project is empty when nothing determined one. err is set when a
-// .sync82.json under workspace_root exists but cannot be read or parsed.
+// same vault, or with no vault at all. local is the .sync82.json found under
+// workspace_root, if any; project is empty when nothing determined one. err
+// is set when a .sync82.json under workspace_root exists but cannot be read
+// or parsed.
 func (r *Resolver) resolveInitTarget(args ContextArgs) (project, subproject, dbPath string, local *config.LocalConfigResult, err error) {
 	project = NormalizeName(args.Project)
 	subproject = NormalizeName(args.Subproject)
@@ -351,9 +351,10 @@ func (r *Resolver) RememberIfExists(ctx context.Context, s *store.Store, rctx Re
 // runs first. args are the call's context arguments.
 //
 // Exactly one of three outcomes occurs:
-//   - ready != nil: resolution failed (no project could be determined, or
-//     its name is invalid). The caller must return *ready as-is
-//     (NeedsInput() or an error result) and do nothing else.
+//   - ready != nil: the call cannot proceed (no project could be
+//     determined, its name is invalid, or, for ResolveStore, the vault does
+//     not exist). The caller must return *ready as-is (NeedsInput() or an
+//     error result) and do nothing else.
 //   - err != nil: resolution succeeded but opening the store failed. The
 //     caller must return err from Execute.
 //   - s != nil, ready == nil, err == nil: success — s is the resolved

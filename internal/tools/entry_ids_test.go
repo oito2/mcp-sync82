@@ -117,6 +117,67 @@ func TestReadMemoryTool_WithIDsIgnoredForDocuments(t *testing.T) {
 	}
 }
 
+// TestReadMemoryTool_ArchivedEntriesWithIDs verifies that archived: true
+// returns only the archived entries, with their markers under with_ids,
+// that edit_entry can then replace and delete them by those ids, and that
+// "(no archived entries)" is returned once none is left.
+func TestReadMemoryTool_ArchivedEntriesWithIDs(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	s, first, _ := seedLog(t, r, mgr)
+	ctx := context.Background()
+	if _, err := s.ArchiveEntries(ctx, "acme", "", "progress", "2026-01-15", nil); err != nil {
+		t.Fatal(err)
+	}
+	read := &ReadMemoryTool{Resolver: r, Stores: mgr}
+
+	text := runTool(t, read, map[string]any{"project": "acme", "filename": "progress", "archived": true, "with_ids": true}).Text
+	if want := entryMarker(first) + "\n## 2026-01-01\n- entry 2026-01-01"; text != want {
+		t.Fatalf("read_memory archived with_ids = %q, want %q", text, want)
+	}
+	if text := runTool(t, read, map[string]any{"project": "acme", "filename": "progress", "archived": true}).Text; text != "## 2026-01-01\n- entry 2026-01-01" {
+		t.Fatalf("read_memory archived = %q, want the archived entry without a marker", text)
+	}
+	if text := runTool(t, read, map[string]any{"project": "acme", "filename": "progress"}).Text; strings.Contains(text, "2026-01-01") {
+		t.Fatalf("read_memory without archived = %q, want only the active entry", text)
+	}
+
+	edit := &EditEntryTool{Resolver: r, Stores: mgr}
+	if res := runTool(t, edit, map[string]any{"project": "acme", "filename": "progress", "entry_id": first, "action": "replace", "content": "## 2026-01-01\n- fixed in the archive"}); res.IsError {
+		t.Fatalf("replace of the archived entry = %+v", res)
+	}
+	if text := runTool(t, read, map[string]any{"project": "acme", "filename": "progress", "archived": true}).Text; text != "## 2026-01-01\n- fixed in the archive" {
+		t.Fatalf("archive after replace = %q", text)
+	}
+	if res := runTool(t, edit, map[string]any{"project": "acme", "filename": "progress", "entry_id": first, "action": "delete", "confirm": true}); res.IsError {
+		t.Fatalf("delete of the archived entry = %+v", res)
+	}
+	if text := runTool(t, read, map[string]any{"project": "acme", "filename": "progress", "archived": true}).Text; text != "(no archived entries)" {
+		t.Fatalf("archive after delete = %q, want (no archived entries)", text)
+	}
+}
+
+// TestReadMemoryTool_ArchivedRefusesDocuments verifies that archived: true
+// on an overwrite-style document is an error result, and on a file that
+// doesn't exist reports it as not found.
+func TestReadMemoryTool_ArchivedRefusesDocuments(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	s, _, _ := seedLog(t, r, mgr)
+	if err := s.WriteDocument(context.Background(), "acme", "", "memory", "state"); err != nil {
+		t.Fatal(err)
+	}
+	read := &ReadMemoryTool{Resolver: r, Stores: mgr}
+	if res := runTool(t, read, map[string]any{"project": "acme", "filename": "memory", "archived": true}); !res.IsError || !strings.Contains(res.Text, "acme/memory is an overwrite-style file, which has no archived entries") {
+		t.Fatalf("read_memory archived on a document = %+v, want the error result", res)
+	}
+	parsed, err := read.Validate(mustJSON(t, map[string]any{"project": "acme", "filename": "nothing", "archived": true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := read.Execute(context.Background(), parsed); err == nil || !strings.Contains(err.Error(), "file not found: acme/nothing") {
+		t.Fatalf("read_memory archived on a missing file: err = %v, want file not found", err)
+	}
+}
+
 // TestAppendAndImport_StripEntryMarkers verifies that append_memory and
 // import_memory never store entry id marker lines.
 func TestAppendAndImport_StripEntryMarkers(t *testing.T) {

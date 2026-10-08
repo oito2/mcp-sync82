@@ -46,7 +46,8 @@ import (
 // the report as skipped. It returns an error when the project or
 // subproject name is invalid, inputDir cannot be read, it holds more than
 // maxImportFiles ".md" files or more than maxImportTotalBytes of them, two
-// files differ only in case, or a store operation fails. s may be nil only with dryRun, for a vault that does not
+// files differ only in case, the kinds manifest is unusable, or a store
+// operation fails. s may be nil only with dryRun, for a vault that does not
 // exist yet: every file is then reported as new.
 //
 // It is the entry point shared by the import_memory tool and the "sync82
@@ -302,8 +303,7 @@ func FormatImportReport(r ImportReport, target, inputDir string, dryRun bool) st
 
 // readKindsManifest reads the kindsManifest at path and returns its kinds,
 // lower-cased, mapped to "log" or "document". A missing manifest, as in a
-// folder an older version exported or one written by hand, gives an empty
-// map. It returns an error for a manifest that is not a regular file, is
+// folder written by hand, gives an empty map. It returns an error for a manifest that is not a regular file, is
 // larger than 1 MB, isn't valid JSON, or has another format version.
 func readKindsManifest(path string) (map[string]string, error) {
 	data, ok, err := readRegularFile(path, 1<<20)

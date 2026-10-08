@@ -171,8 +171,11 @@ func (t *LoadProjectContextTool) Validate(raw json.RawMessage) (any, error) {
 // of its kinds (all of them, or only the requested files) into one block,
 // current-state kinds first, applying since and max_entries to dated
 // history. When dated entries are left out, a footer lists, per kind, how
-// many were shown out of how many. The block is cut at MaxBytes, footer
-// included. Store failures are returned as errors.
+// many were shown out of how many, and a requested file that does not exist
+// is named. The block is cut at MaxBytes, footer included. An unresolved
+// project returns the instructional result; a missing project yields the
+// error built by wrapNotFound, and other store failures are returned as
+// errors.
 func (t *LoadProjectContextTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(loadProjectContextArgs)
 	s, rctx, ready, err := t.Resolver.ResolveStore(ctx, t.Stores, args.contextArgs())
@@ -231,10 +234,7 @@ func projectContext(ctx context.Context, s *store.Store, project, subproject str
 			}
 		}
 	}
-	unknownNote := ""
-	if len(unknown) > 0 {
-		unknownNote = fmt.Sprintf("[no file named: %s]", namedKinds(unknown))
-	}
+	unknownNote := unknownFilesNote(unknown, args.MaxBytes)
 	kinds = currentStateFirst(kinds)
 
 	modes, err := s.KindModes(ctx, project, subproject)
@@ -314,6 +314,21 @@ func namedKinds(kinds []string) string {
 	return fmt.Sprintf("%s and %d more", strings.Join(kinds[:maxNamedKinds], ", "), len(kinds)-maxNamedKinds)
 }
 
+// unknownFilesNote returns the note naming the requested files that don't
+// exist ("[no file named: a, b]"), or "" when there are none. When that note
+// would take more than a quarter of maxBytes, it returns a short form that
+// only counts them, so the note never crowds out the content.
+func unknownFilesNote(unknown []string, maxBytes int) string {
+	if len(unknown) == 0 {
+		return ""
+	}
+	note := fmt.Sprintf("[no file named: %s]", namedKinds(unknown))
+	if len(note) > maxBytes/4 {
+		note = fmt.Sprintf("[%d requested %s not found]", len(unknown), pluralize(len(unknown), "file", "files"))
+	}
+	return note
+}
+
 // omittedFooter returns the note listing the dated entries left out of the
 // response, one clause per kind, or "" when nothing was left out. When
 // that note would take more than a quarter of maxBytes, it returns a short
@@ -344,7 +359,9 @@ func omittedFooter(omitted []omittedHistory, maxBytes int) string {
 // cutPoint) and followed by a truncation note naming the kinds cut short
 // or left out entirely; room for the note (truncationNoteReserve) and for
 // the footer is kept, so the whole response, notes included, fits in
-// maxBytes. The footer is never cut.
+// maxBytes when the footer is small enough. The footer is never cut; its
+// notes (omittedFooter, unknownFilesNote) each keep to a quarter of
+// maxBytes.
 func buildContext(label string, sections []contextSection, footer string, maxBytes int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Context: %s\n\n", label)

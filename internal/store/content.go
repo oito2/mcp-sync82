@@ -163,8 +163,8 @@ func (s *Store) KindModes(ctx context.Context, project, subproject string) (map[
 // KindMetadata describes the size and freshness of a kind's content.
 // SizeBytes is the content length in bytes, EstimatedTokens a rough estimate
 // (SizeBytes / 4), and LastModified the update date of a document, or the
-// creation date of the newest entry of a log: editing or archiving entries
-// does not change it.
+// creation date of the newest non-archived entry of a log (of the newest
+// entry when all are archived): editing an entry does not change it.
 type KindMetadata struct {
 	SizeBytes       int
 	EstimatedTokens int

@@ -21,9 +21,9 @@ package tools
 // when not ReadOnly) that it may overwrite or delete existing memory rather
 // than only add to it, Idempotent that repeating a call with the same
 // arguments changes nothing more, and ChangesProjects that a successful
-// call may create, delete or rename a project, changing the resource list. Every sync82 tool works on a closed
-// domain (the local vault and files), never on an open world of external
-// entities.
+// call may create, delete or rename a project, changing the resource list.
+// Every sync82 tool works on a closed domain (the local vault and files),
+// never on an open world of external entities.
 type ToolHints struct {
 	Title           string
 	ReadOnly        bool

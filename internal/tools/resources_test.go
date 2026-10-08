@@ -178,8 +178,9 @@ func TestResources_MissingVault(t *testing.T) {
 	}
 }
 
-// TestPrompts_Render verifies both prompts with a project, a subproject and
-// no project, and that invalid arguments are rejected.
+// TestPrompts_Render verifies the start_session prompt with a project and
+// subproject and the end_session prompt without arguments, and that every
+// prompt rejects a subproject without a project and malformed names.
 func TestPrompts_Render(t *testing.T) {
 	byName := map[string]PromptDefinition{}
 	for _, p := range Prompts {
@@ -208,8 +209,10 @@ func TestPrompts_Render(t *testing.T) {
 }
 
 // TestResources_Complete verifies the completion of project, subproject
-// and file names, case-insensitive and by prefix, and that an unknown
-// argument, a missing project and a missing vault give nothing.
+// and file names, case-insensitive and by prefix, that an unknown argument
+// or a subproject request without an existing project gives nothing, and
+// that the number of returned values is capped at maxCompletionValues while
+// the total still counts every match.
 func TestResources_Complete(t *testing.T) {
 	res, s := newResourcesEnv(t)
 	ctx := context.Background()

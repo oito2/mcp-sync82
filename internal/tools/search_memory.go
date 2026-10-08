@@ -29,9 +29,10 @@ import (
 
 // SearchMemoryTool implements search_memory: full-text search by words or
 // phrase (case and Latin accents ignored, ranked by relevance), or a
-// literal case-insensitive substring search in exact mode. Scope rule: no project → search everything; project only → that
-// project's own documents/entries plus all its subprojects; project +
-// subproject → that subproject only.
+// literal case-insensitive substring search in exact mode. Scope rule: no
+// project → search everything; project only → that project's own
+// documents/entries plus all its subprojects; project + subproject → that
+// subproject only.
 type SearchMemoryTool struct {
 	Resolver *Resolver
 	Stores   *store.Manager
@@ -127,10 +128,9 @@ func (t *SearchMemoryTool) InputSchema() map[string]any {
 // 100, words match, text format), lower-casing the kinds. It returns the
 // arguments, or an error listing every problem: an empty or multi-line
 // query, an invalid project or subproject name, a words or phrase query
-// with no letter or number, an unknown
-// match, an invalid kind, since or until date, since after until, a
-// subproject without a project, or an out-of-range limit, offset or
-// context_lines.
+// with no letter or number, an unknown match, an invalid kind, since or
+// until date, since after until, a subproject without a project or
+// workspace_root, or an out-of-range limit, offset or context_lines.
 func (t *SearchMemoryTool) Validate(raw json.RawMessage) (any, error) {
 	var args searchMemoryArgs
 	if err := decodeArgs(raw, &args); err != nil {
@@ -206,9 +206,11 @@ func (t *SearchMemoryTool) Validate(raw json.RawMessage) (any, error) {
 
 // Execute searches the resolved scope for the query and returns the matching
 // lines with their location, optional context and pagination hints, as text
-// or JSON. The output is also capped in size, with the next offset reported
-// when it is cut. A missing vault or an unusable .sync82.json yields an
-// error result; store failures are returned as errors.
+// or JSON; the report is also returned as structured content. The output is
+// also capped in size, with the next offset reported when it is cut. A
+// missing vault, an unusable .sync82.json or a subproject given without a
+// resolvable project yields an error result; a missing project and other
+// store failures are returned as errors.
 func (t *SearchMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(searchMemoryArgs)
 	rctx := t.Resolver.resolveSearchScope(args.contextArgs())
@@ -228,7 +230,7 @@ func (t *SearchMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult
 		t.Resolver.RememberIfExists(ctx, s, rctx)
 	}
 
-	results, scanTruncated, err := s.SearchText(ctx, store.SearchOptions{
+	results, info, err := s.SearchText(ctx, store.SearchOptions{
 		Query: args.Query, Mode: store.SearchMode(args.Match),
 		Scope: store.SearchScope{Project: project, Subproject: subproject},
 		Kinds: args.Kinds, Since: args.Since, Until: args.Until,
@@ -237,6 +239,7 @@ func (t *SearchMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult
 	if err != nil {
 		return ToolResult{}, wrapNotFound(err, FormatLabel(project, subproject))
 	}
+	scanTruncated := info.Truncated
 
 	moreResults := len(results) > args.Limit
 	if moreResults {
@@ -251,10 +254,10 @@ func (t *SearchMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult
 		if scanTruncated {
 			text += " (the search stopped early on a very large vault; narrow it with project)"
 		}
-		return ToolResult{Text: text, Structured: searchReport{Query: args.Query, Results: []searchHit{}, ScanTruncated: scanTruncated}}, nil
+		return ToolResult{Text: text, Structured: searchReport{Query: args.Query, Results: []searchHit{}, ScanTruncated: scanTruncated, SubstringFallback: info.Substring}}, nil
 	}
 
-	report := searchReport{Query: args.Query, Results: []searchHit{}, ScanTruncated: scanTruncated}
+	report := searchReport{Query: args.Query, Results: []searchHit{}, ScanTruncated: scanTruncated, SubstringFallback: info.Substring}
 	lines := make([]string, 0, len(results)+2)
 	size := 0
 	for i, r := range results {
@@ -305,6 +308,9 @@ func (t *SearchMemoryTool) Execute(ctx context.Context, rawArgs any) (ToolResult
 	if scanTruncated {
 		lines = append(lines, "(the search stopped early on a very large vault, so some matches may be missing; narrow it with project)")
 	}
+	if info.Substring {
+		lines = append(lines, "(the full-text index found no match, so the words were matched inside the text instead; results are in reading order, not by relevance)")
+	}
 
 	return ToolResult{Text: strings.Join(lines, "\n"), Structured: report}, nil
 }
@@ -325,8 +331,9 @@ func (t *SearchMemoryTool) OutputSchema() map[string]any {
 			"context_before": schemaArray(schemaString()),
 			"context_after":  schemaArray(schemaString()),
 		}, "project", "file", "line", "text")),
-		"next_offset":    schemaInteger(),
-		"scan_truncated": schemaBoolean(),
+		"next_offset":        schemaInteger(),
+		"scan_truncated":     schemaBoolean(),
+		"substring_fallback": schemaBoolean(),
 	}, "query", "results")
 }
 
@@ -338,6 +345,9 @@ type searchReport struct {
 	Results       []searchHit `json:"results"`
 	NextOffset    int         `json:"next_offset,omitempty"`
 	ScanTruncated bool        `json:"scan_truncated,omitempty"`
+	// SubstringFallback reports that the full-text index found no match
+	// and the words were matched as substrings, in reading order.
+	SubstringFallback bool `json:"substring_fallback,omitempty"`
 }
 
 // searchHit is one matching line in a searchReport, with its location and

@@ -35,17 +35,20 @@ import (
 // date order, with their "## YYYY-MM-DD" headers). A kind with archived
 // entries also gets a <kind>.archived.md file holding those entries in the
 // same format, so an export keeps the whole history and importing it
-// restores the archive.
+// restores the archive. A kindsManifestName file recording whether each kind
+// is a log or a document is written next to them.
 //
 // Nothing is written when a destination exists but isn't a regular file (a
 // symlink could redirect the write elsewhere), nor, unless overwrite is
 // true, when a destination file already exists; the error then wraps
 // errExportWouldOverwrite and names every colliding file. A missing
 // outputDir is created, and new files and directories are private to the
-// user. It returns an ExportReport — the number of files written (0 when
-// the project has no content) and the kinds skipped because their name
-// can't be a file name — or an error if listing, reading or writing fails;
-// a write failure part-way through reports the files written before it.
+// user. It returns an ExportReport — the number of memory files written
+// (0 when the project has no content; the kinds manifest is not counted),
+// the kinds skipped because their name can't be a file name and the stale
+// .md files left in outputDir — or an error if listing, reading or writing
+// fails; a write failure part-way through reports the files written before
+// it.
 //
 // It is the entry point shared by the export_memory tool and the "sync82
 // export" command.

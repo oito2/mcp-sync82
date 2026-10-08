@@ -27,14 +27,14 @@ import (
 	"github.com/oito2/mcp-sync82/internal/tools"
 )
 
-// addResources registers every template in templates on s, read through
+// addResources registers every template in defs on s, read through
 // res, and a receiving middleware that answers resources/list with the
 // context resource of every project in the default vault, listed when the
 // request arrives so projects created during the session appear. It
 // returns the function that tells connected clients the resource list
 // changed: it registers the first template again, which makes the SDK send
 // notifications/resources/list_changed (debounced), the only way the SDK
-// offers to send it. templates must not be empty.
+// offers to send it. defs must not be empty.
 func addResources(s *mcp.Server, defs []tools.ResourceTemplate, res *tools.Resources, logger *slog.Logger) (listChanged func()) {
 	read := readResourceHandler(res, logger)
 	templates := make([]*mcp.ResourceTemplate, len(defs))
@@ -143,8 +143,8 @@ func addPrompts(s *mcp.Server, prompts []tools.PromptDefinition, logger *slog.Lo
 
 // completionHandler returns the handler of completion/complete: for an
 // argument that one of opts.Prompts or opts.ResourceTemplates actually
-// has, the matching names from opts.Resources.Complete; for any other reference or argument,
-// no values. A failure or a panic is answered with an internal error
+// has, the matching names from opts.Resources.Complete; for any other
+// reference or argument, no values. A failure or a panic is answered with an internal error
 // (internalError, recoverAsInternal).
 func completionHandler(opts Options, logger *slog.Logger) func(context.Context, *mcp.CompleteRequest) (*mcp.CompleteResult, error) {
 	return func(ctx context.Context, req *mcp.CompleteRequest) (_ *mcp.CompleteResult, err error) {

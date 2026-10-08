@@ -42,7 +42,10 @@ type deleteProjectArgs struct {
 	Subproject       string `json:"subproject,omitempty"`
 	Confirm          bool   `json:"confirm"`
 	SubprojectAction string `json:"subproject_action,omitempty"` // "cancel" | "promote" | "delete_all"
-	Path             string `json:"path,omitempty"`
+	// ExpectedSubprojects is the number of subprojects the caller expects
+	// "delete_all" to delete; nil when not given.
+	ExpectedSubprojects *int   `json:"expected_subprojects,omitempty"`
+	Path                string `json:"path,omitempty"`
 }
 
 // Name returns the MCP tool name, "delete_project".
@@ -51,12 +54,13 @@ func (t *DeleteProjectTool) Name() string { return "delete_project" }
 // Description returns the text shown to the calling agent that explains what
 // the tool does and how to use it.
 func (t *DeleteProjectTool) Description() string {
-	return "Permanently delete a project or subproject from the vault. Requires confirm: true — ask the user before calling this with confirm: true."
+	return "Permanently delete a project or subproject from the vault. Requires confirm: true — ask the user before calling this with confirm: true. A top-level project with subprojects also needs subproject_action; with \"delete_all\", pass expected_subprojects, the number of subprojects you showed the user, and nothing is deleted when the vault holds another number."
 }
 
 // InputSchema returns the JSON Schema of the tool's arguments: an object
 // with the required properties project and confirm, an optional subproject,
-// an optional subproject_action and an optional vault path.
+// an optional subproject_action, an optional expected_subprojects and an
+// optional vault path.
 func (t *DeleteProjectTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
@@ -69,6 +73,11 @@ func (t *DeleteProjectTool) InputSchema() map[string]any {
 				"enum":        []string{"cancel", "promote", "delete_all"},
 				"description": "Required only when deleting a top-level project that has subprojects.",
 			},
+			"expected_subprojects": map[string]any{
+				"type":        "integer",
+				"minimum":     0,
+				"description": "Required with subproject_action \"delete_all\": the number of subprojects shown to the user. Nothing is deleted when the project has another number.",
+			},
 			"path": map[string]any{"type": "string", "description": PathDescription},
 		},
 		"required": []string{"project", "confirm"},
@@ -77,7 +86,8 @@ func (t *DeleteProjectTool) InputSchema() map[string]any {
 
 // Validate decodes raw into deleteProjectArgs and normalizes the names. It
 // returns the arguments, or an error listing every problem: an invalid name,
-// confirm not true, or an unknown subproject_action.
+// confirm not true, an unknown subproject_action, or an expected_subprojects
+// that is negative or given without subproject_action "delete_all".
 func (t *DeleteProjectTool) Validate(raw json.RawMessage) (any, error) {
 	var args deleteProjectArgs
 	if err := decodeArgs(raw, &args); err != nil {
@@ -106,6 +116,14 @@ func (t *DeleteProjectTool) Validate(raw json.RawMessage) (any, error) {
 	default:
 		problems = append(problems, `"subproject_action" must be one of "cancel", "promote", "delete_all"`)
 	}
+	if n := args.ExpectedSubprojects; n != nil {
+		if *n < 0 {
+			problems = append(problems, `"expected_subprojects" must be 0 or more`)
+		}
+		if args.SubprojectAction != "delete_all" {
+			problems = append(problems, `"expected_subprojects" is only used with "subproject_action": "delete_all"`)
+		}
+	}
 	if len(problems) > 0 {
 		return nil, fmt.Errorf("invalid arguments:\n- %s", strings.Join(problems, "\n- "))
 	}
@@ -113,13 +131,18 @@ func (t *DeleteProjectTool) Validate(raw json.RawMessage) (any, error) {
 }
 
 // Execute deletes a subproject, or a top-level project. When the project has
-// subprojects and no subproject_action was given, it returns a non-error
-// result that asks the caller to choose "cancel", "promote" or "delete_all".
-// Promotion and deletion happen in one transaction, so a failure changes
-// nothing. After a deletion, a last used project (or subproject) that no
-// longer exists is forgotten, and one that was promoted is followed to its
-// new name. A missing vault yields an error result; other failures are
-// returned as errors.
+// subprojects and no subproject_action was given, or "delete_all" was given
+// without expected_subprojects, it returns a non-error result that lists the
+// subprojects and asks the caller to choose "cancel", "promote" or
+// "delete_all". A top-level project is deleted only when its number of
+// subprojects, checked in the deleting transaction, is expected_subprojects
+// for "delete_all" and zero otherwise; any other number is an error result
+// that lists the current subprojects and deletes nothing. Promotion and
+// deletion happen in one transaction, so a failure changes nothing. After a
+// deletion, a last used project (or subproject) that no longer exists is
+// forgotten, and one that was promoted is followed to its new name. A
+// missing vault yields an error result, as does a failed promotion; a
+// missing project and other failures are returned as errors.
 func (t *DeleteProjectTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(deleteProjectArgs)
 	dbPath := t.Resolver.DBPathOrDefault(args.Path)
@@ -143,7 +166,7 @@ func (t *DeleteProjectTool) Execute(ctx context.Context, rawArgs any) (ToolResul
 
 	// Deleting a top-level project — check for subprojects first. A
 	// project that doesn't exist is treated as having none; the "not
-	// found" error comes from DeleteProject below.
+	// found" error comes from DeleteProjectExpecting below.
 	parent, err := s.FindProjectByName(ctx, args.Project, nil)
 	if err != nil {
 		return ToolResult{}, err
@@ -157,19 +180,11 @@ func (t *DeleteProjectTool) Execute(ctx context.Context, rawArgs any) (ToolResul
 	}
 
 	if len(subs) > 0 && args.SubprojectAction == "" {
-		lines := make([]string, len(subs))
-		for i, sub := range subs {
-			lines[i] = "  - " + sub.Name
-		}
-		text := fmt.Sprintf(
-			"Project %q has %d subproject(s):\n%s\n\n"+
-				"Call delete_project again with \"subproject_action\" set to one of:\n"+
-				"  - \"cancel\"     — abort, do nothing\n"+
-				"  - \"promote\"    — move each subproject to the vault root as an independent project\n"+
-				"  - \"delete_all\" — delete the project and all its subprojects",
-			args.Project, len(subs), strings.Join(lines, "\n"),
-		)
-		return ToolResult{Text: text, ProjectsUnchanged: true}, nil // not an error result: it asks for missing input
+		return ToolResult{Text: subprojectChoiceText(args.Project, subs), ProjectsUnchanged: true}, nil // not an error result: it asks for missing input
+	}
+	if args.SubprojectAction == "delete_all" && args.ExpectedSubprojects == nil && parent != nil {
+		text := "\"delete_all\" also needs \"expected_subprojects\". " + subprojectChoiceText(args.Project, subs)
+		return ToolResult{Text: text, ProjectsUnchanged: true}, nil
 	}
 
 	if args.SubprojectAction == "cancel" {
@@ -191,9 +206,25 @@ func (t *DeleteProjectTool) Execute(ctx context.Context, rawArgs any) (ToolResul
 	}
 
 	// subproject_action is "delete_all", or "promote" with nothing to
-	// promote, or the project has no subprojects: a plain delete, which
-	// also reports "project not found" when args.Project doesn't exist.
-	if err := s.DeleteProject(ctx, args.Project); err != nil {
+	// promote, or the project has no subprojects: a delete that checks the
+	// number of subprojects in its own transaction, so one created since
+	// the listing above is never deleted unseen. It also reports "project
+	// not found" when args.Project doesn't exist.
+	expected := 0
+	if args.SubprojectAction == "delete_all" && args.ExpectedSubprojects != nil {
+		expected = *args.ExpectedSubprojects
+	}
+	if err := s.DeleteProjectExpecting(ctx, args.Project, expected); errors.Is(err, store.ErrSubprojectCount) {
+		var current []store.Project
+		if parent != nil {
+			if current, err = s.ListSubprojects(ctx, parent.ID); err != nil {
+				return ToolResult{}, err
+			}
+		}
+		text := fmt.Sprintf("Nothing was deleted: project %q has %d subproject(s), not %d. ", args.Project, len(current), expected) +
+			subprojectChoiceText(args.Project, current)
+		return ToolResult{Text: text, IsError: true, ProjectsUnchanged: true}, nil
+	} else if err != nil {
 		return ToolResult{}, projectNotFound(err, args.Project)
 	}
 	t.forgetLastProject(args.Project, "", false, dbPath)
@@ -206,6 +237,24 @@ func (t *DeleteProjectTool) Execute(ctx context.Context, rawArgs any) (ToolResul
 		note = fmt.Sprintf(" (including subprojects: %s)", strings.Join(names, ", "))
 	}
 	return ToolResult{Text: fmt.Sprintf("Project %q deleted%s.", args.Project, note)}, nil
+}
+
+// subprojectChoiceText lists subs, the subprojects of project, and tells the
+// caller to call delete_project again with a subproject_action, giving the
+// expected_subprojects that "delete_all" needs.
+func subprojectChoiceText(project string, subs []store.Project) string {
+	lines := make([]string, len(subs))
+	for i, sub := range subs {
+		lines[i] = "  - " + sub.Name
+	}
+	return fmt.Sprintf(
+		"Project %q has %d subproject(s):\n%s\n\n"+
+			"Show this list to the user, then call delete_project again with \"subproject_action\" set to one of:\n"+
+			"  - \"cancel\"     — abort, do nothing\n"+
+			"  - \"promote\"    — move each subproject to the vault root as an independent project\n"+
+			"  - \"delete_all\" — delete the project and all its subprojects; also pass \"expected_subprojects\": %d",
+		project, len(subs), strings.Join(lines, "\n"), len(subs),
+	)
 }
 
 // forgetLastProject updates the global config after project (or its

@@ -184,8 +184,9 @@ func TestCheckProjectHealthTool_FullyArchivedLogStaysHealthy(t *testing.T) {
 }
 
 // seedHealthyProject creates project acme in the default vault of r with
-// the four current-state documents filled in and one dated entry in each
-// log, dated date, and returns the store.
+// the four current-state documents filled in and one entry dated date in
+// each of the progress and decisions logs. It returns the store and fails
+// the test if any write fails.
 func seedHealthyProject(t *testing.T, r *Resolver, mgr *store.Manager, date string) *store.Store {
 	t.Helper()
 	ctx := context.Background()
@@ -218,8 +219,8 @@ func setHealthNow(t *testing.T, now time.Time) {
 }
 
 // TestCheckProjectHealthTool_NoWarningsKeepsTheOutput verifies that a
-// project without warnings gets exactly the report it got before warnings
-// existed.
+// project without warnings gets a report that ends with the plain status and
+// per-file list and has no "Warnings" section.
 func TestCheckProjectHealthTool_NoWarningsKeepsTheOutput(t *testing.T) {
 	r, mgr := newToolTestEnv(t)
 	seedHealthyProject(t, r, mgr, time.Now().UTC().Format("2006-01-02"))
@@ -472,7 +473,8 @@ func TestCheckProjectHealthTool_AllProjectsMissingVault(t *testing.T) {
 // TestCheckProjectHealthTool_FreshProjectIsHealthy checks that a project
 // just set up by init_project_memory, whose logs have no entry yet, is
 // healthy, with an empty_log warning for each log and the logs shown as
-// empty rather than missing.
+// empty rather than missing, and that a bare project created by
+// create_project is unhealthy and points to init_project_memory.
 func TestCheckProjectHealthTool_FreshProjectIsHealthy(t *testing.T) {
 	r, mgr := newToolTestEnv(t)
 	runTool(t, &InitProjectMemoryTool{Resolver: r, Stores: mgr}, map[string]any{"project": "fresh"})

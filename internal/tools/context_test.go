@@ -454,7 +454,7 @@ func TestContextNote(t *testing.T) {
 
 // TestResolve_LastProjectOnlyInItsOwnVault verifies that the last-used
 // project is reused with an explicit path only when that path is the vault
-// it was remembered in.
+// it was remembered in, both in Resolve and in resolveInitTarget.
 func TestResolve_LastProjectOnlyInItsOwnVault(t *testing.T) {
 	r := testResolver(t)
 	remembered := filepath.Join(t.TempDir(), "a.db")

@@ -341,9 +341,10 @@ func TestLoadProjectContextTool_BoundedWithCurrentStateFirst(t *testing.T) {
 	}
 }
 
-// seedProgress creates project acme in the default vault of r with n dated
-// progress entries, one per day from 2026-01-01, each body holding
-// "entry N", and returns the tool under test.
+// seedProgress creates project acme in a fresh test vault with a memory
+// document and n dated progress entries, one per day from 2026-01-01, each
+// body holding "entry N.". It returns a LoadProjectContextTool bound to that
+// vault and a background context, and fails the test if any write fails.
 func seedProgress(t *testing.T, n int) (*LoadProjectContextTool, context.Context) {
 	t.Helper()
 	r, mgr := newToolTestEnv(t)
@@ -424,8 +425,8 @@ func TestLoadProjectContextTool_SummaryWithoutOmissionHasNoFooter(t *testing.T) 
 }
 
 // TestLoadProjectContextTool_FullModeLoadsEverything verifies that full
-// mode loads every entry without a footer, in the format the tool produced
-// before summary mode existed.
+// mode loads every entry without a footer, as a header followed by one
+// section per kind separated by "---".
 func TestLoadProjectContextTool_FullModeLoadsEverything(t *testing.T) {
 	tool, ctx := seedProgress(t, 3)
 	text := runLoadContext(t, tool, ctx, map[string]any{"project": "acme", "mode": "full"})
@@ -584,5 +585,24 @@ func TestLoadProjectContextTool_NamesUnknownFiles(t *testing.T) {
 	text := runTool(t, tool, map[string]any{"project": "acme", "files": []string{"memory", "decision"}}).Text
 	if !strings.Contains(text, "## memory") || !strings.Contains(text, "[no file named: decision]") {
 		t.Errorf("a misspelled file next to an existing one: %q", text)
+	}
+}
+
+// TestLoadProjectContextTool_UnknownFilesNoteKeepsToMaxBytes checks that,
+// with the smallest max_bytes, many long unknown file names are counted
+// instead of named, so the response, notes included, stays within
+// max_bytes.
+func TestLoadProjectContextTool_UnknownFilesNoteKeepsToMaxBytes(t *testing.T) {
+	r, mgr := newToolTestEnv(t)
+	runTool(t, &CreateProjectTool{Resolver: r, Stores: mgr}, map[string]any{"project": "acme"})
+	runTool(t, &WriteMemoryTool{Resolver: r, Stores: mgr}, map[string]any{"project": "acme", "filename": "memory", "content": strings.Repeat("line of memory content\n", 200)})
+	tool := &LoadProjectContextTool{Resolver: r, Stores: mgr}
+	files := []string{"memory"}
+	for i := range 10 {
+		files = append(files, strings.Repeat("x", 120)+fmt.Sprint(i))
+	}
+	text := runTool(t, tool, map[string]any{"project": "acme", "files": files, "max_bytes": minContextBytes}).Text
+	if len(text) > minContextBytes || !strings.Contains(text, "[10 requested files not found]") || !strings.Contains(text, "[context truncated") {
+		t.Fatalf("response of %d bytes (max %d):\n%s", len(text), minContextBytes, text)
 	}
 }

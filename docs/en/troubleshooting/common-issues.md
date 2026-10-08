@@ -166,6 +166,14 @@ sync82 config set-vault /a/writable/path/vault.db
 
 **Solution:** quit and reopen your MCP clients (or end the `sync82.exe` processes), then run `sync82 self-update` again. Leftover `sync82.exe.bak.old-*` files are removed by the next update once nothing runs them.
 
+### `self-update` says the signature verification failed
+
+**Symptom:** `sync82 self-update` stops with `Signature verification failed — aborting, nothing was changed:` followed by cosign's output.
+
+**Cause:** `cosign` (v3 or later) is installed, so `self-update` checks that the release's `checksums.txt` was signed by this repository's release workflow for exactly the new tag, and the check failed. cosign's output says why: a certificate for another identity or tag (`no matching CertificateIdentity found`), a `checksums.txt` that doesn't match its signature (`invalid signature`), or a network error while cosign fetches Sigstore's trusted root (it needs `tuf-repo-cdn.sigstore.dev` the first time, then caches it in `~/.sigstore`).
+
+**Solution:** for a network error, run `sync82 self-update` again once the network is back. For any other failure, don't install that release by hand: report it (see [Reporting a New Bug](#-reporting-a-new-bug)) with cosign's output. Nothing was changed, so the current binary keeps working. To update without cosign's check, take cosign off `PATH`: `self-update` then warns and relies on the checksum, unless you pass `--require-signature`.
+
 ---
 
 ## 🔄 Project and Vault Confusion

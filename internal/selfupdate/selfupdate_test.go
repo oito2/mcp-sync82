@@ -35,6 +35,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/oito2/mcp-sync82/internal/fsutil"
 )
 
 // TestParseVersion checks parsing of plain, prefixed, pre-release, build
@@ -199,7 +201,7 @@ func TestReplaceWithBackup_KeepsPreviousBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := replaceWithBackup(currentPath, newPath); err != nil {
+	if err := replaceWithBackup(currentPath, newPath, fsutil.Rename); err != nil {
 		t.Fatalf("replaceWithBackup: %v", err)
 	}
 	if data, _ := os.ReadFile(currentPath); string(data) != "new" {
@@ -219,7 +221,7 @@ func TestReplaceWithBackup_RestoresOnFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := replaceWithBackup(currentPath, filepath.Join(dir, "missing")); err == nil {
+	if err := replaceWithBackup(currentPath, filepath.Join(dir, "missing"), fsutil.Rename); err == nil {
 		t.Fatal("expected an error when the new binary doesn't exist")
 	}
 	if data, err := os.ReadFile(currentPath); err != nil || string(data) != "old" {
@@ -405,7 +407,7 @@ func TestRunSelfUpdate_AlreadyUpToDate(t *testing.T) {
 }
 
 // TestRunSelfUpdate_CheckOnly_ReportsWithoutDownloading checks that --check
-// reports an available update, exits with code 0 and downloads nothing.
+// reports an available update, exits with ExitUpdateAvailable and downloads nothing.
 func TestRunSelfUpdate_CheckOnly_ReportsWithoutDownloading(t *testing.T) {
 	assetName := "sync82_linux_amd64"
 	srv := fakeReleaseServer(t, "v2.0.0", []byte("should not be downloaded"), assetName, "irrelevant")
@@ -423,8 +425,8 @@ func TestRunSelfUpdate_CheckOnly_ReportsWithoutDownloading(t *testing.T) {
 	}
 	var stdout, stderr bytes.Buffer
 	code := RunSelfUpdate(context.Background(), []string{"--check"}, deps, strings.NewReader(""), &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr=%s", code, stderr.String())
+	if code != ExitUpdateAvailable {
+		t.Fatalf("exit code = %d, want %d; stderr=%s", code, ExitUpdateAvailable, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "Update available: v1.0.0 → v2.0.0") {
 		t.Errorf("stdout = %q, want it to report the available update", stdout.String())
@@ -1005,7 +1007,7 @@ func TestReplaceWithBackup_BackupStillRunning(t *testing.T) {
 	}
 	t.Cleanup(stop)
 
-	if err := replaceWithBackup(currentPath, newPath); err != nil {
+	if err := replaceWithBackup(currentPath, newPath, fsutil.Rename); err != nil {
 		t.Fatalf("replaceWithBackup with a running backup: %v", err)
 	}
 	if got, _ := os.ReadFile(currentPath); string(got) != "new" {

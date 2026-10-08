@@ -192,6 +192,11 @@
         "description": "Must be true to confirm permanent deletion. Ask the user before setting this.",
         "type": "boolean"
       },
+      "expected_subprojects": {
+        "description": "Required with subproject_action \"delete_all\": the number of subprojects shown to the user. Nothing is deleted when the project has another number.",
+        "minimum": 0,
+        "type": "integer"
+      },
       "path": {
         "description": "Base path where the memory is stored. If left blank, uses the default vault path. A leading \"~\", \"HOME\" or \"$HOME\" (e.g. \"~/vaults/work.db\", \"HOME/custom-vault\") is expanded to the user's home directory.",
         "type": "string"
@@ -543,6 +548,10 @@
   },
   "read_memory": {
     "properties": {
+      "archived": {
+        "description": "Read only the archived entries of an append-only kind instead of the active ones. An overwrite-style file has no archived entries and is refused.",
+        "type": "boolean"
+      },
       "filename": {
         "description": "The file/kind to read (e.g. \"memory\", \"progress\", or a custom name).",
         "type": "string"

@@ -336,8 +336,8 @@ func TestInitProjectMemoryTool_NoProjectResolvable(t *testing.T) {
 	}
 }
 
-// TestInitProjectMemoryTool_PicksUpSubprojectFromLocalConfigEvenWithExplicitPr
-// oject verifies that project and subproject are resolved independently: an
+// TestInitProjectMemoryTool_PicksUpSubprojectFromLocalConfigEvenWithExplicitProject
+// verifies that project and subproject are resolved independently: an
 // explicit project without a subproject takes the subproject from
 // .sync82.json, unlike the all-or-nothing tiers of Resolver.Resolve.
 func TestInitProjectMemoryTool_PicksUpSubprojectFromLocalConfigEvenWithExplicitProject(t *testing.T) {

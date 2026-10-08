@@ -32,11 +32,12 @@ import (
 // of the two versions in place.
 //
 // path is the destination file, data its full new content, and perm the mode
-// for a newly created file. A path that is a symlink is written through to its target, keeping the
-// link; a dangling symlink, whose target doesn't exist, is replaced by a
-// regular file instead. An existing file keeps its permission bits; perm only applies to a
-// newly created file, and is applied exactly (not masked by the umask).
-// Missing parent directories are created private to the user (0700).
+// for a newly created file. A path that is a symlink is written through to
+// its target, keeping the link; a dangling symlink, whose target doesn't
+// exist, is replaced by a regular file instead. An existing file keeps its
+// permission bits; perm only applies to a newly created file, and is
+// applied exactly (not masked by the umask). Missing parent directories are
+// created private to the user (0700).
 //
 // It returns an error when the path cannot be resolved, the directory or
 // temporary file cannot be created, or writing, syncing, closing, chmod or
@@ -80,8 +81,9 @@ func AtomicReplaceFile(path string, data []byte, perm os.FileMode) error {
 // writeAndRename writes data to a temporary file in path's directory,
 // creating missing directories private to the user (0700), syncs it, sets
 // perm on it and renames it onto path with renameFile, which replaces
-// whatever entry path names (a symlink itself, not its target). It then syncs the directory,
-// ignoring a failure. The temporary file is removed on every failure.
+// whatever entry path names (a symlink itself, not its target). It then
+// syncs the directory, ignoring a failure. The temporary file is removed on
+// every failure. It returns an error naming the step that failed.
 func writeAndRename(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {

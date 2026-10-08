@@ -167,6 +167,9 @@ func serverIcons() []mcp.Icon {
 // tool error result lets the calling agent read the message and correct
 // its call.
 //
+// After a successful call of a tool that changes projects, unless its
+// result says projects were left unchanged, onProjectsChanged is called.
+//
 // A tool with an output schema must return structured content with every
 // successful result, and clients reject one without it. Its results that
 // carry none, such as the request to name a project, are therefore marked

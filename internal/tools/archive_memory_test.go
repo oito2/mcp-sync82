@@ -241,7 +241,9 @@ func TestArchiveMemoryTool_RejectsUnknownArgument(t *testing.T) {
 }
 
 // seedOldLog creates project acme in the default vault of r with two
-// progress entries a year old and one from today, and returns the store.
+// progress entries dated one year ago (and one day apart) and one dated
+// today. It returns the store and the dates of the two old entries, oldest
+// first. It fails the test if the store or an entry cannot be created.
 func seedOldLog(t *testing.T, r *Resolver, mgr *store.Manager) (*store.Store, string, string) {
 	t.Helper()
 	ctx := context.Background()

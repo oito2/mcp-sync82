@@ -154,10 +154,11 @@ const maxCustomItems = 50
 // content field, and checks each provided field with the rules its write
 // will apply (validateAppendInput for the appended ones, including the
 // date header of progress and decisions; validateWriteInput for the
-// overwritten ones). It returns the arguments, or an error listing every
-// problem: too many custom items, total content over maxContentSize, a
-// custom item naming a standard kind or with an unknown mode, or a field
-// its write would reject — so a bad field never leaves the others
+// overwritten ones). It returns the arguments, or an error: at once when
+// there are too many custom items or the total content exceeds
+// maxContentSize, and otherwise one listing every problem — a custom item
+// naming a standard kind, repeated or with an unknown mode, or a field its
+// write would reject — so a bad field never leaves the others
 // half-written.
 func (t *UpdateProjectMemoryTool) Validate(raw json.RawMessage) (any, error) {
 	var args updateProjectMemoryArgs

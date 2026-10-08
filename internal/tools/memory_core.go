@@ -73,11 +73,10 @@ func validateAppendInput(kind, content string) (string, error) {
 // project and subproject of s, for append_memory; update_project_memory
 // calls planAppend, which this wraps, directly. Entry id marker lines are
 // removed from content (stripEntryMarkers) before it is validated with
-// validateAppendInput;
-// a kind already stored as a document is refused with an error wrapping
-// errAppendToDocumentKind, and a missing project yields the error built
-// by wrapNotFound. For the date-headed kinds the entry's date is taken
-// from its first valid date header.
+// validateAppendInput. A kind already stored as a document is refused with
+// an error wrapping errAppendToDocumentKind, and a missing project yields
+// the error built by wrapNotFound. For the date-headed kinds the entry's
+// date is taken from its first valid date header.
 func appendMemoryCore(ctx context.Context, s *store.Store, project, subproject, kind, content string) error {
 	w, err := planAppend(ctx, s, project, subproject, kind, stripEntryMarkers(content))
 	if err != nil {
@@ -138,9 +137,9 @@ func validateWriteInput(kind, content string) (string, error) {
 // writeMemoryCore replaces the whole content of kind in the given project
 // and subproject of s, for write_memory; update_project_memory calls
 // planWrite, which this wraps, directly. Entry id marker lines are removed
-// from content (stripEntryMarkers) first; see planWrite for how the kind is stored.
-// Invalid input is rejected with validateWriteInput's error, and a missing
-// project yields the error built by wrapNotFound.
+// from content (stripEntryMarkers) first; see planWrite for how the kind is
+// stored. Invalid input is rejected with validateWriteInput's error, and a
+// missing project yields the error built by wrapNotFound.
 func writeMemoryCore(ctx context.Context, s *store.Store, project, subproject, kind, content string) error {
 	w, err := planWrite(ctx, s, project, subproject, kind, stripEntryMarkers(content))
 	if err != nil {
@@ -151,8 +150,8 @@ func writeMemoryCore(ctx context.Context, s *store.Store, project, subproject, k
 
 // planWrite returns the store.KindWrite that replaces the whole content of
 // kind with content, already free of entry id markers. The kind keeps the
-// storage it already has: progress, decisions and any custom kind written
-// by appending stay a log of dated entries (replaced via
+// storage it already has: progress, decisions and any custom kind already
+// stored as entries stay a log of dated entries (replaced via
 // splitByDateHeader), everything else is an overwrite-style document.
 // Invalid input is rejected with validateWriteInput's error, and a missing
 // project yields the error built by wrapNotFound.

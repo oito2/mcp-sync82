@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 )
 
 // UninstallTarget removes sync82's registration from a single target. A
@@ -127,7 +128,7 @@ func uninstallFileTarget(t Target, env Env, stdout, stderr io.Writer) Result {
 // path. A file with comments or trailing commas is left unchanged and the
 // error, a *manualEditError, says what to remove by hand.
 func removeEntry(shape Shape, path string) error {
-	cfg, strict, err := readConfig(path)
+	cfg, strict, raw, err := loadConfig(path)
 	if err != nil {
 		return err
 	}
@@ -141,6 +142,7 @@ func removeEntry(shape Shape, path string) error {
 	if !strict {
 		return &manualEditError{fmt.Sprintf("%s contains comments or trailing commas, so it was left unchanged. Remove the %q entry from its %q object by hand", path, serverName, shape.Key)}
 	}
-	delete(servers, serverName)
-	return writeConfig(path, cfg)
+	return writeServers(path, raw, shape.Key, func(servers []jsonMember) []jsonMember {
+		return slices.DeleteFunc(servers, func(m jsonMember) bool { return m.key == serverName })
+	})
 }

@@ -130,7 +130,7 @@ gh attestation verify sync82_linux_amd64 --repo oito2/mcp-sync82
 
 Passe o arquivo que você baixou (`sync82_darwin_arm64`, `sync82_windows_amd64.exe`, `sync82.mcpb`, ...). Uma verificação bem-sucedida confirma que o arquivo foi gerado pelo GitHub Actions deste repositório.
 
-> O `sync82 self-update` verifica cada download só contra o `checksums.txt` (SHA-256); ele não confere a assinatura nem a atestação.
+> O `sync82 self-update` verifica cada download contra o `checksums.txt` (SHA-256) e, quando o `cosign` v3 ou mais novo está instalado, também verifica esta assinatura para a tag exata da release; `--require-signature` faz ele recusar atualizar sem o cosign. Ele não confere a atestação.
 
 ### Confirme que está acessível
 
@@ -197,7 +197,7 @@ sync82 self-update --check   # reporta se existe uma release mais nova, sem inst
 sync82 self-update           # baixa, verifica e instala a última release
 ```
 
-Os downloads são verificados por checksum contra o `checksums.txt` da release antes de o binário em execução ser substituído; a versão anterior é guardada como `<binário>.bak`, e `sync82 self-update --rollback` a restaura. O `self-update` funciona em um binário de release ou em um compilado com `go install .../sync82@vX.Y.Z`; só um build local a partir de um checkout do código-fonte ou um `go install` de um commit sem tag (versão `dev`) recusa rodar — nesse caso, rode `go install .../sync82@latest` novamente.
+Os downloads são verificados por checksum contra o `checksums.txt` da release, cuja assinatura também é verificada quando o `cosign` v3 ou mais novo está instalado, antes de o binário em execução ser substituído; a versão anterior é guardada como `<binário>.bak`, e `sync82 self-update --rollback` a restaura. O `self-update` funciona em um binário de release ou em um compilado com `go install .../sync82@vX.Y.Z`; só um build local a partir de um checkout do código-fonte ou um `go install` de um commit sem tag (versão `dev`) recusa rodar — nesse caso, rode `go install .../sync82@latest` novamente.
 
 > **Escolha um mecanismo de atualização e mantenha-o** — os dois caminhos não têm consciência um do outro. Veja [Referência da CLI — self-update](../reference/cli.md#self-update) para detalhes.
 

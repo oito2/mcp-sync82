@@ -107,8 +107,8 @@ func (t *RenameProjectTool) Validate(raw json.RawMessage) (any, error) {
 
 // Execute renames the project, or the subproject when one is given, and
 // keeps the global config's last-used project in step. A name collision or a
-// missing vault yields an error result; other failures are returned as
-// errors.
+// missing vault yields an error result; a missing project and other failures
+// are returned as errors.
 func (t *RenameProjectTool) Execute(ctx context.Context, rawArgs any) (ToolResult, error) {
 	args := rawArgs.(renameProjectArgs)
 	dbPath := t.Resolver.DBPathOrDefault(args.Path)
