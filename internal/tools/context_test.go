@@ -53,8 +53,8 @@ func TestResolve_ExplicitProjectWins(t *testing.T) {
 	if ctx.Source != SourceProvided {
 		t.Fatalf("Source = %q, want %q", ctx.Source, SourceProvided)
 	}
-	if ctx.DBPath != r.DefaultDBPath {
-		t.Fatalf("DBPath = %q, want default %q", ctx.DBPath, r.DefaultDBPath)
+	if want := absPath(r.DefaultDBPath); ctx.DBPath != want {
+		t.Fatalf("DBPath = %q, want default %q", ctx.DBPath, want)
 	}
 }
 
@@ -95,7 +95,7 @@ func TestResolve_LocalConfigDiscovery(t *testing.T) {
 	if ctx.Source != SourceLocalConfig {
 		t.Fatalf("Source = %q, want %q", ctx.Source, SourceLocalConfig)
 	}
-	if ctx.DBPath != r.DefaultDBPath {
+	if ctx.DBPath != absPath(r.DefaultDBPath) {
 		t.Fatalf("expected default DBPath when local config has no path override, got %q", ctx.DBPath)
 	}
 }

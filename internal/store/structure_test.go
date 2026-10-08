@@ -168,9 +168,11 @@ func TestDeleteSubproject(t *testing.T) {
 // opens an existing one.
 func TestManager_GetExisting(t *testing.T) {
 	ctx := context.Background()
+	// The directory is created before the Close cleanup is registered, so
+	// the vault is closed before the directory is removed.
+	path := filepath.Join(t.TempDir(), "vault.db")
 	m := NewManager()
 	t.Cleanup(func() { m.Close() })
-	path := filepath.Join(t.TempDir(), "vault.db")
 
 	if _, err := m.GetExisting(ctx, path); !errors.Is(err, ErrVaultNotFound) {
 		t.Fatalf("GetExisting on a missing vault: err = %v, want ErrVaultNotFound", err)

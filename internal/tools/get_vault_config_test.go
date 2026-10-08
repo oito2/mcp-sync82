@@ -152,7 +152,7 @@ func TestGetVaultConfigTool_WorkspaceRootWithLocalConfigPath_ReportsSubprojectsF
 	r, mgr := newToolTestEnv(t)
 	ctx := context.Background()
 
-	customVault := t.TempDir() + "/custom.db"
+	customVault := filepath.Join(t.TempDir(), "custom.db")
 	cs, err := mgr.Get(ctx, customVault)
 	if err != nil {
 		t.Fatal(err)

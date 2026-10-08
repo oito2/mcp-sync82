@@ -164,20 +164,31 @@ func TestDateHeaderMatches_InlineTripleBackticks(t *testing.T) {
 	}
 }
 
-// TestDateHeaderMatches_LinearTime checks that about 2 MB of alternating
-// fences and headers is scanned quickly; a scan that rescans the fences
-// for every header takes tens of seconds on it.
+// TestDateHeaderMatches_LinearTime checks that the scan time of alternating
+// fences and headers grows linearly with their size: content four times
+// longer must take less than ten times as long (a scan that rescans the
+// fences for every header takes about sixteen times as long). Each size
+// keeps its fastest of three runs, so a busy machine doesn't skew the ratio.
 func TestDateHeaderMatches_LinearTime(t *testing.T) {
-	var b strings.Builder
-	for b.Len() < 2<<20 {
-		b.WriteString("```\nx\n```\n## 2026-01-01\n- y\n")
+	fastest := func(size int) time.Duration {
+		var b strings.Builder
+		for b.Len() < size {
+			b.WriteString("```\nx\n```\n## 2026-01-01\n- y\n")
+		}
+		content := b.String()
+		best := time.Duration(1<<63 - 1)
+		for range 3 {
+			start := time.Now()
+			if n := len(dateHeaderMatches(content)); n == 0 {
+				t.Fatal("no header found")
+			}
+			best = min(best, time.Since(start))
+		}
+		return best
 	}
-	start := time.Now()
-	if n := len(dateHeaderMatches(b.String())); n == 0 {
-		t.Fatal("no header found")
-	}
-	if elapsed := time.Since(start); elapsed > 3*time.Second {
-		t.Errorf("scanning 2 MB took %s", elapsed)
+	small, large := fastest(256<<10), fastest(1<<20)
+	if large > 10*small {
+		t.Errorf("scanning 1 MB took %s, %.1f times the %s of 256 KB; want under 10", large, float64(large)/float64(small), small)
 	}
 }
 

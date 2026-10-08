@@ -20,6 +20,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -73,7 +74,9 @@ func compareGolden(t *testing.T, name string, v any) {
 	if err != nil {
 		t.Fatalf("read golden file (run with -update to create it): %v", err)
 	}
-	if string(got) != string(want) {
+	// A checkout that converts line endings to CRLF doesn't change the
+	// schemas, so the comparison ignores them.
+	if string(got) != strings.ReplaceAll(string(want), "\r\n", "\n") {
 		t.Errorf("schemas differ from %s; run go test ./internal/tools -run Schemas_MatchGolden -update and review the diff", path)
 	}
 }
