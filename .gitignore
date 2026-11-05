@@ -24,6 +24,7 @@ coverage.html
 /.dev/
 /.claude/settings.local.json
 /.luminavault.json
+/.sync82.json
 /.aiexclude
 /.claudeignore
 /AGENTS.md
