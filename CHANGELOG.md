@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `sync82 install claude` and `uninstall claude` no longer take a failed `claude mcp get` (a broken config file, a timeout) for "not registered". Only `No MCP server named` means that; any other failure fails the target with Claude Code's output. Before, `uninstall` could report `not configured` while sync82 was still registered.
 
+### Security
+
+- Releases are signed and published only after a maintainer approves the run: the release workflow's `sign-publish` job runs in a protected `release` environment.
+- New [security policy](SECURITY.md): vulnerabilities are reported privately through GitHub's private vulnerability reporting.
+
 ## [1.3.0] - 2026-10-08
 
 ### Added

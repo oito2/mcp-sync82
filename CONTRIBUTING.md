@@ -77,12 +77,14 @@ git tag v1.2.3
 git push origin v1.2.3
 ```
 
+Two repository settings guard this step. A tag ruleset lets only repository admins create `v*` tags and blocks moving or deleting them. The `sign-publish` job runs in the `release` environment, which requires a maintainer's approval: the workflow pauses after `build` until the run is approved under **Actions → the run → Review deployments**, so a pushed tag alone never publishes a signed release.
+
 | Job | What it does |
 |---|---|
 | `validate` | Rejects a tag that isn't exactly `vMAJOR.MINOR.PATCH`. |
 | `checks` | Runs the CI checks on the tagged commit, on Linux, macOS and Windows (gofmt, golangci-lint and govulncheck on Linux only): vet, build, `go test -race`. |
 | `build` | Read-only. Runs `go run ./scripts/release <tag>`, checks that `sync82_linux_amd64 --version` prints the tag, runs the self-update contract test (`TestReleaseContract`) on `dist/`, validates `server.json` with `mcp-publisher validate`, and uploads `dist/` as a workflow artifact. |
-| `sign-publish` | The only job with `contents: write`, `id-token: write` and `attestations: write`; it checks out and runs no repository code. Downloads `dist/` (the download fails on a digest mismatch), checks every asset with `sha256sum --check checksums.txt`, signs `checksums.txt` with `cosign sign-blob` (keyless) into `checksums.txt.sigstore.json`, verifies that signature with `cosign verify-blob` for the exact workflow identity and tag, as `sync82 self-update` does, records build provenance attestations for `dist/sync82_*` and `dist/sync82.mcpb`, and creates the GitHub release with every file in `dist/`. |
+| `sign-publish` | Waits for approval in the `release` environment. The only job with `contents: write`, `id-token: write` and `attestations: write`; it checks out and runs no repository code. Downloads `dist/` (the download fails on a digest mismatch), checks every asset with `sha256sum --check checksums.txt`, signs `checksums.txt` with `cosign sign-blob` (keyless) into `checksums.txt.sigstore.json`, verifies that signature with `cosign verify-blob` for the exact workflow identity and tag, as `sync82 self-update` does, records build provenance attestations for `dist/sync82_*` and `dist/sync82.mcpb`, and creates the GitHub release with every file in `dist/`. |
 | `publish-registry` | Downloads `server.json` from the release, logs in to the MCP Registry with GitHub OIDC and publishes it. |
 
 Building and signing are separate jobs so that the code the build runs (the repository, its dependencies and `mcp-publisher`) never holds the permissions that sign, attest or publish. A run that fails before `sign-publish` publishes nothing and can be re-run; a failed `sign-publish` can be re-run on its own for 7 days, while the build artifact exists, and with "Re-run all jobs" after that. `publish-registry` is a separate job so it can be re-run on its own (e.g. after a registry outage) without re-creating the release.
@@ -104,6 +106,8 @@ Open a [GitHub issue](https://github.com/oito2/mcp-sync82/issues) with:
 
 - For bugs: what you ran (`sync82` subcommand or MCP tool call), what you expected, what happened instead, and your `sync82 version` output.
 - For features: the problem you're trying to solve, not just the solution you have in mind — see [Before you start](#before-you-start).
+
+Security vulnerabilities are reported privately, never in an issue — see the [Security Policy](SECURITY.md).
 
 ## License
 

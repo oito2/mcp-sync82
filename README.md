@@ -205,7 +205,7 @@ The [documentation site](docs/en/index.md) has the full detail (also in [Portugu
 - [Example Prompts](docs/en/prompts.md) · [Usage Examples](docs/en/guides/workflows/examples.md)
 - [Troubleshooting](docs/en/troubleshooting/common-issues.md) · [Changelog](CHANGELOG.md)
 
-**Contributing:** see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development workflow, the checks CI runs (`go build ./...`, `go vet ./...`, `gofmt -l .`, golangci-lint, `go test ./... -race`, `govulncheck`), and how releases are published. Everyone participating is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+**Contributing:** see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development workflow, the checks CI runs (`go build ./...`, `go vet ./...`, `gofmt -l .`, golangci-lint, `go test ./... -race`, `govulncheck`), and how releases are published. Everyone participating is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md). To report a vulnerability, see the [Security Policy](SECURITY.md).
 
 ## AI Usage in This Project
 

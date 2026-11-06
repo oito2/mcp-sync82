@@ -205,7 +205,7 @@ O [site de documentação](index.md) tem todos os detalhes (também em [inglês]
 - [Prompts de Exemplo](prompts.md) · [Exemplos de Uso](guides/workflows/examples.md)
 - [Solução de Problemas](troubleshooting/common-issues.md) · [Changelog](../../CHANGELOG.md) (em inglês)
 
-**Contribuindo:** veja [`contribuindo.md`](contribuindo.md) para o fluxo de desenvolvimento, as checagens que a CI roda (`go build ./...`, `go vet ./...`, `gofmt -l .`, golangci-lint, `go test ./... -race`, `govulncheck`) e como as releases são publicadas. Espera-se que todo participante siga o [Código de Conduta](codigo-de-conduta.md).
+**Contribuindo:** veja [`contribuindo.md`](contribuindo.md) para o fluxo de desenvolvimento, as checagens que a CI roda (`go build ./...`, `go vet ./...`, `gofmt -l .`, golangci-lint, `go test ./... -race`, `govulncheck`) e como as releases são publicadas. Espera-se que todo participante siga o [Código de Conduta](codigo-de-conduta.md). Para reportar uma vulnerabilidade, veja a [Política de Segurança](seguranca.md).
 
 ## Uso de IA no Projeto
 

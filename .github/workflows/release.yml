@@ -167,6 +167,9 @@ jobs:
   # commands below.
   sign-publish:
     needs: build
+    # Waits for a maintainer's approval (the environment's required
+    # reviewers) before anything is signed or published.
+    environment: release
     runs-on: ubuntu-latest
     permissions:
       contents: write # only this job publishes the release
