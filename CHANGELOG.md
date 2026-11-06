@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The embedded SQLite is now 3.54.1 (`modernc.org/sqlite` v1.61.1), up from 3.53.4.
+
+### Fixed
+
+- `sync82 install claude` and `uninstall claude` no longer take a failed `claude mcp get` (a broken config file, a timeout) for "not registered". Only `No MCP server named` means that; any other failure fails the target with Claude Code's output. Before, `uninstall` could report `not configured` while sync82 was still registered.
+
 ## [1.3.0] - 2026-10-08
 
 ### Added
