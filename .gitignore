@@ -22,7 +22,7 @@ coverage.html
 
 # Local, personal and agent files (not part of the published project)
 /.dev/
-/.claude/settings.local.json
+/.claude/
 /.luminavault.json
 /.sync82.json
 /.aiexclude
