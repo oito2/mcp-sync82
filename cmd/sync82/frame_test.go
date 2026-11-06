@@ -86,7 +86,8 @@ func TestMaxFrameBytes_Boundary(t *testing.T) {
 		t.Fatalf("a frame over maxFrameBytes was answered: %v", msg)
 	}
 	select {
-	case <-done:
+	case err := <-done:
+		t.Logf("session ended: %v", err)
 	case <-time.After(10 * time.Second):
 		t.Fatal("the session did not end after an oversize frame")
 	}

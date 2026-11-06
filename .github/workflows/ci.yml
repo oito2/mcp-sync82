@@ -16,9 +16,9 @@ permissions:
 # them, and release.yml pins the same ones.
 env:
   # golangci-lint release the lint step runs.
-  GOLANGCI_LINT_VERSION: v2.14.0
+  GOLANGCI_LINT_VERSION: v2.15.0
   # govulncheck release the vulnerability check runs.
-  GOVULNCHECK_VERSION: v1.8.0
+  GOVULNCHECK_VERSION: v1.9.0
 
 jobs:
   test:

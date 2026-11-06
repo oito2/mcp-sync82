@@ -25,9 +25,9 @@ permissions:
 # CONTRIBUTING's release checklist lists them.
 env:
   # golangci-lint release the checks job runs.
-  GOLANGCI_LINT_VERSION: v2.14.0
+  GOLANGCI_LINT_VERSION: v2.15.0
   # govulncheck release the checks job runs.
-  GOVULNCHECK_VERSION: v1.8.0
+  GOVULNCHECK_VERSION: v1.9.0
 
 jobs:
   # GITHUB_REF_NAME becomes part of a shell string (-ldflags), so its format
@@ -188,7 +188,7 @@ jobs:
 
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
-          cosign-release: "v3.0.6" # pinned so an installer update cannot change the signing flags
+          cosign-release: "v3.1.4" # pinned so an installer update cannot change the signing flags
 
       # Signs checksums.txt, which covers every binary and the bundle, into
       # a single Sigstore bundle. Verify with:
