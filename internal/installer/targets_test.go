@@ -31,18 +31,19 @@ import (
 // TestTargetNames verifies the names and order of the built-in targets.
 func TestTargetNames(t *testing.T) {
 	want := []string{"claude", "claude-desktop", "antigravity", "codex", "opencode", "cursor", "zed", "cline"}
-	if got := TargetNames(); !slices.Equal(got, want) {
-		t.Fatalf("TargetNames() = %v, want %v", got, want)
+	if got := TargetNamesIn(Targets); !slices.Equal(got, want) {
+		t.Fatalf("TargetNamesIn(Targets) = %v, want %v", got, want)
 	}
 }
 
-// TestFind verifies that Find returns known targets and rejects unknown names.
+// TestFind verifies that FindIn returns known built-in targets and rejects
+// unknown names.
 func TestFind(t *testing.T) {
-	if _, ok := Find("claude"); !ok {
+	if _, ok := FindIn(Targets, "claude"); !ok {
 		t.Fatal("expected to find target \"claude\"")
 	}
 	for _, name := range []string{"nonexistent", "windsurf", "antigravity-ide", "antigravity-global"} {
-		if _, ok := Find(name); ok {
+		if _, ok := FindIn(Targets, name); ok {
 			t.Errorf("target %q should not exist", name)
 		}
 	}
@@ -57,7 +58,7 @@ var absRoot = filepath.VolumeName(os.TempDir()) + string(filepath.Separator)
 // not exist.
 func mustFind(t *testing.T, name string) Target {
 	t.Helper()
-	target, ok := Find(name)
+	target, ok := FindIn(Targets, name)
 	if !ok {
 		t.Fatalf("target %q not found", name)
 	}

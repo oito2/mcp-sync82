@@ -243,8 +243,8 @@ func TestDeleteProject_CascadesToSubprojectsAndData(t *testing.T) {
 		t.Fatalf("AppendEntry: %v", err)
 	}
 
-	if err := s.DeleteProject(ctx, "oito2"); err != nil {
-		t.Fatalf("DeleteProject: %v", err)
+	if err := s.DeleteProjectExpecting(ctx, "oito2", 1); err != nil {
+		t.Fatalf("DeleteProjectExpecting: %v", err)
 	}
 
 	// Without foreign_keys enabled on the connection, ON DELETE CASCADE would

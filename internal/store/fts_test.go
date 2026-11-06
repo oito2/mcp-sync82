@@ -341,7 +341,7 @@ func TestFTSIndex_FollowsEveryWrite(t *testing.T) {
 	if found("bravo") != 1 {
 		t.Errorf("rename lost the index")
 	}
-	step("DeleteProject", s.DeleteProject(ctx, "acme"))
+	step("DeleteProjectExpecting", s.DeleteProjectExpecting(ctx, "acme", 0))
 	results, _, err := s.SearchText(ctx, SearchOptions{Query: "bravo hotel", Limit: 10})
 	if err != nil || len(results) != 0 {
 		t.Errorf("deleted project still found: %v, %v", lines(results), err)

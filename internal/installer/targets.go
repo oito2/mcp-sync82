@@ -547,11 +547,6 @@ var Targets = []Target{
 	},
 }
 
-// TargetNames returns the names of every install target, in Targets order.
-func TargetNames() []string {
-	return TargetNamesIn(Targets)
-}
-
 // TargetNamesIn returns the names of every target in targets, in order.
 func TargetNamesIn(targets []Target) []string {
 	names := make([]string, len(targets))
@@ -559,11 +554,6 @@ func TargetNamesIn(targets []Target) []string {
 		names[i] = t.Name
 	}
 	return names
-}
-
-// Find returns the target named name in Targets, if any.
-func Find(name string) (Target, bool) {
-	return FindIn(Targets, name)
 }
 
 // FindIn returns the target named name in targets, if any.

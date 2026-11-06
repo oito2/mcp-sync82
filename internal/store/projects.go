@@ -347,29 +347,10 @@ func (s *Store) promoteSubprojects(ctx context.Context, parentName string, delet
 	return names, nil
 }
 
-// DeleteProject deletes a top-level project by name, cascading to its
-// subprojects, documents and entries via ON DELETE CASCADE. It returns an
-// error wrapping ErrNotFound when no such project exists, or a database
-// error.
-func (s *Store) DeleteProject(ctx context.Context, name string) error {
-	name = normalizeName(name)
-	res, err := s.db.ExecContext(ctx, `DELETE FROM projects WHERE parent_id IS NULL AND name = ?`, name)
-	if err != nil {
-		return fmt.Errorf("delete project %q: %w", name, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("delete project %q: %w", name, err)
-	}
-	if n == 0 {
-		return fmt.Errorf("project not found: %q: %w", name, ErrNotFound)
-	}
-	return nil
-}
-
-// DeleteProjectExpecting deletes the top-level project name as DeleteProject
-// does, in one transaction that first checks that it has exactly expected
-// subprojects. It returns an error wrapping ErrNotFound when no such project
+// DeleteProjectExpecting deletes the top-level project name, cascading to
+// its subprojects, documents and entries via ON DELETE CASCADE, in one
+// transaction that first checks that it has exactly expected subprojects.
+// It returns an error wrapping ErrNotFound when no such project
 // exists, an error wrapping ErrSubprojectCount, with nothing deleted, when
 // the count differs, or a database error.
 func (s *Store) DeleteProjectExpecting(ctx context.Context, name string, expected int) error {

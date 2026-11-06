@@ -116,13 +116,16 @@ func TestClaudeScope_ParsesGetOutput(t *testing.T) {
 // highest precedence (local, then project, then user) and fails when there
 // is none; "add" refuses a scope already holding sync82; "remove" refuses
 // a scope without it. A file named "unknown" makes "get" report a scope
-// with no known name; a file named "sticky" makes "remove" succeed
-// without removing anything. Every argument list is appended to calls.log.
+// with no known name; a file named "broken" makes "get" fail with output
+// other than "No MCP server named"; a file named "sticky" makes "remove"
+// succeed without removing anything. Every argument list is appended to
+// calls.log.
 const fakeClaudeScript = `#!/bin/sh
 d="$(dirname "$0")"
 echo "$*" >> "$d/calls.log"
 case "$2" in
 get)
+  if [ -f "$d/broken" ]; then echo 'Error: ~/.claude.json is not valid JSON' >&2; exit 1; fi
   if [ -f "$d/unknown" ]; then printf 'sync82:\n  Scope: Enterprise config\n'; exit 0; fi
   for s in local project user; do
     if [ -f "$d/scope-$s" ]; then
@@ -384,6 +387,20 @@ func TestClaude_UninstallNotConfigured(t *testing.T) {
 	target, _ := fakeClaude(t, nil)
 	if got, out, _ := uninstall(t, target, testEnv("linux", t.TempDir(), nil)); got != ResultSkip || !strings.Contains(out, "claude — not configured, skipping") {
 		t.Fatalf("uninstall = %q, stdout %q; want not configured", got, out)
+	}
+}
+
+// TestClaude_UninstallBrokenGetFails verifies that uninstall fails, instead
+// of reporting sync82 as not configured, when "mcp get" fails with output
+// other than "No MCP server named".
+func TestClaude_UninstallBrokenGetFails(t *testing.T) {
+	target, dir := fakeClaude(t, []string{scopeUser}, "broken")
+	got, out, errOut := uninstall(t, target, testEnv("linux", t.TempDir(), nil))
+	if got != ResultFail || !strings.Contains(errOut, "not valid JSON") {
+		t.Fatalf("uninstall = %q, stdout %q, stderr %q; want a failure with the get output", got, out, errOut)
+	}
+	if left := claudeScopesLeft(t, dir); !slices.Equal(left, []string{scopeUser}) {
+		t.Errorf("scopes left = %v, want [user]", left)
 	}
 }
 

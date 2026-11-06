@@ -113,13 +113,13 @@ func notRegisteredOutput(out []byte) bool {
 // registrations deliberately left in place. A target without GetArgs or
 // RemoveArgs has nothing to remove.
 //
-// A target without Scope is queried once with GetArgs and, when sync82 is
-// registered, cleaned with RemoveArgs(""); a failed query counts as "not
-// registered" only when its output says so (notRegisteredOutput), and is
-// an error otherwise. A target with Scope is queried
+// A failed GetArgs query counts as "not registered" only when its output
+// says so (notRegisteredOutput), and is an error otherwise. A target
+// without Scope is queried once with GetArgs and, when sync82 is
+// registered, cleaned with RemoveArgs(""). A target with Scope is queried
 // again after each removal, since its GetArgs reports only the
 // registration that takes precedence: the reported scope is removed until
-// GetArgs fails. A scope that cannot be determined, or that is reported
+// GetArgs reports none. A scope that cannot be determined, or that is reported
 // again after its removal, is an error. A project-scope registration is
 // never removed: it adds a warning, and the user scope (hidden behind it)
 // is then removed directly, treating "No MCP server named" output as
@@ -144,7 +144,10 @@ func removeCLIRegistration(ctx context.Context, t Target) (removed bool, warning
 	for {
 		out, err := runCombined(ctx, t.Command, t.GetArgs)
 		if err != nil {
-			return removed, warnings, nil
+			if notRegisteredOutput(out) {
+				return removed, warnings, nil
+			}
+			return removed, warnings, cliError(t.Command, t.GetArgs, out, err)
 		}
 		scope := t.Scope(out)
 		switch {

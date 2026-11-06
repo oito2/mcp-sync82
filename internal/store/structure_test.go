@@ -45,7 +45,7 @@ func TestWrites_RacingAProjectDeleteFailCleanly(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 40; i++ {
-			_ = s.DeleteProject(ctx, "acme")
+			_ = s.DeleteProjectExpecting(ctx, "acme", 0)
 			_, _, _ = s.EnsureProject(ctx, "acme", "")
 		}
 	}()
@@ -365,7 +365,7 @@ func TestCreateProject_MissingParentIsErrNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteProject(ctx, "gone"); err != nil {
+	if err := s.DeleteProjectExpecting(ctx, "gone", 0); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.CreateProject(ctx, "api", &parent.ID); !errors.Is(err, ErrNotFound) {
@@ -387,7 +387,10 @@ func TestProjectWrites_RacingADeleteFailCleanly(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < 50; i++ {
 			_, _, _ = s.EnsureProject(ctx, "acme", "api")
-			_ = s.DeleteProject(ctx, "acme")
+			// The other goroutine may have deleted "api" in between.
+			if err := s.DeleteProjectExpecting(ctx, "acme", 1); errors.Is(err, ErrSubprojectCount) {
+				_ = s.DeleteProjectExpecting(ctx, "acme", 0)
+			}
 		}
 	}()
 	go func() {

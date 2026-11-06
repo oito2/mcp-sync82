@@ -89,7 +89,7 @@ func TestMigrate_V4KeepsDataAndStopsReusingIds(t *testing.T) {
 	}
 
 	// Foreign keys are enforced again: deleting the project removes its rows.
-	if err := s.DeleteProject(ctx, "acme"); err != nil {
+	if err := s.DeleteProjectExpecting(ctx, "acme", 1); err != nil {
 		t.Fatal(err)
 	}
 	var left int
