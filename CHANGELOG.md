@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-11-06
+
 ### Changed
 
 - The embedded SQLite is now 3.54.1 (`modernc.org/sqlite` v1.61.1), up from 3.53.4.
@@ -195,7 +197,8 @@ First public release.
 - `sync82 install` for Claude Code, Claude Desktop, Antigravity, Codex, OpenCode, Cursor, Zed and Cline.
 - Release binaries for Linux, macOS and Windows (amd64/arm64), a Claude Desktop extension (`sync82.mcpb`) and an MCP Registry entry (`io.github.oito2/mcp-sync82`), with SHA-256 checksums, a Sigstore signature and GitHub build provenance attestations.
 
-[Unreleased]: https://github.com/oito2/mcp-sync82/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/oito2/mcp-sync82/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/oito2/mcp-sync82/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/oito2/mcp-sync82/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/oito2/mcp-sync82/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/oito2/mcp-sync82/compare/v1.1.0...v1.1.1
