@@ -1,7 +1,10 @@
 # sync82
 
 <p align="center">
-  <img src="../img/github-header.png" alt="sync82 por OITO2 Labs — Persistent and shared memory among AI agents" width="100%">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../img/github-header-dark.svg">
+    <img src="../img/github-header-light.svg" alt="sync82 por OITO2 Labs — Persistent and shared project memory among AI agents" width="100%">
+  </picture>
 </p>
 
 [![CI](https://github.com/oito2/mcp-sync82/actions/workflows/ci.yml/badge.svg)](https://github.com/oito2/mcp-sync82/actions/workflows/ci.yml)

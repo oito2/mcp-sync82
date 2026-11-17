@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- New sync82 icon, a sync pictogram on the OITO2 Labs base. MCP clients show it from `serverInfo`, and it is the icon of the `.mcpb` bundle and of the MCP Registry entry. At 16 and 32 px the icon now keeps its background and has thicker strokes.
+
 ## [1.3.1] - 2026-11-06
 
 ### Changed
