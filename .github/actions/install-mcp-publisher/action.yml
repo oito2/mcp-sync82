@@ -11,8 +11,8 @@ runs:
       env:
         # mcp-publisher release used to validate and publish server.json, and
         # the SHA-256 of its mcp-publisher_linux_amd64.tar.gz asset.
-        MCP_PUBLISHER_VERSION: v1.8.9
-        MCP_PUBLISHER_SHA256: 4d527ca8f1ced0394c962dc925c2a4a4addef441cbefd62501c875e9481823a8
+        MCP_PUBLISHER_VERSION: v1.8.16
+        MCP_PUBLISHER_SHA256: 6e2f799550cf843c6fd3350498d56cc49be3dc0af1e6237eb0e6435c7a9d5c05
       run: |
         set -euo pipefail
         curl -fsSL -o "$RUNNER_TEMP/mcp-publisher.tar.gz" \

@@ -27,7 +27,7 @@ env:
   # golangci-lint release the checks job runs.
   GOLANGCI_LINT_VERSION: v2.15.0
   # govulncheck release the checks job runs.
-  GOVULNCHECK_VERSION: v1.9.0
+  GOVULNCHECK_VERSION: v1.10.0
 
 jobs:
   # GITHUB_REF_NAME becomes part of a shell string (-ldflags), so its format
@@ -191,7 +191,7 @@ jobs:
 
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
         with:
-          cosign-release: "v3.1.4" # pinned so an installer update cannot change the signing flags
+          cosign-release: "v3.1.5" # pinned so an installer update cannot change the signing flags
 
       # Signs checksums.txt, which covers every binary and the bundle, into
       # a single Sigstore bundle. Verify with:
