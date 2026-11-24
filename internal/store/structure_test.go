@@ -190,21 +190,6 @@ func TestManager_GetExisting(t *testing.T) {
 	}
 }
 
-// TestEscapeLike checks that LIKE metacharacters and the escape character
-// are escaped.
-func TestEscapeLike(t *testing.T) {
-	for in, want := range map[string]string{
-		`100%`:      `100\%`,
-		`a_b`:       `a\_b`,
-		`back\path`: `back\\path`,
-		`plain`:     `plain`,
-	} {
-		if got := escapeLike(in); got != want {
-			t.Errorf("escapeLike(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 // TestFTSQuery checks the FTS5 expressions built for words and phrase
 // queries: folded, quoted terms with a trailing * kept as a prefix.
 func TestFTSQuery(t *testing.T) {

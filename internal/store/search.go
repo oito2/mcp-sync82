@@ -28,8 +28,8 @@ import (
 )
 
 // lowerFunc is the name of the SQL function that lower-cases text with Go's
-// Unicode-aware strings.ToLower; SQLite's own lower() and LIKE only fold
-// ASCII letters.
+// Unicode-aware strings.ToLower; SQLite's own lower() only folds ASCII
+// letters.
 const lowerFunc = "sync82_lower"
 
 // foldFunc is the name of the SQL function that folds text with foldText,
@@ -372,43 +372,43 @@ func (s *Store) resolveScopeProjectIDs(ctx context.Context, scope SearchScope) (
 	return ids, rows.Err()
 }
 
-// fetchMatchingRows runs the case-insensitive LIKE query of a SearchExact
-// search against documents and then entries (archived entries excluded),
-// on the rows the full-text indexes return for exactPrefilter's expression
-// when the query gives one, and on every row otherwise, through
-// fetchLikeRows. It returns what fetchLikeRows returns.
+// fetchMatchingRows selects the rows of a SearchExact search, documents and
+// then entries (archived entries excluded), whose lower-cased text
+// (lowerFunc) holds the lower-cased query as a literal substring, on the
+// rows the full-text indexes return for exactPrefilter's expression when
+// the query gives one, and on every row otherwise, through
+// fetchSubstringMatchRows. It returns what fetchSubstringMatchRows returns.
 func (s *Store) fetchMatchingRows(ctx context.Context, opts SearchOptions, projectIDs []int64) (rows []searchRow, truncated bool, err error) {
-	like := "%" + escapeLike(strings.ToLower(opts.Query)) + "%"
-	docCond := lowerFunc + `(d.content) LIKE ? ESCAPE '\'`
-	entryCond := lowerFunc + `(e.body) LIKE ? ESCAPE '\'`
-	args := []any{like}
+	docCond := `instr(` + lowerFunc + `(d.content), ?) > 0`
+	entryCond := `instr(` + lowerFunc + `(e.body), ?) > 0`
+	args := []any{strings.ToLower(opts.Query)}
 
-	// With a prefilter, LIKE only runs on the rows the full-text index
-	// returns, instead of on every row of the vault.
+	// With a prefilter, the substring test only runs on the rows the
+	// full-text index returns, instead of on every row of the vault.
 	if match := exactPrefilter(opts.Query); match != "" {
 		docCond += ` AND d.id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH ?)`
 		entryCond += ` AND e.id IN (SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?)`
 		args = append(args, match)
 	}
-	return s.fetchLikeRows(ctx, opts, projectIDs, docCond, entryCond, args)
+	return s.fetchSubstringMatchRows(ctx, opts, projectIDs, docCond, entryCond, args)
 }
 
 // fetchSubstringRows selects the rows of a words or phrase search whose
 // folded text (foldFunc) holds every one of terms as a substring, through
-// fetchLikeRows. It returns what fetchLikeRows returns.
+// fetchSubstringMatchRows. It returns what fetchSubstringMatchRows returns.
 func (s *Store) fetchSubstringRows(ctx context.Context, terms []searchTerm, opts SearchOptions, projectIDs []int64) (rows []searchRow, truncated bool, err error) {
 	docConds := make([]string, len(terms))
 	entryConds := make([]string, len(terms))
 	args := make([]any, len(terms))
 	for i, t := range terms {
-		docConds[i] = foldFunc + `(d.content) LIKE ? ESCAPE '\'`
-		entryConds[i] = foldFunc + `(e.body) LIKE ? ESCAPE '\'`
-		args[i] = "%" + escapeLike(t.text) + "%"
+		docConds[i] = `instr(` + foldFunc + `(d.content), ?) > 0`
+		entryConds[i] = `instr(` + foldFunc + `(e.body), ?) > 0`
+		args[i] = t.text
 	}
-	return s.fetchLikeRows(ctx, opts, projectIDs, strings.Join(docConds, " AND "), strings.Join(entryConds, " AND "), args)
+	return s.fetchSubstringMatchRows(ctx, opts, projectIDs, strings.Join(docConds, " AND "), strings.Join(entryConds, " AND "), args)
 }
 
-// fetchLikeRows reads the documents and then the entries (archived entries
+// fetchSubstringMatchRows reads the documents and then the entries (archived entries
 // excluded) that match docCond and entryCond, SQL conditions on the tables
 // aliased d and e that take condArgs, scoped to projectIDs (nil means no
 // scope) and filtered by opts.Kinds, opts.Since and opts.Until, each in a
@@ -416,7 +416,7 @@ func (s *Store) fetchSubstringRows(ctx context.Context, terms []searchTerm, opts
 // the matching rows, at most maxScannedRows per table and about
 // maxScannedBytes of content in total. truncated reports whether either
 // bound cut the result short. It returns a database error on failure.
-func (s *Store) fetchLikeRows(ctx context.Context, opts SearchOptions, projectIDs []int64, docCond, entryCond string, condArgs []any) (rows []searchRow, truncated bool, err error) {
+func (s *Store) fetchSubstringMatchRows(ctx context.Context, opts SearchOptions, projectIDs []int64, docCond, entryCond string, condArgs []any) (rows []searchRow, truncated bool, err error) {
 	type query struct {
 		what string
 		sql  string
@@ -587,14 +587,4 @@ func scopeClause(column string, ids []int64) (string, []any) {
 		args[i] = id
 	}
 	return fmt.Sprintf(" AND %s IN (%s)", column, strings.Join(placeholders, ",")), args
-}
-
-// escapeLike escapes the SQLite LIKE metacharacters (%, _) and the backslash
-// escape character in q, so q matches as a literal substring rather than a
-// wildcard pattern.
-func escapeLike(q string) string {
-	q = strings.ReplaceAll(q, `\`, `\\`)
-	q = strings.ReplaceAll(q, `%`, `\%`)
-	q = strings.ReplaceAll(q, `_`, `\_`)
-	return q
 }

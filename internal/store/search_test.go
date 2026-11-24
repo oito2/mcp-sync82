@@ -23,7 +23,8 @@ import (
 )
 
 // TestSearchText_UnderscoreAndBackslashAreLiteral verifies that '_' and '\\'
-// in a query match literally instead of acting as LIKE metacharacters.
+// in a query match literally instead of acting as wildcard or escape
+// characters.
 func TestSearchText_UnderscoreAndBackslashAreLiteral(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
@@ -36,8 +37,8 @@ func TestSearchText_UnderscoreAndBackslashAreLiteral(t *testing.T) {
 		t.Fatalf("WriteDocument: %v", err)
 	}
 
-	// "_" is the LIKE wildcard for any single character; it must match only a
-	// literal underscore, not "fileXname.go".
+	// "_" must match only a literal underscore, not any single character as
+	// in "fileXname.go".
 	results, _, err := s.SearchText(ctx, SearchOptions{Query: "file_name", Mode: SearchExact, Scope: SearchScope{Project: "acme"}, Offset: 0, Limit: 10, ContextLines: 0})
 	if err != nil {
 		t.Fatalf("SearchText (underscore): %v", err)
@@ -92,8 +93,7 @@ func TestSearchText_Pagination(t *testing.T) {
 		t.Fatalf("page2 line = %q, want %q", page2[0].Line, "another needle")
 	}
 
-	// A literal "%" in the query must match literally, not as a LIKE
-	// wildcard.
+	// A literal "%" in the query must match literally, not as a wildcard.
 	if err := s.WriteDocument(ctx, "acme", "", "stack", "100% done\nanything"); err != nil {
 		t.Fatalf("WriteDocument (percent): %v", err)
 	}
@@ -165,6 +165,42 @@ func TestSearchText_UnicodeCaseInsensitive(t *testing.T) {
 		}
 		if len(results) != 1 || info.Truncated {
 			t.Errorf("SearchText(%q) = %d results (truncated %v), want 1", q, len(results), info.Truncated)
+		}
+	}
+}
+
+// TestSearchText_FindsTextAfterNUL verifies that a NUL character in the
+// content does not hide the text after it from an exact search, in a
+// document and in an entry, nor from the substring fallback of a words
+// search.
+func TestSearchText_FindsTextAfterNUL(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	if _, _, err := s.EnsureProject(ctx, "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteDocument(ctx, "acme", "", "stack", "before\x00after Needle"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendEntry(ctx, "acme", "", "progress", "2026-01-01", "## 2026-01-01\n- start\x00then Pin 100₽"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		query     string
+		mode      SearchMode
+		kind      string
+		substring bool
+	}{
+		{"needle", SearchExact, "stack", false},
+		{"then pin", SearchExact, "progress", false},
+		{"100₽", SearchWords, "progress", true},
+	} {
+		results, info, err := s.SearchText(ctx, SearchOptions{Query: c.query, Mode: c.mode, Scope: SearchScope{Project: "acme"}, Limit: 10})
+		if err != nil {
+			t.Fatalf("SearchText(%q, %s): %v", c.query, c.mode, err)
+		}
+		if len(results) != 1 || results[0].Kind != c.kind || info.Substring != c.substring {
+			t.Errorf("SearchText(%q, %s) = %+v, substring %v; want 1 result in %s, substring %v", c.query, c.mode, results, info.Substring, c.kind, c.substring)
 		}
 	}
 }

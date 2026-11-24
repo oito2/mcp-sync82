@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `search_memory` finds text that comes after a NUL character in a memory file. Before, `exact` mode and the substring fallback of `words` and `phrase` stopped reading a file or entry at its first NUL.
+
 ## [1.3.2] - 2026-11-17
 
 ### Changed
