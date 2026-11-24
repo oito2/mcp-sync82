@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-11-24
+
 ### Fixed
 
 - `search_memory` finds text that comes after a NUL character in a memory file. Before, `exact` mode and the substring fallback of `words` and `phrase` stopped reading a file or entry at its first NUL.
@@ -207,7 +209,8 @@ First public release.
 - `sync82 install` for Claude Code, Claude Desktop, Antigravity, Codex, OpenCode, Cursor, Zed and Cline.
 - Release binaries for Linux, macOS and Windows (amd64/arm64), a Claude Desktop extension (`sync82.mcpb`) and an MCP Registry entry (`io.github.oito2/mcp-sync82`), with SHA-256 checksums, a Sigstore signature and GitHub build provenance attestations.
 
-[Unreleased]: https://github.com/oito2/mcp-sync82/compare/v1.3.2...HEAD
+[Unreleased]: https://github.com/oito2/mcp-sync82/compare/v1.3.3...HEAD
+[1.3.3]: https://github.com/oito2/mcp-sync82/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/oito2/mcp-sync82/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/oito2/mcp-sync82/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/oito2/mcp-sync82/compare/v1.2.0...v1.3.0
