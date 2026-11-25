@@ -77,11 +77,11 @@ git tag v1.2.3
 git push origin v1.2.3
 ```
 
-Duas configurações do repositório protegem esta etapa. Um ruleset de tags permite que só admins do repositório criem tags `v*` e bloqueia movê-las ou apagá-las. O job `sign-publish` roda no environment `release`, que exige a aprovação de um mantenedor: o workflow pausa depois do `build` até a execução ser aprovada em **Actions → a execução → Review deployments**, então uma tag enviada sozinha nunca publica uma release assinada.
+Duas configurações do repositório protegem esta etapa. Um ruleset de tags permite que só admins do repositório criem, movam ou apaguem tags `v*`, e as releases imutáveis travam uma release publicada e a tag dela, então uma release com problema é corrigida com uma nova versão patch. O job `sign-publish` roda no environment `release`, que exige a aprovação de um mantenedor: o workflow pausa depois do `build` até a execução ser aprovada em **Actions → a execução → Review deployments**, então uma tag enviada sozinha nunca publica uma release assinada.
 
 | Job | O que faz |
 |---|---|
-| `validate` | Rejeita uma tag que não seja exatamente `vMAJOR.MINOR.PATCH`. |
+| `validate` | Rejeita uma tag que não seja exatamente `vMAJOR.MINOR.PATCH`, ou que aponte para um commit fora da `main`. |
 | `checks` | Roda as checagens da CI no commit da tag, em Linux, macOS e Windows (gofmt, golangci-lint e govulncheck só no Linux): vet, build, `go test -race`. |
 | `build` | Somente leitura. Roda `go run ./scripts/release <tag>`, confere que `sync82_linux_amd64 --version` imprime a tag, roda o teste de contrato do self-update (`TestReleaseContract`) sobre o `dist/`, valida o `server.json` com `mcp-publisher validate` e envia o `dist/` como artefato do workflow. |
 | `sign-publish` | Espera a aprovação no environment `release`. O único job com `contents: write`, `id-token: write` e `attestations: write`; ele não faz checkout nem roda código do repositório. Baixa o `dist/` (o download falha se o digest não confere), confere cada asset com `sha256sum --check checksums.txt`, assina o `checksums.txt` com `cosign sign-blob` (keyless) em `checksums.txt.sigstore.json`, verifica essa assinatura com `cosign verify-blob` para a identidade exata do workflow e a tag, como o `sync82 self-update` faz, registra atestações de proveniência de build para `dist/sync82_*` e `dist/sync82.mcpb`, e cria a release do GitHub com todos os arquivos de `dist/`. |

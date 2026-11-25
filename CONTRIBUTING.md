@@ -77,11 +77,11 @@ git tag v1.2.3
 git push origin v1.2.3
 ```
 
-Two repository settings guard this step. A tag ruleset lets only repository admins create `v*` tags and blocks moving or deleting them. The `sign-publish` job runs in the `release` environment, which requires a maintainer's approval: the workflow pauses after `build` until the run is approved under **Actions → the run → Review deployments**, so a pushed tag alone never publishes a signed release.
+Two repository settings guard this step. A tag ruleset lets only repository admins create, move or delete `v*` tags, and immutable releases lock a published release and its tag, so a bad release is fixed with a new patch version. The `sign-publish` job runs in the `release` environment, which requires a maintainer's approval: the workflow pauses after `build` until the run is approved under **Actions → the run → Review deployments**, so a pushed tag alone never publishes a signed release.
 
 | Job | What it does |
 |---|---|
-| `validate` | Rejects a tag that isn't exactly `vMAJOR.MINOR.PATCH`. |
+| `validate` | Rejects a tag that isn't exactly `vMAJOR.MINOR.PATCH`, or that points at a commit not on `main`. |
 | `checks` | Runs the CI checks on the tagged commit, on Linux, macOS and Windows (gofmt, golangci-lint and govulncheck on Linux only): vet, build, `go test -race`. |
 | `build` | Read-only. Runs `go run ./scripts/release <tag>`, checks that `sync82_linux_amd64 --version` prints the tag, runs the self-update contract test (`TestReleaseContract`) on `dist/`, validates `server.json` with `mcp-publisher validate`, and uploads `dist/` as a workflow artifact. |
 | `sign-publish` | Waits for approval in the `release` environment. The only job with `contents: write`, `id-token: write` and `attestations: write`; it checks out and runs no repository code. Downloads `dist/` (the download fails on a digest mismatch), checks every asset with `sha256sum --check checksums.txt`, signs `checksums.txt` with `cosign sign-blob` (keyless) into `checksums.txt.sigstore.json`, verifies that signature with `cosign verify-blob` for the exact workflow identity and tag, as `sync82 self-update` does, records build provenance attestations for `dist/sync82_*` and `dist/sync82.mcpb`, and creates the GitHub release with every file in `dist/`. |

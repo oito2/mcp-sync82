@@ -33,6 +33,8 @@ jobs:
   # GITHUB_REF_NAME becomes part of a shell string (-ldflags), so its format
   # is validated once, up front, rather than trusting the "v*" trigger glob
   # (which only checks the prefix, not the full vMAJOR.MINOR.PATCH shape).
+  # The tagged commit must also be on main, so a tag on an unmerged commit
+  # never produces a release.
   validate:
     runs-on: ubuntu-latest
     steps:
@@ -41,6 +43,20 @@ jobs:
           set -euo pipefail
           if ! [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Tag '${GITHUB_REF_NAME}' does not match vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
+
+      # Full history, so the tagged commit can be checked against main.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false # later steps never push, so the token isn't left in .git/config
+
+      - name: The tagged commit must be on main
+        run: |
+          set -euo pipefail
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "::error::Tag '${GITHUB_REF_NAME}' points at ${GITHUB_SHA}, which is not on main"
             exit 1
           fi
 
